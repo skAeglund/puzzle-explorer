@@ -367,7 +367,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">drag-overlay-fix</span>
+    <span id="buildVersion">audit-fixes</span>
     <span id="datasetInfo">loading dataset…</span>
   </header>
 
@@ -824,10 +824,13 @@
       // window between user move and scheduled opp reply, chess.turn()
       // is opponent's color, so this guards naturally).
       if (chess.turn() !== Drill.userColor(drillState)) return false;
-      // A drag committed — suppress the trailing mouseup-deselect.
       // Re-select the source so legal-move dots stay visible during
       // the drag (matching MistakeLab's onDragStart pattern).
-      deselectionPending = false;
+      // NOTE: do NOT reset deselectionPending here. chessboard.js calls
+      // onDragStart on every mousedown (not only on real drags), so
+      // clearing it would stomp the click-on-already-selected intent
+      // before mouseup gets to act on it. MistakeLab clears it later,
+      // inside onDrop, only after a real source!==target drop.
       if (selectedSquare !== source) clearSelection();
       selectSquare(source);
       return true;
@@ -875,12 +878,17 @@
       } catch (e) {
         moveObj = null;  // chess.js v0.10 returns null; v1+ throws — guard both
       }
+      // Clear selection regardless of move outcome. Matches MistakeLab's
+      // onDrop pattern (line ~12907): clearSelection is called whether
+      // chess.move returns null (illegal) or a move (legal). Doing it
+      // here covers all caller paths — drag and click — without each
+      // having to remember.
+      clearSelection();
       if (!moveObj) return { ok: false };
 
       var uci = moveObj.from + moveObj.to + (moveObj.promotion || '');
       var result = Drill.attemptUserMove(drillState, uci);
       drillState = result.state;
-      clearSelection();
 
       if (result.result === 'wrong') {
         // First wrong locks Again — record now (subsequent wrongs return
