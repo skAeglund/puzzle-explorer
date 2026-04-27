@@ -235,7 +235,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">drilling-ui</span>
+    <span id="buildVersion">blunder-intro</span>
     <span id="datasetInfo">loading dataset…</span>
   </header>
 
@@ -309,6 +309,7 @@
     var searchFen = null;        // remembered so we can restore the board on back
     var pendingOppReply = null;  // UCI of opp's auto-reply, scheduled in onSnapEnd
     var oppReplyTimeout = null;  // setTimeout id; cleared on back/destroy
+    var introTimeout = null;     // setTimeout id for the pre-puzzle blunder animation
     // Edge case: drill.attemptUserMove permits a 'complete' result that
     // carries an opponentReply (even-length solutionUci — opp gets the
     // last move). Lichess convention is odd-length so this is rare/never
@@ -515,6 +516,7 @@
       pendingOppReply = null;
       pendingCompletionResult = null;
       if (oppReplyTimeout) { clearTimeout(oppReplyTimeout); oppReplyTimeout = null; }
+      if (introTimeout) { clearTimeout(introTimeout); introTimeout = null; }
 
       // Swap panels.
       $('#searchPanel').hide();
@@ -533,19 +535,29 @@
       }
       $('#hintBtn').prop('disabled', false).text('Hint');
 
-      // Reset chess.js to puzzle position. v0.10.3 load() returns boolean.
+      // If the analyzer emitted previousFen + previousMove, show the
+      // pre-blunder position briefly, then animate the move that creates
+      // the tactic. Backward-compatible: older bodies without these fields
+      // start the user directly at puzzle.fen.
+      var hasIntro = !!(puzzle.previousFen && puzzle.previousMove);
+      var initialFen = hasIntro ? puzzle.previousFen : puzzle.fen;
+
+      // Reset chess.js to the initial position. v0.10.3 load() returns boolean.
       chess = new Chess();
-      if (!chess.load(puzzle.fen)) {
-        setStatus('chess.js could not load puzzle FEN: ' + puzzle.fen, 'error');
+      if (!chess.load(initialFen)) {
+        setStatus('chess.js could not load FEN: ' + initialFen, 'error');
         return;
       }
 
       // Rebuild the board with drill handlers + correct orientation. The
       // board element is the same #board div used by search mode.
+      // Orientation is the user's color (from puzzle.fen, post-blunder),
+      // not the side-to-move at initialFen — even during the intro the
+      // board should already be flipped for the player.
       var orientation = Drill.userColor(drillState) === 'b' ? 'black' : 'white';
       destroyBoard();
       board = Chessboard('board', {
-        position: puzzle.fen,
+        position: initialFen,
         pieceTheme: 'https://chessboardjs.com/img/chesspieces/wikipedia/{piece}.png',
         showNotation: true,
         draggable: true,
@@ -555,7 +567,37 @@
         onSnapEnd: onSnapEnd
       });
 
-      setStatus('Your move.', 'info');
+      if (hasIntro) {
+        // During the wait, onDragStart already blocks user from moving
+        // because chess.turn() is the opponent's color at previousFen.
+        setStatus('Opponent to move…', 'info');
+        introTimeout = setTimeout(function () {
+          introTimeout = null;
+          if (mode !== 'drill' || !drillState) return; // user backed out
+          var uci = puzzle.previousMove;
+          var m;
+          try {
+            m = chess.move({
+              from: uci.slice(0, 2),
+              to: uci.slice(2, 4),
+              promotion: uci[4] || undefined
+            });
+          } catch (e) { m = null; }
+          if (!m) {
+            // Data integrity issue — fall back to dropping the user
+            // straight at puzzle.fen so they can still drill.
+            chess = new Chess();
+            chess.load(puzzle.fen);
+            if (board) board.position(puzzle.fen, false);
+            setStatus('(could not animate setup move ' + uci + ') Your move.', 'warn');
+            return;
+          }
+          if (board) board.position(chess.fen()); // animated by default
+          setStatus('Your move.', 'info');
+        }, 700);
+      } else {
+        setStatus('Your move.', 'info');
+      }
     }
 
     function destroyBoard() {
@@ -734,6 +776,10 @@
       if (oppReplyTimeout) {
         clearTimeout(oppReplyTimeout);
         oppReplyTimeout = null;
+      }
+      if (introTimeout) {
+        clearTimeout(introTimeout);
+        introTimeout = null;
       }
       pendingOppReply = null;
       pendingCompletionResult = null;

@@ -82,15 +82,24 @@ function processGame(pgnText) {
   }
 
   const themes = (h.PuzzleThemes || '').split(/\s+/).filter(Boolean);
+  // The blunder: the mainline move whose `after` IS the puzzle starting
+  // position. Storing both `before` (FEN) and `lan` (UCI) lets the UI play
+  // a quick intro animation showing the move that creates the tactic.
+  // Cost: ~75 chars/puzzle pre-gzip (~60% of which collapses post-gzip
+  // since previousFen and fen share most of the board). Worth it for UX.
+  const blunder = verbose[verbose.length - 1];
   const body = {
     id: h.PuzzleId,
     fen: game.fen(),
     moves: solutionUci,
+    previousFen: blunder.before,
+    previousMove: blunder.lan,
     rating: parseInt(h.PuzzleRating, 10) || 0,
     themes,
     gameUrl: h.Site || '',
     opening: h.Opening || '',
-    // mainline omitted for MVP (~60% body size reduction); regenerate if needed
+    // mainline (full PGN) omitted for MVP (~60% body size reduction);
+    // regenerate if a source-game viewer is added later.
   };
   return { body, positions };
 }
