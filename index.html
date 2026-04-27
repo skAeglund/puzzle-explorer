@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Puzzle Explorer</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.css">
+  <style>
+    :root {
+      --bg: #1a1a1a;
+      --surface: #242424;
+      --surface-2: #2e2e2e;
+      --border: #3a3a3a;
+      --fg: #e8e8e8;
+      --fg-dim: #a0a0a0;
+      --accent: #d6a44c;
+      --accent-hover: #e7b85f;
+      --ok: #6fbf73;
+      --warn: #d8a657;
+      --error: #ea6962;
+      --info: #7daea3;
+      --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg); }
+    body {
+      font-family: var(--mono);
+      font-size: 14px;
+      line-height: 1.5;
+      padding: 16px;
+      max-width: 520px;
+      margin: 0 auto;
+    }
+    header {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      padding-bottom: 10px;
+      margin-bottom: 16px;
+      border-bottom: 1px solid var(--border);
+      flex-wrap: wrap;
+    }
+    h1 {
+      font-size: 16px;
+      font-weight: 600;
+      margin: 0;
+      letter-spacing: 0.02em;
+    }
+    h1::before { content: "♞ "; color: var(--accent); }
+    #buildVersion {
+      font-size: 11px;
+      color: var(--fg-dim);
+      letter-spacing: 0.05em;
+    }
+    #datasetInfo {
+      font-size: 11px;
+      color: var(--fg-dim);
+      width: 100%;
+      margin-top: 4px;
+    }
+
+    #board {
+      width: 100%;
+      max-width: 400px;
+      margin: 0 auto 16px;
+    }
+
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 12px;
+      margin-bottom: 12px;
+    }
+
+    label {
+      display: block;
+      font-size: 11px;
+      color: var(--fg-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 6px;
+    }
+    textarea, input[type="text"] {
+      width: 100%;
+      background: var(--bg);
+      color: var(--fg);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      padding: 8px 10px;
+      font-family: var(--mono);
+      font-size: 12px;
+      resize: vertical;
+    }
+    textarea:focus, input:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+
+    button {
+      font-family: var(--mono);
+      font-size: 12px;
+      padding: 7px 12px;
+      background: var(--surface-2);
+      color: var(--fg);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      cursor: pointer;
+      transition: border-color 0.1s, background 0.1s;
+    }
+    button:hover { border-color: var(--accent); }
+    button:active { background: var(--bg); }
+    button.primary {
+      background: var(--accent);
+      color: var(--bg);
+      border-color: var(--accent);
+      font-weight: 600;
+    }
+    button.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+
+    .row { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+    .row > button { flex: 0 0 auto; }
+    .row.examples { margin-top: 10px; }
+    .row.examples > button { font-size: 11px; padding: 5px 9px; }
+
+    #status {
+      font-size: 12px;
+      padding: 8px 10px;
+      border-radius: 3px;
+      margin-bottom: 12px;
+      min-height: 1.5em;
+      background: var(--surface);
+      border-left: 3px solid var(--border);
+    }
+    #status[data-kind="ok"]    { border-left-color: var(--ok); }
+    #status[data-kind="warn"]  { border-left-color: var(--warn); }
+    #status[data-kind="error"] { border-left-color: var(--error); color: var(--error); }
+    #status[data-kind="info"]  { border-left-color: var(--info); }
+
+    #results {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+    }
+    #results li {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 7px 12px;
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      margin-bottom: 4px;
+      background: var(--surface);
+      font-size: 12px;
+    }
+    .puzzle-id {
+      font-weight: 600;
+      letter-spacing: 0.03em;
+    }
+    .puzzle-rating {
+      color: var(--fg-dim);
+      font-variant-numeric: tabular-nums;
+    }
+    .results-meta {
+      font-size: 11px;
+      color: var(--fg-dim);
+      margin: 8px 2px 6px;
+    }
+
+    /* chessboard.js dark squares look better with a subtler border */
+    #board .square-55d63 { border-radius: 0 !important; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Puzzle Explorer</h1>
+    <span id="buildVersion">initial-scaffold</span>
+    <span id="datasetInfo">loading dataset…</span>
+  </header>
+
+  <main>
+    <div id="board"></div>
+
+    <div class="panel">
+      <label for="fenInput">Position FEN</label>
+      <textarea id="fenInput" rows="2"
+        placeholder="Paste a FEN here…"></textarea>
+      <div class="row">
+        <button id="applyBtn">Apply FEN</button>
+        <button id="searchBtn" class="primary">Search puzzles</button>
+      </div>
+      <div class="row examples">
+        <button class="example-btn" data-fen="rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1">After 1. e4</button>
+        <button class="example-btn" data-fen="rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2">1. e4 e5</button>
+        <button class="example-btn" data-fen="r1b5/pp1nkpr1/2q1p3/8/3N4/3B4/P1P2PPP/R2Q1RK1 b - - 4 18">specific puzzle</button>
+      </div>
+    </div>
+
+    <div id="status" data-kind="info">Set a position and click Search.</div>
+
+    <div class="results-meta" id="resultsMeta" hidden></div>
+    <ol id="results"></ol>
+  </main>
+
+  <!-- Libraries: jQuery 3.7.1, chess.js 0.10.3, chessboard.js 1.0.0 (per project pin) -->
+  <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chess.js@0.10.3/chess.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.js"></script>
+  <!-- Shared posKey lib (must produce byte-identical keys with the build) -->
+  <script src="lib/posKey.js"></script>
+
+  <script>
+  'use strict';
+  (function () {
+    var board = null;
+    var chess = null;
+    var MAX_RESULTS = 100;       // cap visible matches; filters/pagination later
+
+    function init() {
+      var missing = [];
+      if (typeof Chess !== 'function') missing.push('chess.js');
+      if (typeof Chessboard !== 'function') missing.push('chessboard.js');
+      if (typeof fenPositionKey !== 'function') missing.push('lib/posKey.js');
+      if (missing.length) {
+        setStatus('Failed to load: ' + missing.join(', ') + '. Check the browser console / network tab.', 'error');
+        return;
+      }
+      chess = new Chess();
+      board = Chessboard('board', {
+        position: 'start',
+        pieceTheme: 'https://chessboardjs.com/img/chesspieces/wikipedia/{piece}.png',
+        showNotation: true
+      });
+      $(window).on('resize', function () { if (board) board.resize(); });
+
+      $('#applyBtn').on('click', applyFen);
+      $('#searchBtn').on('click', searchPuzzles);
+      $('#fenInput').on('keydown', function (e) {
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); applyFen(); }
+      });
+      $(document).on('click', '.example-btn', function () {
+        $('#fenInput').val($(this).data('fen'));
+        applyFen();
+      });
+
+      loadDatasetInfo();
+    }
+
+    function applyFen() {
+      var fen = $('#fenInput').val().trim();
+      if (!fen) { setStatus('Paste a FEN first.', 'warn'); return; }
+      var c = new Chess();
+      if (!c.load(fen)) {
+        setStatus('Invalid FEN — chess.js could not parse it.', 'error');
+        return;
+      }
+      chess = c;
+      board.position(c.fen(), false);
+      setStatus('Position loaded. Click Search.', 'ok');
+      $('#results').empty();
+      $('#resultsMeta').hide();
+    }
+
+    async function searchPuzzles() {
+      if (typeof fenPositionKey !== 'function') {
+        setStatus('lib/posKey.js failed to load — check the network tab.', 'error');
+        return;
+      }
+      var fen = chess.fen();
+      var key = fenPositionKey(fen);
+      var shard;
+      try {
+        shard = await shardIdAsync(key);
+      } catch (e) {
+        setStatus('SHA-1 hashing not available (Web Crypto required, http context).', 'error');
+        return;
+      }
+      setStatus('Fetching shard ' + shard + '…', 'info');
+      var url = 'data/index/' + shard + '.json';
+      try {
+        var res = await fetch(url);
+        if (!res.ok) {
+          if (res.status === 404) {
+            renderResults([]);
+            setStatus('No puzzles found at this position. (Shard ' + shard + ' not present — that bucket has no entries in the current dataset.)', 'info');
+            return;
+          }
+          throw new Error('HTTP ' + res.status);
+        }
+        var idx = await res.json();
+        var matches = idx[key] || [];
+        renderResults(matches);
+        if (matches.length === 0) {
+          setStatus('No puzzles found at this position. (Shard ' + shard + ' fetched, but the position key isn\'t indexed.)', 'info');
+        } else if (matches.length > MAX_RESULTS) {
+          setStatus(matches.length + ' matches found (showing first ' + MAX_RESULTS + ' by rating).', 'ok');
+        } else {
+          setStatus(matches.length + ' match' + (matches.length === 1 ? '' : 'es') + ' found.', 'ok');
+        }
+      } catch (e) {
+        setStatus('Fetch error: ' + e.message + '. Are you serving over http (not file://)? Is data/ generated?', 'error');
+      }
+    }
+
+    async function shardIdAsync(s) {
+      var buf = new TextEncoder().encode(s);
+      var h = await crypto.subtle.digest('SHA-1', buf);
+      var bytes = new Uint8Array(h);
+      var hex = '';
+      for (var i = 0; i < bytes.length; i++) {
+        hex += bytes[i].toString(16).padStart(2, '0');
+      }
+      return hex.slice(0, SHARD_HEX_LEN);
+    }
+
+    function renderResults(matches) {
+      var $list = $('#results').empty();
+      var $meta = $('#resultsMeta');
+      if (!matches.length) { $meta.hide(); return; }
+      // sort by rating asc; stable enough for our purposes
+      matches.sort(function (a, b) { return a[1] - b[1]; });
+      var shown = matches.slice(0, MAX_RESULTS);
+      $meta.text('id · rating  (sorted by rating, lowest first)').show();
+      for (var i = 0; i < shown.length; i++) {
+        var m = shown[i];
+        var $li = $('<li></li>');
+        $li.append($('<span class="puzzle-id"></span>').text(m[0]));
+        $li.append($('<span class="puzzle-rating"></span>').text(m[1] || '—'));
+        $list.append($li);
+      }
+    }
+
+    function setStatus(msg, kind) {
+      $('#status').text(msg).attr('data-kind', kind || 'info');
+    }
+
+    async function loadDatasetInfo() {
+      try {
+        var res = await fetch('data/meta.json');
+        if (!res.ok) {
+          $('#datasetInfo').text('no dataset (run analyzer)');
+          return;
+        }
+        var meta = await res.json();
+        var built = meta.builtAt ? new Date(meta.builtAt).toISOString().slice(0, 10) : '?';
+        var n = meta.puzzlesParsed || 0;
+        $('#datasetInfo').text(n.toLocaleString() + ' puzzles · ' + built);
+      } catch (e) {
+        $('#datasetInfo').text('dataset unreachable');
+      }
+    }
+
+    $(init);
+  })();
+
+  // Vanilla fallback for the worst case: jQuery itself failed to load and
+  // the IIFE above couldn't even register init via $(init). Surface a clear
+  // error so the page doesn't just appear silently broken.
+  window.addEventListener('load', function () {
+    if (typeof window.jQuery !== 'function') {
+      var s = document.getElementById('status');
+      if (s) {
+        s.textContent = 'Failed to load jQuery. Check the browser console / network tab.';
+        s.setAttribute('data-kind', 'error');
+      }
+    }
+  });
+  </script>
+</body>
+</html>
