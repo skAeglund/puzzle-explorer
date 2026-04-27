@@ -124,6 +124,52 @@
     .row.examples { margin-top: 10px; }
     .row.examples > button { font-size: 11px; padding: 5px 9px; }
 
+    /* Move-builder UI: drag pieces on the board (or click-to-move) to set
+       a position one ply at a time. Move list mirrors what's been played;
+       Undo/Reset/Flip handle navigation; FEN textarea below stays synced. */
+    #moveBuilder {
+      margin-bottom: 10px;
+      padding-bottom: 10px;
+      border-bottom: 1px dashed var(--border);
+    }
+    #moveBuilderHelp {
+      font-size: 11px;
+      color: var(--fg-dim);
+      margin-bottom: 6px;
+    }
+    #moveList {
+      font-size: 12px;
+      color: var(--fg);
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      padding: 7px 10px;
+      min-height: 1.5em;
+      word-break: break-word;
+      font-variant-numeric: tabular-nums;
+    }
+    #moveList.empty {
+      color: var(--fg-dim);
+      font-style: italic;
+    }
+    #moveList .move-num {
+      color: var(--fg-dim);
+      margin-right: 2px;
+    }
+    #moveList .move-san {
+      margin-right: 8px;
+    }
+    .move-controls {
+      display: flex;
+      gap: 6px;
+      margin-top: 8px;
+      flex-wrap: wrap;
+    }
+    .move-controls > button {
+      font-size: 11px;
+      padding: 5px 9px;
+    }
+
     #status {
       font-size: 12px;
       padding: 8px 10px;
@@ -464,7 +510,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">session-mode</span>
+    <span id="buildVersion">move-builder</span>
     <span id="datasetInfo">loading dataset…</span>
   </header>
 
@@ -472,6 +518,15 @@
     <div id="board"></div>
 
     <div id="searchPanel" class="panel">
+      <div id="moveBuilder">
+        <div id="moveBuilderHelp">Drag pieces on the board (or click-to-move) to set a position from the start.</div>
+        <div id="moveList" class="empty">starting position</div>
+        <div class="move-controls">
+          <button id="undoBtn" title="Undo last move">Undo</button>
+          <button id="resetBtn" title="Reset to start position">Reset</button>
+          <button id="flipBtn" title="Flip board orientation">Flip</button>
+        </div>
+      </div>
       <label for="fenInput">Position FEN</label>
       <textarea id="fenInput" rows="2"
         placeholder="Paste a FEN here…"></textarea>
@@ -560,6 +615,15 @@
     var drillPuzzle = null;      // the body object {id, fen, moves, rating, themes, ...}
     var lastMatches = null;      // cached for re-render on back-from-drill
     var searchFen = null;        // remembered so we can restore the board on back
+    // Search-mode move builder. searchMoveHistory is the list of plies
+    // played from the start position via drag/click — each entry is
+    // {san, from, to}. searchOrientation persists across drill-mode round
+    // trips so flipping the board sticks. searchFen + searchMoveHistory
+    // together describe the current search-mode state; either one can be
+    // restored from the other (history → replay; fen → drop history,
+    // start fresh).
+    var searchMoveHistory = [];
+    var searchOrientation = 'white';
     var pendingOppReply = null;  // UCI of opp's auto-reply, scheduled in onSnapEnd
     var oppReplyTimeout = null;  // setTimeout id; cleared on back/destroy
     var introTimeout = null;     // setTimeout id for the pre-puzzle blunder animation
@@ -602,12 +666,10 @@
         setStatus('Failed to load: ' + missing.join(', ') + '. Check the browser console / network tab.', 'error');
         return;
       }
-      chess = new Chess();
-      board = Chessboard('board', {
-        position: 'start',
-        pieceTheme: 'https://chessboardjs.com/img/chesspieces/wikipedia/{piece}.png',
-        showNotation: true
-      });
+      // Build the initial interactive search board. rebuildSearchBoard
+      // sets `chess` to a fresh Chess() (start position) and installs the
+      // drag/drop handlers used by the move builder.
+      rebuildSearchBoard();
       $(window).on('resize', function () { if (board) board.resize(); });
 
       $('#applyBtn').on('click', applyFen);
@@ -619,6 +681,11 @@
         $('#fenInput').val($(this).data('fen'));
         applyFen();
       });
+
+      // Move-builder buttons.
+      $('#undoBtn').on('click', undoSearchMove);
+      $('#resetBtn').on('click', resetSearchPosition);
+      $('#flipBtn').on('click', flipSearchBoard);
 
       // Drill UI handlers. Result-row click is delegated since rows are
       // re-rendered on each search.
@@ -638,16 +705,17 @@
       // BEFORE chessboard.js's drag-start logic kicks in (and call
       // stopPropagation on destination clicks so the click doesn't try to
       // start a drag on the enemy piece). MistakeLab uses the same pattern.
-      // The handlers are global on #board (not per-drill-mode) — they no-op
-      // when not in drill mode via a guard inside.
+      // The handlers run in BOTH search and drill modes — the click-to-move
+      // selection logic is mode-agnostic, the move-execution call dispatches
+      // on `mode` via attemptMove.
       var boardEl = document.getElementById('board');
       if (boardEl) {
         boardEl.addEventListener('mousedown', onBoardMouseDown, true);
         boardEl.addEventListener('mouseup',   onBoardMouseUp,   true);
-        // Suppress the browser context menu on right-click. Right-click is
-        // repurposed to deselect (handled in onBoardMouseDown above).
+        // Suppress the browser context menu on right-click in either mode.
+        // Right-click is repurposed to deselect (handled in onBoardMouseDown).
         boardEl.addEventListener('contextmenu', function (e) {
-          if (mode === 'drill') e.preventDefault();
+          e.preventDefault();
         });
         // Note: NOT binding touchstart/touchend. On mobile, taps fire a
         // synthetic mousedown after touchend; binding both would double-
@@ -655,9 +723,9 @@
         // CSS `touch-action: manipulation` on #board removes iOS's 350ms
         // tap delay so the synthetic mousedown still feels instant.
       }
-      // Escape clears any active selection (Lichess convention).
+      // Escape clears any active selection (Lichess convention) — works in
+      // both search and drill modes.
       $(document).on('keydown', function (e) {
-        if (mode !== 'drill') return;
         if (e.key === 'Escape' && selectedSquare) {
           clearSelection();
           deselectionPending = false;
@@ -676,7 +744,18 @@
         return;
       }
       chess = c;
+      // Pasted FEN means the move history (which is rooted at the start
+      // position) no longer applies. Clear it and reflect the canonicalized
+      // FEN back into the textarea.
+      searchMoveHistory = [];
+      searchFen = c.fen();
       board.position(c.fen(), false);
+      // Pasted FEN may have its own side-to-move; clear any stale highlights.
+      clearLastMove();
+      clearCheck();
+      showCheckDeferred(c);
+      updateMoveListDisplay();
+      updateFenInputFromBoard();
       setStatus('Position loaded. Click Search.', 'ok');
       $('#results').empty();
       $('#resultsMeta').hide();
@@ -684,6 +763,7 @@
       // previous search's matches and would be misleading until the
       // user re-searches against the new FEN.
       $('#sessionPanel').hide();
+      lastMatches = null;
     }
 
     async function searchPuzzles() {
@@ -1070,23 +1150,61 @@
     function rebuildSearchBoard() {
       destroyBoard();
       var fen = searchFen || 'start';
+      // Interactive board: drag pieces of the side-to-move (or click-to-move
+      // via onBoardMouseDown) to add a ply to the search position. The same
+      // onDragStart/onDrop/onSnapEnd handlers serve drill mode too — they
+      // dispatch on the global `mode` flag.
       board = Chessboard('board', {
         position: fen,
         pieceTheme: 'https://chessboardjs.com/img/chesspieces/wikipedia/{piece}.png',
-        showNotation: true
+        showNotation: true,
+        draggable: true,
+        orientation: searchOrientation,
+        onDragStart: onDragStart,
+        onDrop: onDrop,
+        onSnapEnd: onSnapEnd
       });
       // Keep chess.js in sync with what's on the board, so a follow-up
       // Search picks up the same position the user sees.
       chess = new Chess();
       if (searchFen) chess.load(searchFen);
+      // Reset transient interaction state — leftover from a prior search-
+      // mode interaction or a just-completed drill round trip.
+      selectedSquare = null;
+      deselectionPending = false;
+      lastSuccessfulUserMove = null;
+      // Surface the most recently played move (if any) and check status,
+      // so e.g. coming back from drill with 1.e4 e5 played still shows the
+      // green ply highlight. Deferred so chessboard.js has finished
+      // re-rendering the squares before we add classes.
+      var last = searchMoveHistory.length
+        ? searchMoveHistory[searchMoveHistory.length - 1] : null;
+      if (last) {
+        applyLastMoveAndCheckDeferred(last.from, last.to);
+      } else {
+        clearLastMove();
+        showCheckDeferred(chess);
+      }
+      updateMoveListDisplay();
+      updateFenInputFromBoard();
     }
 
     // ─── drag/drop handlers ─────────────────────────────────────────────
-    // chessboard.js calls these in drill mode only. onDragStart filters
-    // illegal grabs; onDrop validates + classifies; onSnapEnd syncs the
-    // board to chess.js (covers castling/EP/promotion glyphs) and schedules
-    // the opp auto-reply.
+    // chessboard.js calls these in BOTH search and drill modes. onDragStart
+    // filters illegal grabs; onDrop validates + classifies; onSnapEnd syncs
+    // the board to chess.js (covers castling/EP/promotion glyphs) and
+    // schedules the opp auto-reply (drill mode only — no-op in search).
     function onDragStart(source, piece /*, position, orientation */) {
+      // Search mode: any side-to-move piece is draggable. No drillState,
+      // no userColor, no completion gating — just legality.
+      if (mode === 'search') {
+        if (chess.turn() !== piece[0]) return false;
+        if (selectedSquare !== source) clearSelection();
+        selectSquare(source);
+        return true;
+      }
+      // Drill mode (existing behavior): user's color only, while it's
+      // their turn, and only before completion.
       if (!drillState || drillState.complete) return false;
       // Only the side-to-move's pieces are draggable.
       if (chess.turn() !== piece[0]) return false;
@@ -1121,20 +1239,27 @@
     }
 
     // ─── shared move-attempt core ───────────────────────────────────────
-    // Used by both onDrop (drag) and onBoardMouseDown (click). Side effects:
-    //   - chess.js advanced (continue/complete) or reverted (wrong)
-    //   - drillState updated via the state machine
-    //   - Progress.recordReview on first-wrong + completion
-    //   - pendingOppReply / pendingCompletionResult set
-    //   - lastSuccessfulUserMove set on continue/complete (consumed by
-    //     onSnapEnd for drag, or by the click handler directly)
-    //   - selection cleared (success path)
-    //   - square-wrong flash on wrong-move target
-    // Returns:
+    // Used by both onDrop (drag) and onBoardMouseDown (click). Dispatches
+    // on `mode` — drill mode runs the Drill state machine and SRS, search
+    // mode just appends to searchMoveHistory.
+    //
+    // Returns (drill mode):
     //   { ok: false }                    — chess.js rejected (illegal)
     //   { ok: true, wrong: true }        — Drill said wrong; chess.js reverted
     //   { ok: true, from, to }           — continue or complete
+    // Returns (search mode):
+    //   { ok: false }                    — chess.js rejected (illegal)
+    //   { ok: true, from, to }           — legal move applied
     function attemptMove(source, target) {
+      if (mode === 'search') return attemptSearchMove(source, target);
+      // Drill-mode side effects:
+      //   - chess.js advanced (continue/complete) or reverted (wrong)
+      //   - drillState updated via the state machine
+      //   - Progress.recordReview on first-wrong + completion
+      //   - pendingOppReply / pendingCompletionResult set
+      //   - lastSuccessfulUserMove set on continue/complete
+      //   - selection cleared (success path)
+      //   - square-wrong flash on wrong-move target
       if (!drillState || drillState.complete) return { ok: false };
       if (source === target) return { ok: false };
 
@@ -1193,6 +1318,154 @@
         }
       }
       return { ok: true, from: moveObj.from, to: moveObj.to };
+    }
+
+    // ─── search-mode move-attempt ───────────────────────────────────────
+    // Adds one ply to the move builder. Side effects:
+    //   - chess.js advanced
+    //   - searchMoveHistory pushed
+    //   - searchFen updated to chess.fen()
+    //   - lastSuccessfulUserMove set (consumed by onSnapEnd or the click handler)
+    //   - selection cleared
+    //   - move list + FEN textarea re-rendered
+    //   - any stale results cleared (the position changed)
+    function attemptSearchMove(source, target) {
+      if (source === target) return { ok: false };
+      // Default to queen-promotion (same MVP trade-off as drill mode — under-
+      // promotion picker is future work). chess.js v0.10 returns null;
+      // v1+ throws — guard both.
+      var moveObj;
+      try {
+        moveObj = chess.move({ from: source, to: target, promotion: 'q' });
+      } catch (e) {
+        moveObj = null;
+      }
+      clearSelection();
+      if (!moveObj) return { ok: false };
+      searchMoveHistory.push({
+        san: moveObj.san,
+        from: moveObj.from,
+        to: moveObj.to
+      });
+      searchFen = chess.fen();
+      lastSuccessfulUserMove = { from: moveObj.from, to: moveObj.to };
+      updateMoveListDisplay();
+      updateFenInputFromBoard();
+      // Position changed — drop any stale results from a previous Search,
+      // both from the DOM and from the lastMatches cache (otherwise back-
+      // from-drill would re-render results that don't match the current
+      // board). Hide the session panel too — its slider/counts are tied
+      // to lastMatches. Don't auto-search; user clicks Search when ready.
+      $('#results').empty();
+      $('#resultsMeta').hide();
+      $('#sessionPanel').hide();
+      lastMatches = null;
+      setStatus('Position updated. Click Search.', 'info');
+      return { ok: true, from: moveObj.from, to: moveObj.to };
+    }
+
+    // ─── search-mode UI helpers ─────────────────────────────────────────
+    // Render the move history into #moveList as "1. e4 e5 2. Nf3 …".
+    // Empty list → italicized "starting position" placeholder.
+    // Undo is enabled iff we have history. Reset is enabled iff the board
+    // is NOT at the default start state — covers both move-builder usage
+    // (history > 0) and pasted-FEN usage (history empty but searchFen set).
+    function updateMoveListDisplay() {
+      var $el = $('#moveList');
+      $('#undoBtn').prop('disabled', searchMoveHistory.length === 0);
+      $('#resetBtn').prop('disabled', searchFen === null && searchMoveHistory.length === 0);
+      if (!searchMoveHistory.length) {
+        $el.addClass('empty').text('starting position');
+        return;
+      }
+      $el.removeClass('empty').empty();
+      // Group plies into move pairs. searchMoveHistory[0] is white's first
+      // move — history is only built from the standard start position
+      // (paste clears it), so this assumption holds.
+      for (var i = 0; i < searchMoveHistory.length; i++) {
+        if (i % 2 === 0) {
+          $el.append($('<span class="move-num"></span>').text((i / 2 + 1) + '.'));
+        }
+        $el.append($('<span class="move-san"></span>').text(searchMoveHistory[i].san));
+      }
+    }
+
+    // Reflect the current chess.js position into the FEN textarea so the
+    // user can copy/paste it elsewhere. Skipped if the textarea is focused
+    // (mid-paste/edit) so we don't stomp on user input. searchFen mirrors
+    // chess.fen() so we use it directly.
+    function updateFenInputFromBoard() {
+      var $input = $('#fenInput');
+      if ($input.is(':focus')) return;
+      $input.val(searchFen || (chess ? chess.fen() : ''));
+    }
+
+    // Undo: pop the last ply, revert chess.js, repaint the prior ply's
+    // lastmove highlight (if any), invalidate cached results.
+    function undoSearchMove() {
+      if (mode !== 'search') return;
+      if (!searchMoveHistory.length) return;
+      // Cancel any in-flight selection — the destination from a half-
+      // started click no longer makes sense after the undo.
+      clearSelection();
+      deselectionPending = false;
+      lastSuccessfulUserMove = null;
+      searchMoveHistory.pop();
+      chess.undo();
+      searchFen = chess.fen();
+      if (board) board.position(chess.fen());  // animated
+      updateMoveListDisplay();
+      updateFenInputFromBoard();
+      // Paint the now-current lastmove (the ply BEFORE the one we undid),
+      // or clear if we're back at the start.
+      var prev = searchMoveHistory.length
+        ? searchMoveHistory[searchMoveHistory.length - 1] : null;
+      if (prev) {
+        applyLastMoveAndCheckDeferred(prev.from, prev.to);
+      } else {
+        clearLastMove();
+        showCheckDeferred(chess);
+      }
+      $('#results').empty();
+      $('#resultsMeta').hide();
+      $('#sessionPanel').hide();
+      lastMatches = null;
+      setStatus('Undid ' + (searchMoveHistory.length + 1) + ' ply. Click Search.', 'info');
+    }
+
+    // Reset to the standard start position. Clears history and any
+    // cached results; re-syncs FEN textarea via updateFenInputFromBoard
+    // so it reflects the current board (start FEN) — consistent with
+    // every other path that updates the textarea.
+    function resetSearchPosition() {
+      if (mode !== 'search') return;
+      clearSelection();
+      deselectionPending = false;
+      lastSuccessfulUserMove = null;
+      searchMoveHistory = [];
+      searchFen = null;
+      chess = new Chess();
+      if (board) board.position('start');
+      clearLastMove();
+      clearCheck();
+      updateMoveListDisplay();
+      updateFenInputFromBoard();
+      $('#results').empty();
+      $('#resultsMeta').hide();
+      $('#sessionPanel').hide();
+      lastMatches = null;
+      setStatus('Reset to start position. Drag pieces or paste a FEN.', 'info');
+    }
+
+    // Flip board orientation. Persisted in searchOrientation so subsequent
+    // rebuilds (e.g. back from drill) preserve the user's choice. We
+    // rebuild rather than calling board.flip() because chessboard.js v1's
+    // flip() doesn't re-trigger our own deferred lastmove repainting; a
+    // full rebuild is cheap (no fetches) and uses the existing code path.
+    function flipSearchBoard() {
+      if (mode !== 'search') return;
+      searchOrientation = (searchOrientation === 'white') ? 'black' : 'white';
+      rebuildSearchBoard();
     }
 
     function onSnapEnd() {
@@ -1542,11 +1815,17 @@
     // deselectionPending so a drag committed from the selected piece
     // doesn't deselect on the trailing mouseup.
     function onBoardMouseDown(e) {
-      if (mode !== 'drill' || !drillState || drillState.complete) return;
       if (!chess) return;
-      // Block clicks while it's the opponent's turn (intro pause and
-      // opp-reply window — chess.turn() is opp's color).
-      if (chess.turn() !== Drill.userColor(drillState)) return;
+      // Mode-specific gating. Drill mode has additional guards around
+      // drillState/turn; search mode lets either side move freely.
+      if (mode === 'drill') {
+        if (!drillState || drillState.complete) return;
+        // Block clicks while it's the opponent's turn (intro pause and
+        // opp-reply window — chess.turn() is opp's color).
+        if (chess.turn() !== Drill.userColor(drillState)) return;
+      } else if (mode !== 'search') {
+        return;
+      }
 
       // Right-click (or middle-click) → cancel any current selection.
       // Matches MistakeLab + Lichess behavior. The contextmenu listener
@@ -1602,9 +1881,9 @@
           // Click-move applies the highlight directly; null the var so a
           // subsequent drag's onSnapEnd doesn't re-paint stale coords.
           lastSuccessfulUserMove = null;
-          // Onsnaped doesn't fire for board.position calls — schedule the
-          // opp reply ourselves. Same 400ms delay as the drag path; the
-          // ~250ms click animation runs in parallel with the wait.
+          // onSnapEnd doesn't fire for board.position calls — schedule the
+          // opp reply ourselves (drill mode only; search mode leaves
+          // pendingOppReply null, so this no-ops).
           scheduleOppReplyIfPending();
         }
         // Illegal: chess.js never advanced; selection already cleared.
