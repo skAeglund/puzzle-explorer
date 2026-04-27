@@ -587,7 +587,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">audit-pass-2</span>
+    <span id="buildVersion">color-filter-audit</span>
     <span id="datasetInfo">loading dataset…</span>
   </header>
 
@@ -1546,7 +1546,13 @@
       lastSuccessfulUserMove = null;
       searchMoveHistory.pop();
       chess.undo();
-      searchFen = chess.fen();
+      // When we've popped back to the standard start position, restore
+      // searchFen to null. This keeps the Reset button's disabled-state
+      // condition (`searchFen===null && history.length===0`) honest: the
+      // default state has BOTH null. Pasted-FEN-with-no-moves ALSO has
+      // history empty, but in that case searchFen is the pasted FEN
+      // (non-null), so Reset stays enabled — exactly what we want.
+      searchFen = searchMoveHistory.length === 0 ? null : chess.fen();
       if (board) board.position(chess.fen());  // animated
       updateMoveListDisplay();
       updateFenInputFromBoard();
@@ -1564,7 +1570,7 @@
       $('#resultsMeta').hide();
       $('#sessionPanel').hide();
       lastMatches = null;
-      setStatus('Undid ' + (searchMoveHistory.length + 1) + ' ply. Click Search.', 'info');
+      setStatus('Undid last move. Click Search.', 'info');
     }
 
     // Reset to the standard start position. Clears history and any
@@ -1579,7 +1585,10 @@
       searchMoveHistory = [];
       searchFen = null;
       chess = new Chess();
-      if (board) board.position('start');
+      // Teleport — matches the project convention for multi-piece position
+      // swaps (applyFen does the same). chessboard.js's animation looks
+      // chaotic when many pieces shift at once.
+      if (board) board.position('start', false);
       clearLastMove();
       clearCheck();
       updateMoveListDisplay();
@@ -1600,13 +1609,20 @@
       if (mode !== 'search') return;
       searchOrientation = (searchOrientation === 'white') ? 'black' : 'white';
       rebuildSearchBoard();
-      // Hint the user that re-searching now will return the OTHER color's
-      // puzzles (when the filter is on). Doesn't auto-search — that would
-      // surprise the user mid-build.
-      if (matchOwnColorOnly && lastMatches !== null) {
-        setStatus('Flipped to ' + searchOrientation + '. Click Search for puzzles where ' +
-          (searchOrientation === 'white' ? 'white' : 'black') + ' moves.', 'info');
-      }
+      // Flipping changes the perspective — with matchOwnColorOnly=true
+      // that's the filter input, so cached results from before the flip
+      // are now wrong-color. Same invalidation pattern as every other
+      // state-changing handler (toggleColorFilter, applyFen, etc). Even
+      // when the filter is OFF, dropping the cache keeps the UX model
+      // consistent: any state change → results stale → click Search.
+      $('#results').empty();
+      $('#resultsMeta').hide();
+      $('#sessionPanel').hide();
+      lastMatches = null;
+      setStatus('Flipped to ' + searchOrientation + '. Click Search' +
+        (matchOwnColorOnly ? ' for puzzles where ' +
+          (searchOrientation === 'white' ? 'white' : 'black') + ' moves.' : '.'),
+        'info');
     }
 
     // Toggle the color-of-perspective filter. Like Flip, this doesn't auto-
@@ -1614,6 +1630,7 @@
     // results (lastMatches + DOM) because they reflect the previous filter
     // setting and would re-render through onBackClick with stale content.
     function toggleColorFilter() {
+      if (mode !== 'search') return;
       matchOwnColorOnly = !matchOwnColorOnly;
       updateColorFilterBtn();
       $('#results').empty();
