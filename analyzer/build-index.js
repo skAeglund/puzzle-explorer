@@ -168,7 +168,16 @@ async function main() {
     }
     parsed++;
     const { body, positions } = r;
-    const previewEntry = [body.id, body.rating];
+    // Index entry: [puzzleId, rating, color]. `color` is 'w' or 'b' — the
+    // puzzle's starting side-to-move (i.e. who solves the tactic). The
+    // frontend uses this to filter by board orientation: when the user
+    // is set up from black's perspective, only black-to-move puzzles
+    // match. Cost: 3 chars/entry pre-gzip; ~3.6MB at 1.2M scale.
+    // Field is OPTIONAL by frontend convention — entries without it are
+    // treated as "color unknown, pass through" so old data still works
+    // until a republish.
+    const colorChar = body.fen.split(' ')[1];  // 'w' or 'b'
+    const previewEntry = [body.id, body.rating, colorChar];
     const previewJson = JSON.stringify(previewEntry);
 
     // Dedup positions within this game (transpositions in source game itself)

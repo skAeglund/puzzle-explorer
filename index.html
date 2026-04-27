@@ -169,6 +169,17 @@
       font-size: 11px;
       padding: 5px 9px;
     }
+    /* Toggle-button "active" state (matches Lichess's settings-toggle look).
+       Used by the color-filter button to show "My color only" is on. */
+    .move-controls > button.active {
+      background: var(--accent);
+      color: var(--bg);
+      border-color: var(--accent);
+    }
+    .move-controls > button.active:hover {
+      background: var(--accent-hover);
+      border-color: var(--accent-hover);
+    }
 
     #status {
       font-size: 12px;
@@ -576,7 +587,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">result-badges</span>
+    <span id="buildVersion">color-filter</span>
     <span id="datasetInfo">loading dataset…</span>
   </header>
 
@@ -591,6 +602,7 @@
           <button id="undoBtn" title="Undo last move">Undo</button>
           <button id="resetBtn" title="Reset to start position">Reset</button>
           <button id="flipBtn" title="Flip board orientation">Flip</button>
+          <button id="colorFilterBtn" title="Filter puzzles by board orientation (the color you're playing)">My color only</button>
         </div>
       </div>
       <label for="fenInput">Position FEN</label>
@@ -695,6 +707,14 @@
     // start fresh).
     var searchMoveHistory = [];
     var searchOrientation = 'white';
+    // Color-of-perspective filter. When true (default), search results are
+    // filtered to puzzles whose side-to-move matches searchOrientation —
+    // i.e. you only see puzzles where the color you're playing is the one
+    // about to move. Toggled via the "All colors" / "My color only" button
+    // in the move-controls row. Filtering happens in searchPuzzles before
+    // rendering and caching, so session-mode + back-from-drill see the
+    // already-filtered set.
+    var matchOwnColorOnly = true;
     var pendingOppReply = null;  // UCI of opp's auto-reply, scheduled in onSnapEnd
     var oppReplyTimeout = null;  // setTimeout id; cleared on back/destroy
     var introTimeout = null;     // setTimeout id for the pre-puzzle blunder animation
@@ -757,6 +777,8 @@
       $('#undoBtn').on('click', undoSearchMove);
       $('#resetBtn').on('click', resetSearchPosition);
       $('#flipBtn').on('click', flipSearchBoard);
+      $('#colorFilterBtn').on('click', toggleColorFilter);
+      updateColorFilterBtn();
 
       // Drill UI handlers. Result-row click is delegated since rows are
       // re-rendered on each search.
@@ -865,18 +887,37 @@
           throw new Error('HTTP ' + res.status);
         }
         var idx = await res.json();
-        var matches = idx[key] || [];
+        var rawMatches = idx[key] || [];
+        // Filter by color-of-perspective (off → no-op slice; on → keeps
+        // entries matching the orientation, plus legacy entries with no
+        // m[2] field). Done BEFORE renderResults so lastMatches caches
+        // the filtered set — back-from-drill and session-mode all see
+        // the same view consistently.
+        var matches = filterByPerspective(rawMatches);
         renderResults(matches);
         // Reset slider bounds to the data extents on every fresh search.
         // (onBackClick re-renders without resetting bounds, so the user's
         // chosen range survives a single-puzzle drill round-trip.)
         configureSlider(matches);
+        var filteredOut = rawMatches.length - matches.length;
+        var filterNote = (matchOwnColorOnly && filteredOut > 0)
+          ? ' (' + filteredOut + ' hidden — wrong color)'
+          : '';
         if (matches.length === 0) {
-          setStatus('No puzzles found at this position. (Shard ' + shard + ' fetched, but the position key isn\'t indexed.)', 'info');
+          if (rawMatches.length > 0 && matchOwnColorOnly) {
+            // All matches were the wrong color. Tell the user how to see them.
+            setStatus(rawMatches.length + ' match' +
+              (rawMatches.length === 1 ? '' : 'es') +
+              ' found, but none match your color. Click "All colors" or Flip the board.', 'info');
+          } else {
+            setStatus('No puzzles found at this position. (Shard ' + shard + ' fetched, but the position key isn\'t indexed.)', 'info');
+          }
         } else if (matches.length > MAX_RESULTS) {
-          setStatus(matches.length + ' matches found (showing first ' + MAX_RESULTS + ' by rating).', 'ok');
+          setStatus(matches.length + ' matches found' + filterNote +
+            ' (showing first ' + MAX_RESULTS + ' by rating).', 'ok');
         } else {
-          setStatus(matches.length + ' match' + (matches.length === 1 ? '' : 'es') + ' found.', 'ok');
+          setStatus(matches.length + ' match' + (matches.length === 1 ? '' : 'es') +
+            ' found' + filterNote + '.', 'ok');
         }
       } catch (e) {
         setStatus('Fetch error: ' + e.message + '. Are you serving over http (not file://)? Is data/ generated?', 'error');
@@ -1551,6 +1592,52 @@
       if (mode !== 'search') return;
       searchOrientation = (searchOrientation === 'white') ? 'black' : 'white';
       rebuildSearchBoard();
+      // Hint the user that re-searching now will return the OTHER color's
+      // puzzles (when the filter is on). Doesn't auto-search — that would
+      // surprise the user mid-build.
+      if (matchOwnColorOnly && lastMatches !== null) {
+        setStatus('Flipped to ' + searchOrientation + '. Click Search for puzzles where ' +
+          (searchOrientation === 'white' ? 'white' : 'black') + ' moves.', 'info');
+      }
+    }
+
+    // Toggle the color-of-perspective filter. Like Flip, this doesn't auto-
+    // re-search — the user clicks Search to apply it. We DO clear cached
+    // results (lastMatches + DOM) because they reflect the previous filter
+    // setting and would re-render through onBackClick with stale content.
+    function toggleColorFilter() {
+      matchOwnColorOnly = !matchOwnColorOnly;
+      updateColorFilterBtn();
+      $('#results').empty();
+      $('#resultsMeta').hide();
+      $('#sessionPanel').hide();
+      lastMatches = null;
+      setStatus(matchOwnColorOnly
+        ? 'Filtering to your color only. Click Search.'
+        : 'Showing puzzles for both colors. Click Search.', 'info');
+    }
+
+    // Sync the color-filter button's label + active class to state.
+    function updateColorFilterBtn() {
+      var $btn = $('#colorFilterBtn');
+      if (matchOwnColorOnly) {
+        $btn.addClass('active').text('My color only');
+      } else {
+        $btn.removeClass('active').text('All colors');
+      }
+    }
+
+    // Filter a freshly-fetched matches array by the perspective rule.
+    // Returns a NEW array. Entries without m[2] (legacy data, pre-color
+    // build) are passed through — defensive fallback so the frontend
+    // works against the live 50K dataset before it's republished with
+    // the new schema.
+    function filterByPerspective(matches) {
+      if (!matchOwnColorOnly) return matches.slice();
+      var perspective = (searchOrientation === 'black') ? 'b' : 'w';
+      return matches.filter(function (m) {
+        return m[2] === undefined || m[2] === perspective;
+      });
     }
 
     function onSnapEnd() {
