@@ -297,6 +297,95 @@ section('Session.create — deterministic shuffle with seeded rng');
         'if this flakes, pick another seed pair — 7! = 5040 permutations');
 }
 
+section('Session.create — sets kind="search" on returned state');
+{
+  const s = Session.create({ matches: MATCHES, isCompleted: NEVER_COMPLETED });
+  check('kind === "search"', s.kind === 'search');
+}
+
+section('Session.createFromIds — basic shape');
+{
+  const ids = ['p1', 'p2', 'p3'];
+  const s = Session.createFromIds(ids);
+  check('kind === "review" by default', s.kind === 'review');
+  check('queue preserves caller order',
+        JSON.stringify(s.queue) === JSON.stringify(ids));
+  check('total === ids.length', s.total === 3);
+  check('inRangeTotal === ids.length', s.inRangeTotal === 3);
+  check('ratingMin/Max null', s.ratingMin === null && s.ratingMax === null);
+  check('cursor === -1', s.cursor === -1);
+  check('complete === false', s.complete === false);
+}
+
+section('Session.createFromIds — empty / nullish input');
+{
+  const empty = Session.createFromIds([]);
+  check('empty array → complete=true', empty.complete === true);
+  check('empty array → total=0',       empty.total === 0);
+  check('empty array → kind=review',   empty.kind === 'review');
+
+  // Defensive: non-array should treat as empty rather than throw
+  const nullish = Session.createFromIds(null);
+  check('null input → complete=true', nullish.complete === true);
+  const undef = Session.createFromIds();
+  check('undefined input → complete=true', undef.complete === true);
+}
+
+section('Session.createFromIds — filters out non-string / empty entries');
+{
+  const ids = ['valid', '', null, undefined, 42, 'also-valid'];
+  const s = Session.createFromIds(ids);
+  check('only valid strings kept',
+        JSON.stringify(s.queue) === JSON.stringify(['valid', 'also-valid']));
+  check('total reflects clean count', s.total === 2);
+}
+
+section('Session.createFromIds — opts.kind override');
+{
+  const s = Session.createFromIds(['a'], { kind: 'custom-mode' });
+  check('caller-supplied kind respected', s.kind === 'custom-mode');
+  const sNullKind = Session.createFromIds(['a'], { kind: null });
+  check('null kind falls back to default', sNullKind.kind === 'review');
+  const sEmptyKind = Session.createFromIds(['a'], { kind: '' });
+  check('empty-string kind falls back to default', sEmptyKind.kind === 'review');
+}
+
+section('Session.createFromIds — does not mutate input array');
+{
+  const ids = ['a', 'b', 'c'];
+  const snapshot = ids.slice();
+  Session.createFromIds(ids);
+  check('input untouched', JSON.stringify(ids) === JSON.stringify(snapshot));
+}
+
+section('Session.createFromIds → advance walks the queue');
+{
+  const s = Session.createFromIds(['rev1', 'rev2', 'rev3']);
+  let r = Session.advance(s);
+  check('first advance → rev1',  r.puzzleId === 'rev1' && !r.exhausted);
+  check('first advance preserves kind', r.state.kind === 'review');
+  r = Session.advance(r.state);
+  check('second advance → rev2', r.puzzleId === 'rev2');
+  r = Session.advance(r.state);
+  check('third advance → rev3',  r.puzzleId === 'rev3');
+  r = Session.advance(r.state);
+  check('fourth advance → exhausted', r.exhausted === true && r.puzzleId === null);
+  check('exhausted state.complete=true', r.state.complete === true);
+}
+
+section('Session.createFromIds → progress label');
+{
+  let s = Session.createFromIds(['a', 'b', 'c', 'd']);
+  let p = Session.progress(s);
+  check('initial: 0/4', p.current === 0 && p.total === 4);
+  s = Session.advance(s).state;
+  p = Session.progress(s);
+  check('after 1 advance: 1/4', p.current === 1 && p.total === 4);
+  s = Session.advance(Session.advance(s).state).state;
+  p = Session.progress(s);
+  check('after 3 advances: 3/4', p.current === 3 && p.total === 4);
+}
+
 // ─── summary ─────────────────────────────────────────────────────────────
 console.log('\n' + (fail === 0 ? '✓' : '✗') + ' ' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail === 0 ? 0 : 1);

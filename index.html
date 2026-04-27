@@ -59,6 +59,34 @@
       width: 100%;
       margin-top: 4px;
     }
+    /* Review-due badge in the header. Doubles as the entry point — hidden
+       at zero due, clickable when the count is positive. Sits on its own
+       row (width:100%) below #datasetInfo, since #datasetInfo claims a full
+       row via width:100% in the flex header. Styled as a left-aligned pill
+       to read more like a status line + CTA than a generic button. */
+    .review-pill {
+      width: 100%;
+      margin-top: 4px;
+      padding: 5px 10px;
+      background: transparent;
+      color: var(--accent);
+      border: 1px solid var(--accent);
+      border-radius: 3px;
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: 0.05em;
+      text-align: left;
+      cursor: pointer;
+      transition: background 0.1s, color 0.1s;
+    }
+    .review-pill:hover {
+      background: var(--accent);
+      color: var(--bg);
+    }
+    .review-pill:focus-visible {
+      outline: 2px solid var(--accent-hover);
+      outline-offset: 2px;
+    }
 
     #board {
       width: 100%;
@@ -587,8 +615,9 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">color-filter-audit</span>
+    <span id="buildVersion">srs-review-queue</span>
     <span id="datasetInfo">loading dataset…</span>
+    <button id="reviewBadge" class="review-pill" type="button" hidden></button>
   </header>
 
   <main>
@@ -794,6 +823,7 @@
       $('#backBtn').on('click', onBackClick);
       $('#nextPuzzleBtn').on('click', onNextPuzzleClick);
       $('#startSessionBtn').on('click', onStartSessionClick);
+      $('#reviewBadge').on('click', onReviewBadgeClick);
       // Slider 'input' fires continuously as the user drags; 'change'
       // fires only on release. Use 'input' for live count + fill updates.
       $('#ratingMin, #ratingMax').on('input', onRatingSliderInput);
@@ -834,6 +864,7 @@
       });
 
       loadDatasetInfo();
+      refreshReviewBadge();
     }
 
     function applyFen() {
@@ -1173,11 +1204,13 @@
       // drilling the strip is hidden.
       if (sessionState) {
         var prog = Session.progress(sessionState);
+        var label = (sessionState.kind === 'review') ? 'Review ' : 'Puzzle ';
         $('#sessionProgress')
           .removeClass('complete')
-          .text('Puzzle ' + prog.current + ' of ' + prog.total)
+          .text(label + prog.current + ' of ' + prog.total)
           .show();
-        $('#backBtn').removeClass('primary').text('Exit session');
+        var exitLabel = (sessionState.kind === 'review') ? 'Exit review' : 'Exit session';
+        $('#backBtn').removeClass('primary').text(exitLabel);
       } else {
         $('#sessionProgress').hide();
         $('#backBtn').addClass('primary').text('Back to results');
@@ -1423,6 +1456,9 @@
         // toRecord=null, the state machine handles the lock).
         if (result.toRecord !== null) {
           Progress.recordReview(drillState.puzzleId, result.toRecord);
+          // First-wrong reschedules to tomorrow → drops out of today's
+          // due count → header badge needs to reflect that.
+          refreshReviewBadge();
         }
         chess.undo();              // revert the wrong move on chess.js
         flashWrong(target);        // transient red wash (650ms fade)
@@ -1729,6 +1765,9 @@
     function handleCompletion(result) {
       if (result.toRecord !== null) {
         Progress.recordReview(drillState.puzzleId, result.toRecord);
+        // Card just rescheduled (Easy/Hard → days out, or Again-on-final
+        // → tomorrow). Either way it's no longer due today.
+        refreshReviewBadge();
       }
       var grade = drillState.gradeRecorded;
       var msg, kind;
@@ -1755,7 +1794,8 @@
       $('#hintBtn').prop('disabled', true);
       if (sessionState) {
         $('#nextPuzzleBtn').prop('disabled', false).show().focus();
-        setStatus('Click Next puzzle to continue, or Exit session to stop.', 'info');
+        var exitLabel = (sessionState.kind === 'review') ? 'Exit review' : 'Exit session';
+        setStatus('Click Next puzzle to continue, or ' + exitLabel + ' to stop.', 'info');
       } else {
         $('#nextPuzzleBtn').prop('disabled', true).hide();
         setStatus('Click Back to return to results.', 'info');
@@ -1801,6 +1841,7 @@
       pendingCompletionResult = null;
       var lastPid = drillPuzzle ? drillPuzzle.id : null;
       var hadSession = !!sessionState;
+      var wasReview = !!(sessionState && sessionState.kind === 'review');
       drillState = null;
       drillPuzzle = null;
       sessionState = null;          // exit session if active
@@ -1814,7 +1855,11 @@
       clearCompletionBadge();
       clearWrongX();
       // Re-render the result list so a freshly-completed puzzle picks up
-      // its ✓ Done badge (cheap — capped at MAX_RESULTS rows).
+      // its ✓ Done badge (cheap — capped at MAX_RESULTS rows). Applies
+      // in BOTH search-session and review-mode flows: if the user had a
+      // prior search, restoring those results on exit beats dropping them
+      // at an empty home state. The list is guarded by lastMatches.length
+      // so an empty/no-prior-search state is also handled cleanly.
       if (lastMatches && lastMatches.length) {
         renderResults(lastMatches);
         $('#resultsMeta').show();
@@ -1824,12 +1869,113 @@
         updateSessionPanelUI();
       }
       rebuildSearchBoard();
-      if (hadSession) {
+      // The badge count drops as cards get graded during a review (or
+      // get scheduled-out via first-wrong). Refresh on every back so the
+      // header reflects current state regardless of how the drill ended.
+      refreshReviewBadge();
+      // Status message picks the most relevant line for what the user
+      // is now looking at: prior-search results, prior session prompt,
+      // or a clean home.
+      var hasResults = !!(lastMatches && lastMatches.length);
+      if (wasReview) {
+        setStatus(
+          hasResults
+            ? 'Back to results.'
+            : 'Set a position and click Search, or come back when more reviews are due.',
+          'info'
+        );
+      } else if (hadSession) {
         setStatus('Adjust the range and start a new session, or pick a row.', 'info');
       } else if (lastPid) {
         setStatus('Back to results.', 'info');
       } else {
         setStatus('Set a position and click Search.', 'info');
+      }
+    }
+
+    // ─── review-mode flow (issue #1) ────────────────────────────────────
+    // The SRS layer (lib/fsrs.js + lib/progress.js) grades every drilled
+    // puzzle and schedules a due date, but no UI surfaced due puzzles
+    // until now. The "review queue" reuses the search-session machinery
+    // (Session.advance / progress / the completion strip's Next button)
+    // — only the queue source differs: a sorted id list from Progress
+    // instead of a filtered match list from a search.
+    //
+    // Walk Progress entries, keep the due ones, sort oldest-due first
+    // (tiebreak: oldest lastSeen first). srs.due is YYYY-MM-DD; lastSeen
+    // is ISO. Both are lexicographic-sortable as strings.
+    function getDuePuzzleIds() {
+      var data;
+      try { data = Progress.exportData(); }
+      catch (e) { return []; }
+      if (!data || !data.positions) return [];
+      var ids = [];
+      var todayStr = FSRS.localDateString(new Date());
+      for (var pid in data.positions) {
+        if (!Object.prototype.hasOwnProperty.call(data.positions, pid)) continue;
+        if (!Progress.isDue(pid, todayStr)) continue;
+        var entry = data.positions[pid];
+        ids.push({
+          id: pid,
+          due: (entry && entry.srs && typeof entry.srs.due === 'string') ? entry.srs.due : '',
+          lastSeen: (entry && typeof entry.lastSeen === 'string') ? entry.lastSeen : ''
+        });
+      }
+      ids.sort(function (a, b) {
+        if (a.due !== b.due) return a.due < b.due ? -1 : 1;
+        if (a.lastSeen !== b.lastSeen) return a.lastSeen < b.lastSeen ? -1 : 1;
+        return a.id < b.id ? -1 : (a.id > b.id ? 1 : 0);
+      });
+      var out = [];
+      for (var i = 0; i < ids.length; i++) out.push(ids[i].id);
+      return out;
+    }
+
+    // Refresh the header badge. Reads Progress.stats().due and either
+    // shows "N due · review" or hides the pill entirely. Called on init,
+    // after every recordReview, and on back-from-review (a session of
+    // reviews drains the count).
+    function refreshReviewBadge() {
+      var n = 0;
+      try { n = Progress.stats().due | 0; }
+      catch (e) { n = 0; }
+      var $b = $('#reviewBadge');
+      if (n > 0) {
+        $b.text(n + ' due · review').prop('hidden', false);
+      } else {
+        $b.prop('hidden', true).text('');
+      }
+    }
+
+    // Click the badge → build the queue, install it as sessionState
+    // (kind:'review'), drill the first puzzle. Reuses the search-session
+    // race guard since both flows feed advanceSessionAndDrill, which is
+    // also guarded.
+    async function onReviewBadgeClick() {
+      if (sessionLoading) return;
+      // Don't start a review while already drilling/sessioning — the
+      // badge is in the header so it stays clickable in any state.
+      // Surface a short hint rather than silently no-oping.
+      if (sessionState || drillState) {
+        setStatus('Finish the current puzzle first, then start your review.', 'info');
+        return;
+      }
+      var ids = getDuePuzzleIds();
+      if (!ids.length) {
+        // Race: badge was visible at click time but Progress changed
+        // (cleared in another tab, e.g.). Hide and bail gracefully.
+        refreshReviewBadge();
+        setStatus('No reviews due right now.', 'info');
+        return;
+      }
+      sessionState = Session.createFromIds(ids, { kind: 'review' });
+      setStatus('Review started — ' + sessionState.total + ' puzzle' +
+                (sessionState.total === 1 ? '' : 's') + ' due.', 'info');
+      sessionLoading = true;
+      try {
+        await advanceSessionAndDrill();
+      } finally {
+        sessionLoading = false;
       }
     }
 
@@ -1895,11 +2041,14 @@
         // and re-advancing would silently skip a puzzle. Restore the
         // single-puzzle Back button styling so the user sees a clear
         // exit (the previous puzzle's board may still be visible).
+        var wasReview = (sessionState && sessionState.kind === 'review');
         sessionState = null;
         $('#sessionProgress').hide();
         $('#completionStrip').hide();
         $('#nextPuzzleBtn').hide();
-        $('#backBtn').addClass('primary').text('Back to results');
+        // In review mode there's no result list to return to — Back
+        // closes the drill panel and drops the user at search-mode home.
+        $('#backBtn').addClass('primary').text(wasReview ? 'Done' : 'Back to results');
       }
     }
 
@@ -1908,18 +2057,25 @@
     // exit via Back. We deliberately keep the last puzzle's board state
     // visible — feels like a natural "rest" state. Restore the Back
     // button to "Back to results" since the session is now done; the
-    // "Exit session" label was for the in-progress case.
+    // "Exit session" / "Exit review" label was for the in-progress case.
     function onSessionComplete() {
       var total = sessionState ? sessionState.total : 0;
+      var isReview = !!(sessionState && sessionState.kind === 'review');
+      var bannerLead = isReview ? '✓ Review complete — ' : '✓ Session complete — ';
+      var bannerTail = isReview
+        ? (' puzzle' + (total === 1 ? '' : 's') + ' reviewed')
+        : (' puzzle' + (total === 1 ? '' : 's') + ' cleared');
       $('#sessionProgress')
         .addClass('complete')
-        .text('✓ Session complete — ' + total + ' puzzle' +
-              (total === 1 ? '' : 's') + ' cleared')
+        .text(bannerLead + total + bannerTail)
         .show();
       $('#nextPuzzleBtn').prop('disabled', true).hide();
       $('#hintBtn').prop('disabled', true);
-      $('#backBtn').addClass('primary').text('Back to results');
-      setStatus('All unsolved puzzles in range cleared. Back to results to start another session.', 'ok');
+      $('#backBtn').addClass('primary').text(isReview ? 'Done' : 'Back to results');
+      var statusMsg = isReview
+        ? 'All due reviews cleared. Click Done to return.'
+        : 'All unsolved puzzles in range cleared. Back to results to start another session.';
+      setStatus(statusMsg, 'ok');
     }
 
     // ─── square highlights ──────────────────────────────────────────────
