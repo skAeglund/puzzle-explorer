@@ -175,7 +175,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">initial-scaffold</span>
+    <span id="buildVersion">data-base-url</span>
     <span id="datasetInfo">loading dataset…</span>
   </header>
 
@@ -216,6 +216,9 @@
     var board = null;
     var chess = null;
     var MAX_RESULTS = 100;       // cap visible matches; filters/pagination later
+    // Shards live in a sibling repo (puzzle-explorer-data) served via its own
+    // Pages site. Cross-origin fetch is fine — Pages sets ACAO:* by default.
+    var DATA_BASE_URL = 'https://skaeglund.github.io/puzzle-explorer-data/';
 
     function init() {
       var missing = [];
@@ -277,7 +280,7 @@
         return;
       }
       setStatus('Fetching shard ' + shard + '…', 'info');
-      var url = 'data/index/' + shard + '.json';
+      var url = DATA_BASE_URL + 'index/' + shard + '.json';
       try {
         var res = await fetch(url);
         if (!res.ok) {
@@ -337,7 +340,7 @@
 
     async function loadDatasetInfo() {
       try {
-        var res = await fetch('data/meta.json');
+        var res = await fetch(DATA_BASE_URL + 'meta.json');
         if (!res.ok) {
           $('#datasetInfo').text('no dataset (run analyzer)');
           return;
