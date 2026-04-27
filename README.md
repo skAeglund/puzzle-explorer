@@ -31,6 +31,20 @@ Outputs sharded JSON to `data/index/<hex>.json` and ndjson bodies to
 `data/puzzles/<hex>.ndjson`. Re-run when the puzzle set updates; build is
 idempotent (wipes prior shards).
 
+## Publish data
+
+`./data/` is gitignored here and lives in a sibling repo
+[`puzzle-explorer-data`](https://github.com/skAeglund/puzzle-explorer-data),
+served via its own GitHub Pages site. Each rebuild force-pushes a fresh tree
+so history doesn't accumulate.
+
+First-time setup is documented in the header of `analyzer/publish-data.js`.
+After setup, every rebuild is one command:
+
+```sh
+node analyzer/publish-data.js
+```
+
 ## Slice a sample fixture
 
 ```sh
