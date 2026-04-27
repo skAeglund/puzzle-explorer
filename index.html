@@ -221,21 +221,136 @@
 
     /* chessboard.js dark squares look better with a subtler border */
     #board .square-55d63 { border-radius: 0 !important; }
-    /* Hint and wrong-move overlays. Use inset box-shadow so we don't fight
-       chessboard.js's own white/dark square backgrounds. */
-    #board .square-55d63.highlight-hint {
-      box-shadow: inset 0 0 0 3px var(--accent);
+    /* Suppress iOS Safari's 350ms tap delay on the board. We rely on the
+       synthetic mousedown that fires after a tap; without manipulation,
+       that delay makes click-to-move feel laggy on iPhone. */
+    #board { touch-action: manipulation; }
+
+    /* MistakeLab-style highlight overlays. The square's own white/dark color
+       comes from chessboard.js's white-1e1d7 / black-3c85d background; we
+       layer overlays via ::before (z-index: -1, behind the piece) and ::after
+       (default z-index, in front for legal-move dots / capture corners).
+       isolation creates a per-square stacking context so z-index: -1 sits
+       behind the piece but doesn't escape the square. */
+    #board .square-55d63 { isolation: isolate; }
+
+    /* Last-move highlight (persistent, Lichess green) */
+    #board .square-lastmove::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: rgba(155, 199, 0, 0.41);
+      pointer-events: none;
+      z-index: -1;
     }
-    #board .square-55d63.flash-error {
-      box-shadow: inset 0 0 0 3px var(--error);
-      transition: box-shadow 0.25s ease-out;
+    /* Click-to-move selection (yellow). Cascade order: rules below win when
+       the same square has both classes — selected wins over lastmove. */
+    #board .square-selected::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: rgba(255, 236, 53, 0.45);
+      pointer-events: none;
+      z-index: -1;
+    }
+    /* Hint highlight on the from-square (pulsing blue) */
+    #board .square-hint::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: rgba(66, 133, 244, 0.55);
+      pointer-events: none;
+      z-index: -1;
+      animation: hint-pulse 1.8s ease-in-out infinite;
+    }
+    @keyframes hint-pulse {
+      0%, 100% { opacity: 0.7; }
+      50%      { opacity: 1; }
+    }
+    /* Wrong-move flash (transient red, fades out) */
+    #board .square-wrong::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: rgba(220, 50, 50, 0.55);
+      pointer-events: none;
+      z-index: -1;
+      animation: wrong-fade 0.65s ease-out forwards;
+    }
+    @keyframes wrong-fade {
+      from { opacity: 1; }
+      to   { opacity: 0; }
+    }
+    /* Legal-move dot on empty target */
+    #board .square-legal-dot { position: relative; cursor: pointer; }
+    #board .square-legal-dot::after {
+      content: '';
+      position: absolute;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      width: 28%; height: 28%;
+      border-radius: 50%;
+      background: rgba(0, 0, 0, 0.25);
+      pointer-events: none;
+    }
+    /* Legal-capture indicator — corner triangles wrapping the enemy piece */
+    #board .square-legal-capture { position: relative; cursor: pointer; }
+    #board .square-legal-capture::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      background:
+        linear-gradient(to bottom right, rgba(0,0,0,0.25) 50%, transparent 50.5%) top left     / 22% 22% no-repeat,
+        linear-gradient(to bottom left,  rgba(0,0,0,0.25) 50%, transparent 50.5%) top right    / 22% 22% no-repeat,
+        linear-gradient(to top right,    rgba(0,0,0,0.25) 50%, transparent 50.5%) bottom left  / 22% 22% no-repeat,
+        linear-gradient(to top left,     rgba(0,0,0,0.25) 50%, transparent 50.5%) bottom right / 22% 22% no-repeat;
+    }
+
+    /* Check / checkmate aura on the king's square (Lichess radial-gradient).
+       Placed AFTER lastmove/selected/hint so cascade resolves in favour of
+       check when the king sits on a recent-move or selected square. */
+    #board .square-check::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: radial-gradient(ellipse at center,
+        rgba(255, 0, 0, 1) 0%,
+        rgba(231, 0, 0, 1) 25%,
+        rgba(169, 0, 0, 0) 89%,
+        rgba(158, 0, 0, 0) 100%);
+      pointer-events: none;
+      z-index: -1;
+    }
+    #board .square-checkmate::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: radial-gradient(ellipse at center,
+        rgba(255, 0, 0, 1) 0%,
+        rgba(231, 0, 0, 1) 25%,
+        rgba(169, 0, 0, 0) 89%,
+        rgba(158, 0, 0, 0) 100%);
+      pointer-events: none;
+      z-index: -1;
+      animation: checkmate-pulse 1.4s ease-in-out infinite;
+    }
+    @keyframes checkmate-pulse {
+      0%, 100% { opacity: 0.9; }
+      50%      { opacity: 1; }
+    }
+
+    /* Disable chessboard.js's built-in move/drag highlights (we use our own) */
+    #board [class*="highlight1-"], #board [class*="highlight2-"] {
+      box-shadow: none !important;
+      background-color: transparent !important;
     }
   </style>
 </head>
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">blunder-intro</span>
+    <span id="buildVersion">click-to-move</span>
     <span id="datasetInfo">loading dataset…</span>
   </header>
 
@@ -310,6 +425,18 @@
     var pendingOppReply = null;  // UCI of opp's auto-reply, scheduled in onSnapEnd
     var oppReplyTimeout = null;  // setTimeout id; cleared on back/destroy
     var introTimeout = null;     // setTimeout id for the pre-puzzle blunder animation
+    // Click-to-move state. selectedSquare tracks the user's currently-selected
+    // own piece. deselectionPending implements MistakeLab's mousedown/mouseup
+    // dance: clicking the already-selected square doesn't deselect immediately
+    // (so a drag can still start), but the mouseup that follows without a
+    // drag-and-drop completes the deselection.
+    var selectedSquare = null;
+    var deselectionPending = false;
+    // After a successful user move via drag, onSnapEnd needs to know which
+    // squares to paint .square-lastmove on (chessboard.js's animated position()
+    // re-creates the square DOM nodes on completion, wiping any classes set
+    // before the animation resolved). Cleared after consumption.
+    var lastSuccessfulUserMove = null;
     // Edge case: drill.attemptUserMove permits a 'complete' result that
     // carries an opponentReply (even-length solutionUci — opp gets the
     // last move). Lichess convention is odd-length so this is rare/never
@@ -355,6 +482,23 @@
         var pid = $(this).attr('data-puzzle-id');
         if (pid) startDrillByPuzzleId(pid);
       });
+
+      // Click-to-move: capture-phase mousedown so we can intercept the click
+      // BEFORE chessboard.js's drag-start logic kicks in (and call
+      // stopPropagation on destination clicks so the click doesn't try to
+      // start a drag on the enemy piece). MistakeLab uses the same pattern.
+      // The handlers are global on #board (not per-drill-mode) — they no-op
+      // when not in drill mode via a guard inside.
+      var boardEl = document.getElementById('board');
+      if (boardEl) {
+        boardEl.addEventListener('mousedown', onBoardMouseDown, true);
+        boardEl.addEventListener('mouseup',   onBoardMouseUp,   true);
+        // Note: NOT binding touchstart/touchend. On mobile, taps fire a
+        // synthetic mousedown after touchend; binding both would double-
+        // handle every tap (clear selection right after setting it). The
+        // CSS `touch-action: manipulation` on #board removes iOS's 350ms
+        // tap delay so the synthetic mousedown still feels instant.
+      }
 
       loadDatasetInfo();
     }
@@ -515,8 +659,13 @@
       }
       pendingOppReply = null;
       pendingCompletionResult = null;
+      lastSuccessfulUserMove = null;
       if (oppReplyTimeout) { clearTimeout(oppReplyTimeout); oppReplyTimeout = null; }
       if (introTimeout) { clearTimeout(introTimeout); introTimeout = null; }
+      // destroyBoard() below empties #board, taking the highlight DOM
+      // classes with it — but keep state vars in sync explicitly.
+      clearSelection();
+      deselectionPending = false;
 
       // Swap panels.
       $('#searchPanel').hide();
@@ -570,6 +719,7 @@
       if (hasIntro) {
         // During the wait, onDragStart already blocks user from moving
         // because chess.turn() is the opponent's color at previousFen.
+        // No lastmove highlight yet — the blunder hasn't been "played".
         setStatus('Opponent to move…', 'info');
         introTimeout = setTimeout(function () {
           introTimeout = null;
@@ -589,13 +739,21 @@
             chess = new Chess();
             chess.load(puzzle.fen);
             if (board) board.position(puzzle.fen, false);
+            showCheck(chess);
             setStatus('(could not animate setup move ' + uci + ') Your move.', 'warn');
             return;
           }
           if (board) board.position(chess.fen()); // animated by default
+          // Show the blunder squares as the lastmove + paint check on
+          // the player's king if applicable. Deferred so the highlights
+          // survive the position-animation's DOM rebuild.
+          applyLastMoveAndCheckDeferred(m.from, m.to);
           setStatus('Your move.', 'info');
         }, 700);
       } else {
+        // No-intro path: still surface check on the puzzle's starting
+        // position (e.g. mate-in-1 with the user already in check).
+        showCheck(chess);
         setStatus('Your move.', 'info');
       }
     }
@@ -636,16 +794,50 @@
       // window between user move and scheduled opp reply, chess.turn()
       // is opponent's color, so this guards naturally).
       if (chess.turn() !== Drill.userColor(drillState)) return false;
+      // A drag committed — suppress the trailing mouseup-deselect.
+      // Re-select the source so legal-move dots stay visible during
+      // the drag (matching MistakeLab's onDragStart pattern).
+      deselectionPending = false;
+      if (selectedSquare !== source) clearSelection();
+      selectSquare(source);
       return true;
     }
 
     function onDrop(source, target) {
-      if (!drillState || drillState.complete) return 'snapback';
-      if (source === target) return 'snapback';
+      // Click-without-drag (chessboard.js fires onDrop with source===target
+      // for a click that didn't move). Honor pending deselect.
+      if (source === target) {
+        if (deselectionPending) { deselectionPending = false; clearSelection(); }
+        return 'snapback';
+      }
+      var r = attemptMove(source, target);
+      if (!r.ok || r.wrong) return 'snapback';
+      // continue / complete: chessboard.js animates the piece into place;
+      // onSnapEnd syncs the board, paints lastmove + check, schedules opp.
+      return; // undefined → keep
+    }
+
+    // ─── shared move-attempt core ───────────────────────────────────────
+    // Used by both onDrop (drag) and onBoardMouseDown (click). Side effects:
+    //   - chess.js advanced (continue/complete) or reverted (wrong)
+    //   - drillState updated via the state machine
+    //   - Progress.recordReview on first-wrong + completion
+    //   - pendingOppReply / pendingCompletionResult set
+    //   - lastSuccessfulUserMove set on continue/complete (consumed by
+    //     onSnapEnd for drag, or by the click handler directly)
+    //   - selection cleared (success path)
+    //   - square-wrong flash on wrong-move target
+    // Returns:
+    //   { ok: false }                    — chess.js rejected (illegal)
+    //   { ok: true, wrong: true }        — Drill said wrong; chess.js reverted
+    //   { ok: true, from, to }           — continue or complete
+    function attemptMove(source, target) {
+      if (!drillState || drillState.complete) return { ok: false };
+      if (source === target) return { ok: false };
 
       // Default to queen-promotion. Under-promotions aren't reachable via
-      // drag-drop in MVP — if a puzzle solution requires e.g. e8=N, the
-      // user gets marked wrong on first try (Again). Acceptable trade-off;
+      // drag-drop in MVP — a puzzle solution requiring e.g. e8=N marks
+      // the user wrong on first try (Again). Acceptable trade-off;
       // promotion-picker UI is a future enhancement.
       var moveObj;
       try {
@@ -653,11 +845,12 @@
       } catch (e) {
         moveObj = null;  // chess.js v0.10 returns null; v1+ throws — guard both
       }
-      if (!moveObj) return 'snapback'; // illegal in chess.js terms
+      if (!moveObj) return { ok: false };
 
       var uci = moveObj.from + moveObj.to + (moveObj.promotion || '');
       var result = Drill.attemptUserMove(drillState, uci);
       drillState = result.state;
+      clearSelection();
 
       if (result.result === 'wrong') {
         // First wrong locks Again — record now (subsequent wrongs return
@@ -666,15 +859,16 @@
           Progress.recordReview(drillState.puzzleId, result.toRecord);
         }
         chess.undo();              // revert the wrong move on chess.js
-        flashSquare(target, 'flash-error');
+        flashWrong(target);
         setStatus('Not the move — try again.', 'warn');
-        return 'snapback';
+        return { ok: true, wrong: true };
       }
 
-      // Correct: clear any prior hint highlight, queue opp reply if any,
-      // let chessboard.js animate the user's piece to target. Final sync
-      // happens in onSnapEnd.
-      clearSquareHighlights();
+      // Correct: clear hint, queue opp reply if any, mark the move so
+      // onSnapEnd (drag) or the click handler can paint lastmove.
+      clearHintHighlight();
+      lastSuccessfulUserMove = { from: moveObj.from, to: moveObj.to };
+
       if (result.result === 'continue') {
         pendingOppReply = result.opponentReply;
         setStatus('Good — opponent replies…', 'info');
@@ -690,7 +884,7 @@
           handleCompletion(result);
         }
       }
-      // No return value (or undefined) tells chessboard.js to keep the move.
+      return { ok: true, from: moveObj.from, to: moveObj.to };
     }
 
     function onSnapEnd() {
@@ -698,14 +892,29 @@
       // artifact rule). Castling rook, EP capture, promotion glyph all
       // get reconciled by chess.js's resulting FEN.
       if (board) board.position(chess.fen(), false);
-      if (pendingOppReply && drillState && !drillState.complete) {
-        var oppMove = pendingOppReply;
-        pendingOppReply = null;
-        oppReplyTimeout = setTimeout(function () {
-          oppReplyTimeout = null;
-          playOppReply(oppMove);
-        }, 400);
+      // Paint the just-played user move's lastmove + check highlights.
+      // Deferred re-apply at +250ms guards against any animation
+      // completion that wipes DOM classes.
+      if (lastSuccessfulUserMove) {
+        applyLastMoveAndCheckDeferred(lastSuccessfulUserMove.from, lastSuccessfulUserMove.to);
+        lastSuccessfulUserMove = null;
       }
+      scheduleOppReplyIfPending();
+    }
+
+    // Schedule the queued opp reply with a 400ms 'thinking' delay. Called
+    // from both onSnapEnd (drag path) and the click-to-move handler (no
+    // onSnapEnd fires for board.position calls). NO `!drillState.complete`
+    // guard — even-length puzzles set drillState.complete=true AND
+    // pendingOppReply (opp gets the last move); we want to play it.
+    function scheduleOppReplyIfPending() {
+      if (!pendingOppReply || !drillState) return;
+      var oppMove = pendingOppReply;
+      pendingOppReply = null;
+      oppReplyTimeout = setTimeout(function () {
+        oppReplyTimeout = null;
+        playOppReply(oppMove);
+      }, 400);
     }
 
     function playOppReply(uci) {
@@ -726,6 +935,8 @@
       }
       // Animated update — default chessboard.js behavior, NOT onSnapEnd here.
       if (board) board.position(chess.fen());
+      // Re-apply lastmove + check after the animation settles.
+      applyLastMoveAndCheckDeferred(from, to);
       // If a 'complete' result carried an opp reply, the puzzle ended on
       // the opp's move — show completion UI now that the animation has run.
       if (pendingCompletionResult) {
@@ -763,8 +974,7 @@
       var r = Drill.requestHint(drillState);
       drillState = r.state;
       if (r.hintInfo && r.hintInfo.fromSquare) {
-        clearSquareHighlights();
-        highlightSquare(r.hintInfo.fromSquare, 'highlight-hint');
+        showHintFromSquare(r.hintInfo.fromSquare);
         setStatus('Hint: move from ' + r.hintInfo.fromSquare + '. (Caps grade at Hard.)', 'info');
       }
       // One-hint policy per project doc — don't escalate to level 2 (full
@@ -805,18 +1015,206 @@
     }
 
     // ─── square highlights ──────────────────────────────────────────────
-    // chessboard.js tags each square with .square-XX (e.g. .square-e4) plus
-    // .square-55d63. We layer our own classes on top via inset box-shadow.
-    function highlightSquare(square, className) {
-      $('#board .square-' + square).addClass(className);
+    // chessboard.js v1 tags each square with .square-XX (algebraic, e.g.
+    // .square-e4), .square-55d63 (the obfuscated lib class), and exposes
+    // data-square="XX" on the same element for event-target lookup. The
+    // CSS uses ::before/::after overlays (per-square `isolation: isolate`)
+    // so highlights stack cleanly with the piece <img>. Patterns derived
+    // from MistakeLab.
+    function $square(sq) { return $('#board .square-' + sq); }
+
+    // ── Last move (Lichess-style green, persistent until next move) ──
+    function showLastMove(from, to) {
+      clearLastMove();
+      if (!from || !to) return;
+      $square(from).addClass('square-lastmove');
+      $square(to).addClass('square-lastmove');
     }
-    function clearSquareHighlights() {
-      $('#board .square-55d63').removeClass('highlight-hint flash-error');
+    function clearLastMove() {
+      $('#board .square-lastmove').removeClass('square-lastmove');
     }
-    function flashSquare(square, className) {
-      var $sq = $('#board .square-' + square);
-      $sq.addClass(className);
-      setTimeout(function () { $sq.removeClass(className); }, 600);
+    // Re-apply at +250ms because chessboard.js's animated position(fen)
+    // rebuilds DOM at animation completion, wiping our classes.
+    function showLastMoveDeferred(from, to) {
+      showLastMove(from, to);
+      setTimeout(function () { showLastMove(from, to); }, 250);
+    }
+
+    // ── Check / checkmate aura on the king's square ──
+    function findKingSquare(c, color) {
+      // chess.js v0.10 board(): 8x8 array, rank 8 → rank 1, file a → file h.
+      if (!c || typeof c.board !== 'function') return null;
+      var grid = c.board();
+      for (var r = 0; r < 8; r++) {
+        var row = grid[r];
+        if (!row) continue;
+        for (var f = 0; f < 8; f++) {
+          var p = row[f];
+          if (p && p.type === 'k' && p.color === color) {
+            return String.fromCharCode(97 + f) + (8 - r);
+          }
+        }
+      }
+      return null;
+    }
+    function showCheck(c) {
+      clearCheck();
+      if (!c || typeof c.in_check !== 'function') return;
+      if (!c.in_check() && !c.in_checkmate()) return;
+      var sq = findKingSquare(c, c.turn());
+      if (!sq) return;
+      $square(sq).addClass(c.in_checkmate() ? 'square-checkmate' : 'square-check');
+    }
+    function clearCheck() {
+      $('#board .square-check, #board .square-checkmate')
+        .removeClass('square-check square-checkmate');
+    }
+    function showCheckDeferred(c) {
+      showCheck(c);
+      setTimeout(function () { showCheck(c); }, 250);
+    }
+    // Convenience: paint lastmove + check together with the same animation
+    // settling delay. Used after every animated board update.
+    function applyLastMoveAndCheckDeferred(from, to) {
+      showLastMoveDeferred(from, to);
+      showCheckDeferred(chess);
+    }
+
+    // ── Click-to-move selection + legal-move dots ──
+    function selectSquare(sq) {
+      selectedSquare = sq;
+      $square(sq).addClass('square-selected');
+      // Show legal-move dots / capture corners for every legal target.
+      // chess.js v0.10 verbose moves include `flags` ('e' = en passant
+      // capture, 'c' = capture, etc.) and `to`. Empty target → dot;
+      // capture (incl. EP) → corner triangles.
+      if (!chess) return;
+      var moves;
+      try { moves = chess.moves({ square: sq, verbose: true }); }
+      catch (e) { return; }
+      for (var i = 0; i < moves.length; i++) {
+        var mv = moves[i];
+        var $t = $square(mv.to);
+        if (!$t.length) continue;
+        var captured = chess.get(mv.to);
+        if (captured || (mv.flags && mv.flags.indexOf('e') !== -1)) {
+          $t.addClass('square-legal-capture');
+        } else {
+          $t.addClass('square-legal-dot');
+        }
+      }
+    }
+    function clearSelection() {
+      selectedSquare = null;
+      $('#board .square-selected, #board .square-legal-dot, #board .square-legal-capture')
+        .removeClass('square-selected square-legal-dot square-legal-capture');
+    }
+
+    // ── Hint + wrong-move flash ──
+    function showHintFromSquare(sq) {
+      clearHintHighlight();
+      $square(sq).addClass('square-hint');
+    }
+    function clearHintHighlight() {
+      $('#board .square-hint').removeClass('square-hint');
+    }
+    // Wrong-move flash: add square-wrong, animation handles fade, remove
+    // class after it finishes so a subsequent flash on the same square
+    // retriggers cleanly.
+    function flashWrong(square) {
+      var $sq = $square(square);
+      $sq.addClass('square-wrong');
+      setTimeout(function () { $sq.removeClass('square-wrong'); }, 650);
+    }
+
+    // ── Click-to-move event handlers ──
+    // Click logic runs in mousedown (capture phase) so it fires BEFORE
+    // chessboard.js's own mousedown handler. This lets us preventDefault
+    // on a destination click (suppressing chessboard.js from starting a
+    // drag on the enemy piece) while still letting normal drags begin
+    // when the user actually drags from a piece.
+    //
+    //   - mousedown on own piece (no selection):  selectSquare. Don't
+    //     preventDefault — chessboard.js may start a drag on movement.
+    //   - mousedown on already-selected square:   set deselectionPending,
+    //     fall through (allow drag if user moves).
+    //   - mousedown on a different own piece:     reselect, fall through
+    //     (allow drag on the new piece).
+    //   - mousedown on a destination (empty/enemy with selection):
+    //     preventDefault + stopPropagation, attempt the move, animate.
+    //
+    // mouseup w/o drag honors deselectionPending. onDragStart clears
+    // deselectionPending so a drag committed from the selected piece
+    // doesn't deselect on the trailing mouseup.
+    function onBoardMouseDown(e) {
+      if (mode !== 'drill' || !drillState || drillState.complete) return;
+      if (!chess) return;
+      // Block clicks while it's the opponent's turn (intro pause and
+      // opp-reply window — chess.turn() is opp's color).
+      if (chess.turn() !== Drill.userColor(drillState)) return;
+      // Only react to primary (left) mouse button; touch events have no
+      // .button, so the typeof check lets them through.
+      if (typeof e.button === 'number' && e.button !== 0) return;
+
+      // Locate the square element under the event target.
+      var t = e.target;
+      if (!t || !t.closest) return;
+      var sqEl = t.closest('[data-square]');
+      if (!sqEl) return;
+      var sq = sqEl.getAttribute('data-square');
+      if (!sq) return;
+
+      var turn = chess.turn();
+      var piece = chess.get(sq);
+
+      if (selectedSquare) {
+        if (sq === selectedSquare) {
+          // Click on the already-selected square. Defer the actual deselect
+          // to mouseup so a drag-from-selected keeps the highlight visible.
+          deselectionPending = true;
+          return;
+        }
+        // Reselect on click of another own piece. Don't preventDefault —
+        // user might drag the new piece.
+        if (piece && piece.color === turn) {
+          clearSelection();
+          selectSquare(sq);
+          return;
+        }
+        // Destination square (empty or enemy) → execute the move.
+        // Suppress chessboard.js's drag tracking on the destination piece.
+        e.stopPropagation();
+        if (e.preventDefault) e.preventDefault();
+        var fromSq = selectedSquare;
+        var r = attemptMove(fromSq, sq);
+        if (r && r.ok && !r.wrong) {
+          // chessboard.js wasn't involved in this move — animate it manually
+          // and paint the lastmove + check highlights.
+          if (board) board.position(chess.fen());
+          applyLastMoveAndCheckDeferred(r.from, r.to);
+          // Click-move applies the highlight directly; null the var so a
+          // subsequent drag's onSnapEnd doesn't re-paint stale coords.
+          lastSuccessfulUserMove = null;
+          // Onsnaped doesn't fire for board.position calls — schedule the
+          // opp reply ourselves. Same 400ms delay as the drag path; the
+          // ~250ms click animation runs in parallel with the wait.
+          scheduleOppReplyIfPending();
+        }
+        // Illegal: chess.js never advanced; nothing to render.
+        // Wrong:   chess.undo() reverted; selection cleared in attemptMove.
+        return;
+      }
+      // No selection — select if the click landed on an own-color piece.
+      if (piece && piece.color === turn) {
+        selectSquare(sq);
+      }
+    }
+
+    function onBoardMouseUp(/* e */) {
+      if (deselectionPending) {
+        deselectionPending = false;
+        clearSelection();
+      }
     }
 
     function setStatus(msg, kind) {
