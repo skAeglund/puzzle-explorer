@@ -340,6 +340,103 @@
       50%      { opacity: 1; }
     }
 
+    /* ─── session mode: dual-range rating slider + counts + progress ─────
+       Two stacked range inputs on a single track, with `pointer-events`
+       routed only to the thumbs so both handles remain grabbable. The
+       inputs themselves overlay each other — z-index would lock one thumb
+       behind the other if both reached the same value. We use a strict
+       snap-to-bound clamp in JS (min ≤ max enforced via 'input' handlers);
+       at the rare collide point the trailing-DOM thumb wins clicks, so
+       users disambiguate by pulling the OUTER bound first. ────────────── */
+    .dual-range {
+      position: relative;
+      height: 28px;
+      margin: 6px 6px 4px;
+    }
+    .dual-range .range-track {
+      position: absolute;
+      top: 50%;
+      left: 0;
+      right: 0;
+      height: 4px;
+      background: var(--surface-2);
+      border-radius: 2px;
+      transform: translateY(-50%);
+    }
+    .dual-range .range-fill {
+      position: absolute;
+      top: 50%;
+      height: 4px;
+      background: var(--accent);
+      border-radius: 2px;
+      transform: translateY(-50%);
+      pointer-events: none;
+    }
+    .dual-range input[type=range] {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 28px;
+      background: transparent;
+      pointer-events: none;
+      -webkit-appearance: none;
+      appearance: none;
+      margin: 0;
+      outline: none;
+    }
+    /* Thumb cross-browser: WebKit + Firefox prefixes are non-overlapping,
+       so duplicate the rule rather than collapse with a comma (browsers
+       discard rules they don't recognize, and the comma form would taint
+       both). */
+    .dual-range input[type=range]::-webkit-slider-thumb {
+      pointer-events: auto;
+      -webkit-appearance: none;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: var(--accent);
+      border: 2px solid var(--bg);
+      cursor: grab;
+    }
+    .dual-range input[type=range]::-moz-range-thumb {
+      pointer-events: auto;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: var(--accent);
+      border: 2px solid var(--bg);
+      cursor: grab;
+    }
+    .dual-range input[type=range]:active::-webkit-slider-thumb { cursor: grabbing; }
+    .dual-range input[type=range]:active::-moz-range-thumb     { cursor: grabbing; }
+    .dual-range input[type=range]::-webkit-slider-runnable-track { background: transparent; border: 0; }
+    .dual-range input[type=range]::-moz-range-track { background: transparent; border: 0; }
+    .range-values {
+      display: flex;
+      justify-content: space-between;
+      font-size: 11px;
+      color: var(--fg-dim);
+      font-variant-numeric: tabular-nums;
+      margin: 0 4px 8px;
+    }
+    .session-counts {
+      font-size: 12px;
+      color: var(--fg);
+      margin: 4px 2px 8px;
+      font-variant-numeric: tabular-nums;
+    }
+    .session-counts.empty { color: var(--fg-dim); }
+    .session-progress {
+      font-size: 11px;
+      color: var(--fg-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 8px;
+      font-variant-numeric: tabular-nums;
+    }
+    .session-progress.complete { color: var(--ok); }
+
     /* Disable chessboard.js's built-in drag-source / drag-hover highlights
        (we use our own .square-selected + legal-move dots/triangles).
        chessboard.js applies these via salt-suffixed classes (highlight1-32417,
@@ -367,7 +464,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">audit-fixes</span>
+    <span id="buildVersion">session-mode</span>
     <span id="datasetInfo">loading dataset…</span>
   </header>
 
@@ -390,6 +487,7 @@
     </div>
 
     <div id="drillPanel" class="panel" hidden>
+      <div class="session-progress" id="sessionProgress" hidden></div>
       <div class="drill-header">
         <span class="drill-id" id="drillId">—</span>
         <span class="drill-rating" id="drillRating">—</span>
@@ -398,12 +496,34 @@
       <div class="drill-opening" id="drillOpening"></div>
       <div class="drill-controls">
         <button id="hintBtn">Hint</button>
+        <button id="nextPuzzleBtn" class="primary" hidden disabled>Next puzzle</button>
         <button id="backBtn" class="primary">Back to results</button>
         <a id="lichessLink" class="lichess-link" href="#" target="_blank" rel="noopener">view on lichess ↗</a>
       </div>
     </div>
 
     <div id="status" data-kind="info">Set a position and click Search.</div>
+
+    <div id="sessionPanel" class="panel" hidden>
+      <label>Rating range</label>
+      <div class="dual-range" id="ratingRange">
+        <div class="range-track"></div>
+        <div class="range-fill" id="rangeFill"></div>
+        <!-- DOM order: min first, max second. The trailing-DOM thumb wins
+             clicks at collide points; users disambiguate by grabbing max
+             first. See CSS comment above. -->
+        <input type="range" id="ratingMin" min="0" max="3000" value="0" step="50">
+        <input type="range" id="ratingMax" min="0" max="3000" value="3000" step="50">
+      </div>
+      <div class="range-values">
+        <span id="rangeMinLabel">0</span>
+        <span id="rangeMaxLabel">3000</span>
+      </div>
+      <div class="session-counts" id="sessionCounts">—</div>
+      <div class="row">
+        <button id="startSessionBtn" class="primary">Start session</button>
+      </div>
+    </div>
 
     <div class="results-meta" id="resultsMeta" hidden></div>
     <ol id="results"></ol>
@@ -418,6 +538,7 @@
   <!-- FSRS scheduler (must precede drill.js + progress.js — they reference root.FSRS) -->
   <script src="lib/fsrs.js"></script>
   <script src="lib/drill.js"></script>
+  <script src="lib/session.js"></script>
   <script src="lib/progress.js"></script>
 
   <script>
@@ -461,6 +582,13 @@
     // move, defer completion UI until after the animation.
     var pendingCompletionResult = null;
 
+    // Session state — null when not in a session. Built by Session.create
+    // from the current `lastMatches` + slider range when the user clicks
+    // "Start session". Walked by Session.advance on each "Next puzzle"
+    // click. Cleared on "Back to results". A row click in search-mode
+    // bypasses session entirely (sessionState stays null).
+    var sessionState = null;
+
     function init() {
       var missing = [];
       if (typeof Chess !== 'function') missing.push('chess.js');
@@ -468,6 +596,7 @@
       if (typeof fenPositionKey !== 'function') missing.push('lib/posKey.js');
       if (typeof FSRS !== 'object' || !FSRS) missing.push('lib/fsrs.js');
       if (typeof Drill !== 'object' || !Drill) missing.push('lib/drill.js');
+      if (typeof Session !== 'object' || !Session) missing.push('lib/session.js');
       if (typeof Progress !== 'object' || !Progress) missing.push('lib/progress.js');
       if (missing.length) {
         setStatus('Failed to load: ' + missing.join(', ') + '. Check the browser console / network tab.', 'error');
@@ -495,6 +624,11 @@
       // re-rendered on each search.
       $('#hintBtn').on('click', onHintClick);
       $('#backBtn').on('click', onBackClick);
+      $('#nextPuzzleBtn').on('click', onNextPuzzleClick);
+      $('#startSessionBtn').on('click', onStartSessionClick);
+      // Slider 'input' fires continuously as the user drags; 'change'
+      // fires only on release. Use 'input' for live count + fill updates.
+      $('#ratingMin, #ratingMax').on('input', onRatingSliderInput);
       $('#results').on('click', 'li[data-puzzle-id]', function () {
         var pid = $(this).attr('data-puzzle-id');
         if (pid) startDrillByPuzzleId(pid);
@@ -546,6 +680,10 @@
       setStatus('Position loaded. Click Search.', 'ok');
       $('#results').empty();
       $('#resultsMeta').hide();
+      // Hide the session panel — its slider/counts are tied to the
+      // previous search's matches and would be misleading until the
+      // user re-searches against the new FEN.
+      $('#sessionPanel').hide();
     }
 
     async function searchPuzzles() {
@@ -578,6 +716,10 @@
         var idx = await res.json();
         var matches = idx[key] || [];
         renderResults(matches);
+        // Reset slider bounds to the data extents on every fresh search.
+        // (onBackClick re-renders without resetting bounds, so the user's
+        // chosen range survives a single-puzzle drill round-trip.)
+        configureSlider(matches);
         if (matches.length === 0) {
           setStatus('No puzzles found at this position. (Shard ' + shard + ' fetched, but the position key isn\'t indexed.)', 'info');
         } else if (matches.length > MAX_RESULTS) {
@@ -605,7 +747,11 @@
       lastMatches = matches;
       var $list = $('#results').empty();
       var $meta = $('#resultsMeta');
-      if (!matches.length) { $meta.hide(); return; }
+      if (!matches.length) {
+        $meta.hide();
+        $('#sessionPanel').hide();
+        return;
+      }
       // sort by rating asc; stable enough for our purposes
       matches.sort(function (a, b) { return a[1] - b[1]; });
       var shown = matches.slice(0, MAX_RESULTS);
@@ -626,6 +772,106 @@
         $li.append($('<span class="puzzle-rating"></span>').text(rating || '—'));
         $list.append($li);
       }
+      $('#sessionPanel').show();
+    }
+
+    // ─── session: rating slider config + live counts ────────────────────
+    // configureSlider runs on a fresh search — it resets the input bounds
+    // (min/max attrs) and pins the values to the data extents. Snaps to
+    // 50-rating buckets to make the labels read cleanly. Edge: if all
+    // matches share a single rating, expand the bound by one step so the
+    // input has a non-zero range (otherwise both thumbs collapse and the
+    // browser may reject the value attribute).
+    function configureSlider(matches) {
+      var ratings = [];
+      for (var i = 0; i < matches.length; i++) {
+        var r = matches[i][1];
+        if (typeof r === 'number' && isFinite(r)) ratings.push(r);
+      }
+      var $rmin = $('#ratingMin'), $rmax = $('#ratingMax');
+      if (!ratings.length) {
+        // No usable ratings — hide the slider area inside the panel by
+        // simply leaving defaults. Counts will say "no puzzles in range".
+        $rmin.attr({ min: 0, max: 3000 }).val(0);
+        $rmax.attr({ min: 0, max: 3000 }).val(3000);
+        updateSessionPanelUI();
+        return;
+      }
+      var lo = Math.min.apply(null, ratings);
+      var hi = Math.max.apply(null, ratings);
+      var sliderMin = Math.floor(lo / 50) * 50;
+      var sliderMax = Math.ceil(hi / 50) * 50;
+      if (sliderMax <= sliderMin) sliderMax = sliderMin + 50;
+      // Set max attr first when raising; set min attr first when lowering.
+      // Browsers clamp value to attr-bounds at attribute-set time, so
+      // changing min above the current value would truncate. Setting both
+      // attrs THEN the values avoids that.
+      $rmin.attr({ min: sliderMin, max: sliderMax });
+      $rmax.attr({ min: sliderMin, max: sliderMax });
+      $rmin.val(sliderMin);
+      $rmax.val(sliderMax);
+      updateSessionPanelUI();
+    }
+
+    // updateSessionPanelUI re-reads slider values, recomputes the fill
+    // overlay + labels, and updates the in-range/unsolved counts. Cheap;
+    // safe to call on every 'input' event.
+    function updateSessionPanelUI() {
+      var $rmin = $('#ratingMin'), $rmax = $('#ratingMax');
+      var rmin = +$rmin.val();
+      var rmax = +$rmax.val();
+      var attrMin = +$rmin.attr('min');
+      var attrMax = +$rmin.attr('max');
+      var span = attrMax - attrMin;
+      var loPct = span > 0 ? ((rmin - attrMin) / span) * 100 : 0;
+      var hiPct = span > 0 ? ((rmax - attrMin) / span) * 100 : 100;
+      $('#rangeFill').css({ left: loPct + '%', width: (hiPct - loPct) + '%' });
+      $('#rangeMinLabel').text(rmin);
+      $('#rangeMaxLabel').text(rmax);
+
+      // Live counts.
+      var $counts = $('#sessionCounts');
+      var $btn = $('#startSessionBtn');
+      if (!lastMatches || !lastMatches.length) {
+        $counts.text('—').addClass('empty');
+        $btn.prop('disabled', true);
+        return;
+      }
+      var inRange = Session.filterByRating(lastMatches, rmin, rmax);
+      var unsolved = Session.countUnsolved(inRange, Progress.isCompleted);
+      var solved = inRange.length - unsolved;
+      var msg;
+      if (inRange.length === 0) {
+        msg = 'No puzzles in this range.';
+        $counts.addClass('empty');
+      } else if (unsolved === 0) {
+        msg = 'All ' + solved + ' puzzles in range already solved.';
+        $counts.addClass('empty');
+      } else {
+        msg = unsolved + ' unsolved';
+        if (solved > 0) msg += ' · ' + solved + ' already solved';
+        $counts.removeClass('empty');
+      }
+      $counts.text(msg);
+      $btn.prop('disabled', unsolved === 0);
+    }
+
+    // Slider 'input' handler — clamps min ≤ max via snap-to-bound. When
+    // both thumbs collide the user disambiguates by grabbing whichever
+    // thumb is at the OUTER end (browsers prefer the trailing-DOM input
+    // for clicks on stacked elements; max is later in the DOM, so max
+    // wins collide-clicks). Acceptable trade-off for an MVP slider —
+    // alternative is dynamic z-index swapping which is fiddly.
+    function onRatingSliderInput(e) {
+      var rmin = +$('#ratingMin').val();
+      var rmax = +$('#ratingMax').val();
+      var which = e.target && e.target.id;
+      if (which === 'ratingMin' && rmin > rmax) {
+        $('#ratingMin').val(rmax);
+      } else if (which === 'ratingMax' && rmax < rmin) {
+        $('#ratingMax').val(rmin);
+      }
+      updateSessionPanelUI();
     }
 
     // ─── drill mode ─────────────────────────────────────────────────────
@@ -633,6 +879,9 @@
     // Body shards are keyed by SHA-1 prefix of puzzleId (per build-index.js
     // shardId(body.id)). Same hashing as positions, just over a different
     // input. ndjson: one body per line, no ordering guarantee.
+    // Returns true on successful enterDrillMode, false on any failure.
+    // The session flow uses this to detect body-fetch failures and bail
+    // out cleanly. Row-click callers can ignore the return value.
     async function startDrillByPuzzleId(puzzleId) {
       setStatus('Loading puzzle ' + puzzleId + '…', 'info');
       var bodyShard;
@@ -640,14 +889,14 @@
         bodyShard = await shardIdAsync(puzzleId);
       } catch (e) {
         setStatus('SHA-1 hashing not available (Web Crypto required, http context).', 'error');
-        return;
+        return false;
       }
       var url = DATA_BASE_URL + 'puzzles/' + bodyShard + '.ndjson';
       try {
         var res = await fetch(url);
         if (!res.ok) {
           setStatus('Body shard ' + bodyShard + ' fetch failed (HTTP ' + res.status + ').', 'error');
-          return;
+          return false;
         }
         var text = await res.text();
         var puzzle = null;
@@ -662,15 +911,17 @@
         }
         if (!puzzle) {
           setStatus('Puzzle ' + puzzleId + ' not found in body shard ' + bodyShard + '.', 'error');
-          return;
+          return false;
         }
         if (!puzzle.fen || !Array.isArray(puzzle.moves) || puzzle.moves.length === 0) {
           setStatus('Puzzle ' + puzzleId + ' body is malformed (missing fen/moves).', 'error');
-          return;
+          return false;
         }
         enterDrillMode(puzzle);
+        return true;
       } catch (e) {
         setStatus('Body fetch error: ' + e.message, 'error');
+        return false;
       }
     }
 
@@ -699,6 +950,7 @@
 
       // Swap panels.
       $('#searchPanel').hide();
+      $('#sessionPanel').hide();
       $('#resultsMeta').hide();
       $('#results').hide();
       $('#drillPanel').show();
@@ -713,6 +965,24 @@
         $('#lichessLink').hide();
       }
       $('#hintBtn').prop('disabled', false).text('Hint');
+
+      // Session-mode UI: progress label up top, "Next puzzle" primary
+      // button (disabled until completion), Back demoted to secondary.
+      // Single-puzzle drill (no sessionState): Back stays primary, Next
+      // hidden, no progress label.
+      if (sessionState) {
+        var prog = Session.progress(sessionState);
+        $('#sessionProgress')
+          .removeClass('complete')
+          .text('Puzzle ' + prog.current + ' of ' + prog.total)
+          .show();
+        $('#nextPuzzleBtn').prop('disabled', true).show();
+        $('#backBtn').removeClass('primary').text('Exit session');
+      } else {
+        $('#sessionProgress').hide();
+        $('#nextPuzzleBtn').hide().prop('disabled', true);
+        $('#backBtn').addClass('primary').text('Back to results');
+      }
 
       // If the analyzer emitted previousFen + previousMove, show the
       // pre-blunder position briefly, then animate the move that creates
@@ -1004,6 +1274,11 @@
       }
       setStatus(msg, kind);
       $('#hintBtn').prop('disabled', true);
+      // Session mode: arm the "Next puzzle" button so the user can advance
+      // without round-tripping through the result list.
+      if (sessionState) {
+        $('#nextPuzzleBtn').prop('disabled', false).focus();
+      }
     }
 
     // ─── hint + back buttons ────────────────────────────────────────────
@@ -1032,8 +1307,10 @@
       pendingOppReply = null;
       pendingCompletionResult = null;
       var lastPid = drillPuzzle ? drillPuzzle.id : null;
+      var hadSession = !!sessionState;
       drillState = null;
       drillPuzzle = null;
+      sessionState = null;          // exit session if active
       mode = 'search';
       $('#drillPanel').hide();
       $('#searchPanel').show();
@@ -1043,13 +1320,93 @@
         renderResults(lastMatches);
         $('#resultsMeta').show();
         $('#results').show();
+        // Refresh slider counts (unsolved count may have decreased while
+        // drilling). Don't reconfigure bounds — preserve user's range.
+        updateSessionPanelUI();
       }
       rebuildSearchBoard();
-      if (lastPid) {
+      if (hadSession) {
+        setStatus('Adjust the range and start a new session, or pick a row.', 'info');
+      } else if (lastPid) {
         setStatus('Back to results.', 'info');
       } else {
         setStatus('Set a position and click Search.', 'info');
       }
+    }
+
+    // ─── session-mode flow ──────────────────────────────────────────────
+    // Start session: build a queue from the current matches + slider range,
+    // then drill the first puzzle. Body-fetch failure exits the session
+    // with a setStatus error (the body shard's missing → can't recover
+    // without rebuilding data).
+    async function onStartSessionClick() {
+      if (!lastMatches || !lastMatches.length) return;
+      var rmin = +$('#ratingMin').val();
+      var rmax = +$('#ratingMax').val();
+      var s = Session.create({
+        matches: lastMatches,
+        ratingMin: rmin,
+        ratingMax: rmax,
+        isCompleted: Progress.isCompleted
+      });
+      if (s.complete) {
+        // Defensive — start button should be disabled in this state.
+        setStatus('No unsolved puzzles in that range.', 'warn');
+        return;
+      }
+      sessionState = s;
+      setStatus('Session started — ' + s.total + ' unsolved puzzle' +
+                (s.total === 1 ? '' : 's') + ' queued.', 'info');
+      await advanceSessionAndDrill();
+    }
+
+    // Next-puzzle: advance the session cursor; either drill the next id
+    // or transition to the session-complete state. Guarded against
+    // double-clicks via the disabled flag flipped here.
+    async function onNextPuzzleClick() {
+      if (!sessionState || sessionState.complete) return;
+      $('#nextPuzzleBtn').prop('disabled', true);
+      await advanceSessionAndDrill();
+    }
+
+    async function advanceSessionAndDrill() {
+      var r = Session.advance(sessionState);
+      sessionState = r.state;
+      if (r.exhausted) {
+        onSessionComplete();
+        return;
+      }
+      var ok = await startDrillByPuzzleId(r.puzzleId);
+      if (!ok) {
+        // Body fetch / parse failed; status already set by startDrill.
+        // Bail out of the session — re-trying the same id won't help
+        // and re-advancing would silently skip a puzzle. Restore the
+        // single-puzzle Back button styling so the user sees a clear
+        // exit (the previous puzzle's board may still be visible).
+        sessionState = null;
+        $('#sessionProgress').hide();
+        $('#nextPuzzleBtn').hide();
+        $('#backBtn').addClass('primary').text('Back to results');
+      }
+    }
+
+    // Session exhausted: show the completion message, repurpose the
+    // progress label as a success banner, hide Next, and let the user
+    // exit via Back. We deliberately keep the last puzzle's board state
+    // visible — feels like a natural "rest" state. Restore the Back
+    // button to "Back to results" since the session is now done; the
+    // "Exit session" label was for the in-progress case.
+    function onSessionComplete() {
+      var total = sessionState ? sessionState.total : 0;
+      $('#sessionProgress')
+        .addClass('complete')
+        .text('✓ Session complete — ' + total + ' puzzle' +
+              (total === 1 ? '' : 's') + ' cleared')
+        .show();
+      $('#nextPuzzleBtn').prop('disabled', true).hide();
+      $('#hintBtn').prop('disabled', true);
+      $('#backBtn').addClass('primary').text('Back to results');
+      setStatus('All unsolved puzzles in range cleared. Back to results to start another session.', 'ok');
     }
 
     // ─── square highlights ──────────────────────────────────────────────
