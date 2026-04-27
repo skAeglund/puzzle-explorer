@@ -340,17 +340,31 @@
       50%      { opacity: 1; }
     }
 
-    /* Disable chessboard.js's built-in move/drag highlights (we use our own) */
-    #board [class*="highlight1-"], #board [class*="highlight2-"] {
+    /* Disable chessboard.js's built-in drag-source / drag-hover highlights
+       (we use our own .square-selected + legal-move dots/triangles).
+       chessboard.js applies these via salt-suffixed classes (highlight1-32417,
+       highlight2-9c5d2). Override with ALL of: explicit class names,
+       attribute substring selectors, and inside #board for max specificity.
+       !important so the override wins regardless of cascade ordering. */
+    .highlight1-32417,
+    .highlight2-9c5d2,
+    [class*="highlight1-"],
+    [class*="highlight2-"],
+    #board [class*="highlight1-"],
+    #board [class*="highlight2-"] {
       box-shadow: none !important;
       background-color: transparent !important;
+    }
+    /* Kill the mobile tap-flash on the board too. */
+    #board, #board * {
+      -webkit-tap-highlight-color: transparent;
     }
   </style>
 </head>
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">click-to-move</span>
+    <span id="buildVersion">deselect-polish</span>
     <span id="datasetInfo">loading dataset…</span>
   </header>
 
@@ -493,12 +507,25 @@
       if (boardEl) {
         boardEl.addEventListener('mousedown', onBoardMouseDown, true);
         boardEl.addEventListener('mouseup',   onBoardMouseUp,   true);
+        // Suppress the browser context menu on right-click. Right-click is
+        // repurposed to deselect (handled in onBoardMouseDown above).
+        boardEl.addEventListener('contextmenu', function (e) {
+          if (mode === 'drill') e.preventDefault();
+        });
         // Note: NOT binding touchstart/touchend. On mobile, taps fire a
         // synthetic mousedown after touchend; binding both would double-
         // handle every tap (clear selection right after setting it). The
         // CSS `touch-action: manipulation` on #board removes iOS's 350ms
         // tap delay so the synthetic mousedown still feels instant.
       }
+      // Escape clears any active selection (Lichess convention).
+      $(document).on('keydown', function (e) {
+        if (mode !== 'drill') return;
+        if (e.key === 'Escape' && selectedSquare) {
+          clearSelection();
+          deselectionPending = false;
+        }
+      });
 
       loadDatasetInfo();
     }
@@ -1152,9 +1179,15 @@
       // Block clicks while it's the opponent's turn (intro pause and
       // opp-reply window — chess.turn() is opp's color).
       if (chess.turn() !== Drill.userColor(drillState)) return;
-      // Only react to primary (left) mouse button; touch events have no
-      // .button, so the typeof check lets them through.
-      if (typeof e.button === 'number' && e.button !== 0) return;
+
+      // Right-click (or middle-click) → cancel any current selection.
+      // Matches MistakeLab + Lichess behavior. The contextmenu listener
+      // separately suppresses the browser's right-click menu.
+      if (typeof e.button === 'number' && e.button !== 0) {
+        if (selectedSquare) clearSelection();
+        deselectionPending = false;
+        return;
+      }
 
       // Locate the square element under the event target.
       var t = e.target;
@@ -1186,6 +1219,12 @@
         e.stopPropagation();
         if (e.preventDefault) e.preventDefault();
         var fromSq = selectedSquare;
+        // Clear selection FIRST — matches MistakeLab. A click on any
+        // non-legal target (empty square not in the legal-move set, an
+        // own-piece-blocked square, etc.) should deselect, with no move
+        // attempted. attemptMove returns ok:false on illegal, in which
+        // case we just leave the selection cleared.
+        clearSelection();
         var r = attemptMove(fromSq, sq);
         if (r && r.ok && !r.wrong) {
           // chessboard.js wasn't involved in this move — animate it manually
@@ -1200,8 +1239,8 @@
           // ~250ms click animation runs in parallel with the wait.
           scheduleOppReplyIfPending();
         }
-        // Illegal: chess.js never advanced; nothing to render.
-        // Wrong:   chess.undo() reverted; selection cleared in attemptMove.
+        // Illegal: chess.js never advanced; selection already cleared.
+        // Wrong:   chess.undo() reverted; selection cleared above.
         return;
       }
       // No selection — select if the click landed on an own-color piece.
