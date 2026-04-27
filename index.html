@@ -343,9 +343,13 @@
     /* Disable chessboard.js's built-in drag-source / drag-hover highlights
        (we use our own .square-selected + legal-move dots/triangles).
        chessboard.js applies these via salt-suffixed classes (highlight1-32417,
-       highlight2-9c5d2). Override with ALL of: explicit class names,
-       attribute substring selectors, and inside #board for max specificity.
-       !important so the override wins regardless of cascade ordering. */
+       highlight2-9c5d2) and their CSS rule is `box-shadow: inset 0 0 3px 3px
+       yellow` — that's the ONLY visual effect to suppress. Earlier this rule
+       also set `background-color: transparent !important`, which inadvertently
+       overrode .white-1e1d7 / .black-3c85d (chessboard.js's actual square
+       colors), making the square transparent and revealing --bg behind it
+       — manifesting as a dark-olive blend on selected squares during drag
+       and a near-black overlay on drag-hover targets. Box-shadow only. */
     .highlight1-32417,
     .highlight2-9c5d2,
     [class*="highlight1-"],
@@ -353,7 +357,6 @@
     #board [class*="highlight1-"],
     #board [class*="highlight2-"] {
       box-shadow: none !important;
-      background-color: transparent !important;
     }
     /* Kill the mobile tap-flash on the board too. */
     #board, #board * {
@@ -364,7 +367,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">deselect-polish</span>
+    <span id="buildVersion">drag-overlay-fix</span>
     <span id="datasetInfo">loading dataset…</span>
   </header>
 
