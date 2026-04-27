@@ -353,6 +353,38 @@
         linear-gradient(to top left,     rgba(0,0,0,0.25) 50%, transparent 50.5%) bottom right / 22% 22% no-repeat;
     }
 
+    /* Result badges — Lichess-style green check / red X in upper-right
+       corner. square-correct paints the green check on the puzzle's last
+       solution-move TO-square at completion (persists until the next
+       puzzle starts or user goes back). square-wrong-x paints the red X
+       on a wrong attempt's TO-square; cleared at the start of the next
+       move attempt or piece selection so it doesn't co-exist with the
+       legal-move dots/triangles (which also use ::after). Same SVG geom:
+       circle, white border, white path; cross-square legibility comes
+       from the white outline + drop-shadow. */
+    #board .square-correct,
+    #board .square-wrong-x { position: relative; }
+    #board .square-correct::after,
+    #board .square-wrong-x::after {
+      content: '';
+      position: absolute;
+      top: 4%;
+      right: 4%;
+      width: 32%;
+      height: 32%;
+      pointer-events: none;
+      filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.45));
+      background-position: center;
+      background-repeat: no-repeat;
+      background-size: contain;
+    }
+    #board .square-correct::after {
+      background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><circle cx='12' cy='12' r='11' fill='%23629924' stroke='%23ffffff' stroke-width='1.5'/><path d='M6 12.5 L10 16.5 L18 8.5' stroke='%23ffffff' stroke-width='2.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+    }
+    #board .square-wrong-x::after {
+      background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><circle cx='12' cy='12' r='11' fill='%23ac4040' stroke='%23ffffff' stroke-width='1.5'/><line x1='8' y1='8' x2='16' y2='16' stroke='%23ffffff' stroke-width='2.6' stroke-linecap='round'/><line x1='16' y1='8' x2='8' y2='16' stroke='%23ffffff' stroke-width='2.6' stroke-linecap='round'/></svg>");
+    }
+
     /* Check / checkmate aura on the king's square (Lichess radial-gradient).
        Placed AFTER lastmove/selected/hint so cascade resolves in favour of
        check when the king sits on a recent-move or selected square. */
@@ -483,6 +515,40 @@
     }
     .session-progress.complete { color: var(--ok); }
 
+    /* Completion strip — appears at the bottom of the drill panel when the
+       puzzle is solved. Holds the result text on the left (color-coded by
+       grade) and a prominent "Next puzzle" CTA on the right (session
+       mode only — single-puzzle mode shows just the text). Border-top
+       separates it from the controls row above. */
+    .completion-strip {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid var(--border);
+      flex-wrap: wrap;
+    }
+    .completion-text {
+      font-size: 13px;
+      font-weight: 600;
+      flex: 1 1 auto;
+      font-variant-numeric: tabular-nums;
+      min-width: 0;        /* allow wrap inside flex */
+    }
+    .completion-text.ok    { color: var(--ok); }
+    .completion-text.warn  { color: var(--warn); }
+    .completion-text.error { color: var(--error); }
+
+    /* Big CTA — taller padding, slightly bigger font. Used for the
+       Next-puzzle button inside the completion strip. */
+    button.big-cta {
+      font-size: 14px;
+      padding: 10px 18px;
+      letter-spacing: 0.02em;
+    }
+
     /* Disable chessboard.js's built-in drag-source / drag-hover highlights
        (we use our own .square-selected + legal-move dots/triangles).
        chessboard.js applies these via salt-suffixed classes (highlight1-32417,
@@ -510,7 +576,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">move-builder</span>
+    <span id="buildVersion">result-badges</span>
     <span id="datasetInfo">loading dataset…</span>
   </header>
 
@@ -551,9 +617,14 @@
       <div class="drill-opening" id="drillOpening"></div>
       <div class="drill-controls">
         <button id="hintBtn">Hint</button>
-        <button id="nextPuzzleBtn" class="primary" hidden disabled>Next puzzle</button>
         <button id="backBtn" class="primary">Back to results</button>
         <a id="lichessLink" class="lichess-link" href="#" target="_blank" rel="noopener">view on lichess ↗</a>
+      </div>
+      <!-- Completion strip — populated and shown by handleCompletion. The
+           Next-puzzle button inside is itself toggled by session mode. -->
+      <div id="completionStrip" class="completion-strip" hidden>
+        <span id="completionText" class="completion-text"></span>
+        <button id="nextPuzzleBtn" class="primary big-cta" disabled hidden>Next puzzle →</button>
       </div>
     </div>
 
@@ -1046,23 +1117,30 @@
       }
       $('#hintBtn').prop('disabled', false).text('Hint');
 
-      // Session-mode UI: progress label up top, "Next puzzle" primary
-      // button (disabled until completion), Back demoted to secondary.
-      // Single-puzzle drill (no sessionState): Back stays primary, Next
-      // hidden, no progress label.
+      // Session-mode UI: progress label up top, Back demoted to "Exit
+      // session". Single-puzzle drill (no sessionState): Back stays
+      // primary, no progress label. The Next-puzzle button now lives
+      // inside #completionStrip (toggled by handleCompletion); during
+      // drilling the strip is hidden.
       if (sessionState) {
         var prog = Session.progress(sessionState);
         $('#sessionProgress')
           .removeClass('complete')
           .text('Puzzle ' + prog.current + ' of ' + prog.total)
           .show();
-        $('#nextPuzzleBtn').prop('disabled', true).show();
         $('#backBtn').removeClass('primary').text('Exit session');
       } else {
         $('#sessionProgress').hide();
-        $('#nextPuzzleBtn').hide().prop('disabled', true);
         $('#backBtn').addClass('primary').text('Back to results');
       }
+      // Reset completion-strip + result badges for the new puzzle.
+      // destroyBoard() already wipes the board DOM (so square-correct /
+      // square-wrong-x classes vanish with it), but be explicit.
+      $('#completionStrip').hide();
+      $('#completionText').removeClass('ok warn error').text('');
+      $('#nextPuzzleBtn').prop('disabled', true).hide();
+      clearCompletionBadge();
+      clearWrongX();
 
       // If the analyzer emitted previousFen + previousMove, show the
       // pre-blunder position briefly, then animate the move that creates
@@ -1263,6 +1341,12 @@
       if (!drillState || drillState.complete) return { ok: false };
       if (source === target) return { ok: false };
 
+      // Clear any lingering wrong-X badge from a previous attempt — this
+      // attempt either lands on a different square (no badge needed) or
+      // lands on the same square (re-painted below if still wrong). Done
+      // before chess.move so an illegal-move return path also clears it.
+      clearWrongX();
+
       // Default to queen-promotion. Under-promotions aren't reachable via
       // drag-drop in MVP — a puzzle solution requiring e.g. e8=N marks
       // the user wrong on first try (Again). Acceptable trade-off;
@@ -1292,7 +1376,8 @@
           Progress.recordReview(drillState.puzzleId, result.toRecord);
         }
         chess.undo();              // revert the wrong move on chess.js
-        flashWrong(target);
+        flashWrong(target);        // transient red wash (650ms fade)
+        paintWrongX(target);       // persistent X badge until next attempt
         setStatus('Not the move — try again.', 'warn');
         return { ok: true, wrong: true };
       }
@@ -1545,12 +1630,35 @@
         msg = '✓ Solved cleanly — graded Easy.';
         kind = 'ok';
       }
-      setStatus(msg, kind);
+      // Result text moves into the completion strip (between the controls
+      // row and the global #status bar). The strip's Next-puzzle button
+      // is shown only in session mode; single-puzzle drilling shows just
+      // the result text. The #status bar gets a forward-looking hint
+      // ("click Next" / "click Back") so it stays useful, not redundant.
+      $('#completionText')
+        .removeClass('ok warn error')
+        .addClass(kind)
+        .text(msg);
+      $('#completionStrip').show();
       $('#hintBtn').prop('disabled', true);
-      // Session mode: arm the "Next puzzle" button so the user can advance
-      // without round-tripping through the result list.
       if (sessionState) {
-        $('#nextPuzzleBtn').prop('disabled', false).focus();
+        $('#nextPuzzleBtn').prop('disabled', false).show().focus();
+        setStatus('Click Next puzzle to continue, or Exit session to stop.', 'info');
+      } else {
+        $('#nextPuzzleBtn').prop('disabled', true).hide();
+        setStatus('Click Back to return to results.', 'info');
+      }
+      // Paint the green check on the FINAL solution move's destination.
+      // Deferred (+250ms) survives chessboard.js's animated position()
+      // DOM rebuild, same pattern as showLastMoveDeferred. Note: even
+      // when grade===again we still show green — the FINAL move was
+      // correct (otherwise the puzzle isn't complete). The grade text
+      // in the strip carries the "you struggled" nuance; a red X on a
+      // correct move would be misleading.
+      var solution = drillState.solutionUci;
+      var lastUci = solution[solution.length - 1];
+      if (lastUci && lastUci.length >= 4) {
+        showCompletionBadgeDeferred(lastUci.slice(2, 4));
       }
     }
 
@@ -1586,7 +1694,13 @@
       sessionState = null;          // exit session if active
       mode = 'search';
       $('#drillPanel').hide();
+      $('#completionStrip').hide();
       $('#searchPanel').show();
+      // Result badges live on the board DOM, which rebuildSearchBoard
+      // replaces wholesale below — but null the state vars explicitly
+      // so a leftover ::after class doesn't survive a half-rebuilt DOM.
+      clearCompletionBadge();
+      clearWrongX();
       // Re-render the result list so a freshly-completed puzzle picks up
       // its ✓ Done badge (cheap — capped at MAX_RESULTS rows).
       if (lastMatches && lastMatches.length) {
@@ -1658,6 +1772,7 @@
         // exit (the previous puzzle's board may still be visible).
         sessionState = null;
         $('#sessionProgress').hide();
+        $('#completionStrip').hide();
         $('#nextPuzzleBtn').hide();
         $('#backBtn').addClass('primary').text('Back to results');
       }
@@ -1750,6 +1865,12 @@
 
     // ── Click-to-move selection + legal-move dots ──
     function selectSquare(sq) {
+      // Clear wrong-X first — both wrong-X and legal-dot/capture use
+      // ::after, and if the wrong-X target is also a legal target of
+      // the new selection, the cascade order would resolve unpredictably.
+      // Clearing wrong-X before painting dots makes the legal-dot win
+      // cleanly and signals "you're starting a new attempt".
+      clearWrongX();
       selectedSquare = sq;
       $square(sq).addClass('square-selected');
       // Show legal-move dots / capture corners for every legal target.
@@ -1793,6 +1914,38 @@
       var $sq = $square(square);
       $sq.addClass('square-wrong');
       setTimeout(function () { $sq.removeClass('square-wrong'); }, 650);
+    }
+
+    // ── Result badges (Lichess-style) ──
+    // Green check on the puzzle's last move at completion; red X on a
+    // wrong attempt's target. Both use ::after, so they conflict with
+    // legal-move dots/triangles — the order of operations (clearWrongX
+    // at start of selectSquare/attemptMove) ensures wrong-x is gone
+    // before any legal-dot paint runs. square-correct only paints at
+    // completion when no selection is active.
+    function showCompletionBadge(square) {
+      clearCompletionBadge();
+      if (!square) return;
+      $square(square).addClass('square-correct');
+    }
+    function clearCompletionBadge() {
+      $('#board .square-correct').removeClass('square-correct');
+    }
+    // Deferred reapply (+250ms) survives chessboard.js's animated
+    // position() DOM rebuild — same pattern as showLastMoveDeferred.
+    function showCompletionBadgeDeferred(square) {
+      showCompletionBadge(square);
+      setTimeout(function () { showCompletionBadge(square); }, 250);
+    }
+
+    function paintWrongX(square) {
+      if (!square) return;
+      // Don't clear first — flashWrong's wash and the X badge can co-exist;
+      // the wash fades over 650ms, the X persists until next attempt.
+      $square(square).addClass('square-wrong-x');
+    }
+    function clearWrongX() {
+      $('#board .square-wrong-x').removeClass('square-wrong-x');
     }
 
     // ── Click-to-move event handlers ──
