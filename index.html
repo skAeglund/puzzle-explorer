@@ -390,10 +390,10 @@
       background-size: contain;
     }
     #board .square-correct::after {
-      background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><circle cx='12' cy='12' r='11' fill='%23629924' stroke='%23ffffff' stroke-width='1.5'/><path d='M6 12.5 L10 16.5 L18 8.5' stroke='%23ffffff' stroke-width='2.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+      background-image: url("data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ccircle cx='12' cy='12' r='11' fill='%23629924' stroke='%23ffffff' stroke-width='1.5'/%3E%3Cpath d='M6 12.5 L10 16.5 L18 8.5' stroke='%23ffffff' stroke-width='2.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
     }
     #board .square-wrong-x::after {
-      background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><circle cx='12' cy='12' r='11' fill='%23ac4040' stroke='%23ffffff' stroke-width='1.5'/><line x1='8' y1='8' x2='16' y2='16' stroke='%23ffffff' stroke-width='2.6' stroke-linecap='round'/><line x1='16' y1='8' x2='8' y2='16' stroke='%23ffffff' stroke-width='2.6' stroke-linecap='round'/></svg>");
+      background-image: url("data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ccircle cx='12' cy='12' r='11' fill='%23ac4040' stroke='%23ffffff' stroke-width='1.5'/%3E%3Cline x1='8' y1='8' x2='16' y2='16' stroke='%23ffffff' stroke-width='2.6' stroke-linecap='round'/%3E%3Cline x1='16' y1='8' x2='8' y2='16' stroke='%23ffffff' stroke-width='2.6' stroke-linecap='round'/%3E%3C/svg%3E");
     }
 
     /* Check / checkmate aura on the king's square (Lichess radial-gradient).
@@ -587,7 +587,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">color-filter</span>
+    <span id="buildVersion">audit-pass-2</span>
     <span id="datasetInfo">loading dataset…</span>
   </header>
 
@@ -743,6 +743,14 @@
     // click. Cleared on "Back to results". A row click in search-mode
     // bypasses session entirely (sessionState stays null).
     var sessionState = null;
+    // Race guard for the session click handlers. Session.advance runs
+    // synchronously inside advanceSessionAndDrill BEFORE its await on
+    // startDrillByPuzzleId, so a fast double-click would advance the
+    // cursor twice (skipping a puzzle) — the disabled-attribute set
+    // inside the handler isn't reliable since the second click event
+    // can already be queued before disabled flips. JS guard checked
+    // synchronously at function entry plugs this hole.
+    var sessionLoading = false;
 
     function init() {
       var missing = [];
@@ -1814,6 +1822,7 @@
     // with a setStatus error (the body shard's missing → can't recover
     // without rebuilding data).
     async function onStartSessionClick() {
+      if (sessionLoading) return;            // race guard, see decl
       if (!lastMatches || !lastMatches.length) return;
       var rmin = +$('#ratingMin').val();
       var rmax = +$('#ratingMax').val();
@@ -1831,16 +1840,28 @@
       sessionState = s;
       setStatus('Session started — ' + s.total + ' unsolved puzzle' +
                 (s.total === 1 ? '' : 's') + ' queued.', 'info');
-      await advanceSessionAndDrill();
+      sessionLoading = true;
+      try {
+        await advanceSessionAndDrill();
+      } finally {
+        sessionLoading = false;
+      }
     }
 
     // Next-puzzle: advance the session cursor; either drill the next id
     // or transition to the session-complete state. Guarded against
-    // double-clicks via the disabled flag flipped here.
+    // double-clicks via sessionLoading (the disabled-attribute alone is
+    // unreliable — see the var's declaration comment).
     async function onNextPuzzleClick() {
+      if (sessionLoading) return;
       if (!sessionState || sessionState.complete) return;
       $('#nextPuzzleBtn').prop('disabled', true);
-      await advanceSessionAndDrill();
+      sessionLoading = true;
+      try {
+        await advanceSessionAndDrill();
+      } finally {
+        sessionLoading = false;
+      }
     }
 
     async function advanceSessionAndDrill() {
@@ -2010,19 +2031,32 @@
     // at start of selectSquare/attemptMove) ensures wrong-x is gone
     // before any legal-dot paint runs. square-correct only paints at
     // completion when no selection is active.
+    var completionBadgeTimer = null;
     function showCompletionBadge(square) {
       clearCompletionBadge();
       if (!square) return;
       $square(square).addClass('square-correct');
     }
+    // Cancels the pending reapply timer too — without that, a Back-click
+    // within the 250ms window would clear the class, then the timer
+    // would fire and re-add the class to whatever element happens to
+    // match `.square-{sq}` in the now-rebuilt search board, leaving a
+    // stray green check on an unrelated square.
     function clearCompletionBadge() {
+      if (completionBadgeTimer) {
+        clearTimeout(completionBadgeTimer);
+        completionBadgeTimer = null;
+      }
       $('#board .square-correct').removeClass('square-correct');
     }
     // Deferred reapply (+250ms) survives chessboard.js's animated
     // position() DOM rebuild — same pattern as showLastMoveDeferred.
     function showCompletionBadgeDeferred(square) {
       showCompletionBadge(square);
-      setTimeout(function () { showCompletionBadge(square); }, 250);
+      completionBadgeTimer = setTimeout(function () {
+        completionBadgeTimer = null;
+        showCompletionBadge(square);
+      }, 250);
     }
 
     function paintWrongX(square) {
