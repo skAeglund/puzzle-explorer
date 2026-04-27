@@ -179,6 +179,11 @@ async function main() {
     if (!bBuf) { bBuf = []; bodyBufs.set(bSid, bBuf); allBodyShards.add(bSid); }
     bBuf.push(JSON.stringify(body));
 
+    if (idx === 99) {
+      // Early heartbeat — confirms streaming is alive without waiting for
+      // the first 10K flush (~100s in).
+      console.log(`  100 processed`);
+    }
     if ((idx + 1) % FLUSH_BATCH === 0) {
       flushBuffers();
       console.log(`  ${idx + 1} processed (flushed)`);
