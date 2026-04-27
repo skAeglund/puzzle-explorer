@@ -96,19 +96,13 @@ function processGame(pgnText) {
 }
 
 // ─── main ────────────────────────────────────────────────────────────────
-function main() {
+async function main() {
   const t0 = Date.now();
-  const text = fs.readFileSync(SOURCE_PGN, 'utf8');
-  // Split on blank line followed by `[` (= next game's first header).
-  // The blank line between headers and mainline isn't followed by `[`, so it's safe.
-  let games = text.split(/\r?\n\r?\n(?=\[)/).filter(g => g.trim().length > 0);
-  const totalInFile = games.length;
-  if (LIMIT > 0 && LIMIT < games.length) {
-    games = games.slice(0, LIMIT);
-    console.log(`read ${totalInFile} game blocks from ${SOURCE_PGN}, limited to first ${games.length}`);
-  } else {
-    console.log(`read ${games.length} game blocks from ${SOURCE_PGN}`);
-  }
+  // PGN can be hundreds of MB (Han's set is 832MB) — past V8's ~512MB max
+  // string length, so readFileSync is out. Stream line-by-line and emit one
+  // game at a time when we see a blank-line-then-`[` boundary (which matches
+  // the original /\r?\n\r?\n(?=\[)/ split semantics).
+  console.log(`streaming game blocks from ${SOURCE_PGN}${LIMIT > 0 ? ` (limit ${LIMIT})` : ''}`);
 
   // ─── streaming setup ───
   // Phase 1 writes per-shard ndjson into a tmp dir (`<posKey>\t<JSON entry>`
@@ -156,12 +150,12 @@ function main() {
   let positionEntries = 0;
   const errCounts = Object.create(null);
 
-  // ─── Phase 1: parse games, stream emissions to per-shard buffers ───
-  for (let i = 0; i < games.length; i++) {
-    const r = processGame(games[i]);
+  // ─── Phase 1: stream PGN, parse one game at a time ───
+  function processOneGame(gameText, idx) {
+    const r = processGame(gameText);
     if (r.err) {
       errCounts[r.err] = (errCounts[r.err] || 0) + 1;
-      continue;
+      return;
     }
     parsed++;
     const { body, positions } = r;
@@ -185,12 +179,44 @@ function main() {
     if (!bBuf) { bBuf = []; bodyBufs.set(bSid, bBuf); allBodyShards.add(bSid); }
     bBuf.push(JSON.stringify(body));
 
-    if ((i + 1) % FLUSH_BATCH === 0) {
+    if ((idx + 1) % FLUSH_BATCH === 0) {
       flushBuffers();
-      console.log(`  ${i + 1}/${games.length} processed (flushed)`);
+      console.log(`  ${idx + 1} processed (flushed)`);
     }
   }
+
+  const readline = require('readline');
+  const rl = readline.createInterface({
+    input: fs.createReadStream(SOURCE_PGN, { encoding: 'utf8' }),
+    crlfDelay: Infinity,
+  });
+
+  let gameBuf = '';
+  let prevBlank = false;
+  let gameCount = 0;
+  let limitHit = false;
+  for await (const line of rl) {
+    // Boundary: previous line blank AND current starts with `[` (= new game header).
+    if (prevBlank && line.startsWith('[') && gameBuf.trim().length > 0) {
+      processOneGame(gameBuf, gameCount);
+      gameCount++;
+      gameBuf = '';
+      if (LIMIT > 0 && gameCount >= LIMIT) {
+        limitHit = true;
+        break;
+      }
+    }
+    gameBuf += line + '\n';
+    prevBlank = (line.length === 0);
+  }
+  rl.close();
+  // Trailing game (no `[` follows it) — only if we didn't hit the limit.
+  if (!limitHit && gameBuf.trim().length > 0) {
+    processOneGame(gameBuf, gameCount);
+    gameCount++;
+  }
   flushBuffers();
+  console.log(`phase 1 complete: ${gameCount} game blocks streamed`);
 
   // ─── Phase 2: build final index JSON files from tmp ndjson ───
   let indexBytes = 0;
@@ -249,8 +275,8 @@ function main() {
     expectedShardCount: 16 ** SHARD_HEX_LEN,
     actualIndexShardCount: allIndexShards.size,
     actualBodyShardCount: allBodyShards.size,
-    gamesInFile: totalInFile,
-    gamesProcessed: games.length,
+    gamesInFile: null,  // streaming reader doesn't pre-count
+    gamesProcessed: gameCount,
     limit: LIMIT || null,
     puzzlesParsed: parsed,
     parseErrors: errCounts,
@@ -268,4 +294,4 @@ function main() {
   console.log(JSON.stringify(meta, null, 2));
 }
 
-main();
+main().catch(err => { console.error(err); process.exit(1); });
