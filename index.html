@@ -153,7 +153,14 @@
       margin-bottom: 4px;
       background: var(--surface);
       font-size: 12px;
+      cursor: pointer;
+      transition: border-color 0.1s, background 0.1s;
     }
+    #results li:hover {
+      border-color: var(--accent);
+      background: var(--surface-2);
+    }
+    .result-left { display: flex; align-items: baseline; gap: 6px; }
     .puzzle-id {
       font-weight: 600;
       letter-spacing: 0.03em;
@@ -162,27 +169,80 @@
       color: var(--fg-dim);
       font-variant-numeric: tabular-nums;
     }
+    .done-badge {
+      color: var(--ok);
+      font-weight: 700;
+      font-size: 13px;
+    }
     .results-meta {
       font-size: 11px;
       color: var(--fg-dim);
       margin: 8px 2px 6px;
     }
 
+    /* drill panel */
+    .drill-header {
+      display: flex;
+      gap: 10px;
+      align-items: baseline;
+      margin-bottom: 8px;
+      flex-wrap: wrap;
+    }
+    .drill-id {
+      font-weight: 600;
+      letter-spacing: 0.03em;
+      font-size: 13px;
+    }
+    .drill-rating {
+      color: var(--fg-dim);
+      font-variant-numeric: tabular-nums;
+    }
+    .drill-themes, .drill-opening {
+      color: var(--fg-dim);
+      font-size: 11px;
+      width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .drill-controls { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .lichess-link {
+      font-size: 12px;
+      color: var(--info);
+      text-decoration: none;
+      padding: 6px 10px;
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      font-family: var(--mono);
+    }
+    .lichess-link:hover { border-color: var(--info); }
+    button[disabled] { opacity: 0.45; cursor: not-allowed; }
+    button[disabled]:hover { border-color: var(--border); }
+
     /* chessboard.js dark squares look better with a subtler border */
     #board .square-55d63 { border-radius: 0 !important; }
+    /* Hint and wrong-move overlays. Use inset box-shadow so we don't fight
+       chessboard.js's own white/dark square backgrounds. */
+    #board .square-55d63.highlight-hint {
+      box-shadow: inset 0 0 0 3px var(--accent);
+    }
+    #board .square-55d63.flash-error {
+      box-shadow: inset 0 0 0 3px var(--error);
+      transition: box-shadow 0.25s ease-out;
+    }
   </style>
 </head>
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">data-base-url</span>
+    <span id="buildVersion">drilling-ui</span>
     <span id="datasetInfo">loading dataset…</span>
   </header>
 
   <main>
     <div id="board"></div>
 
-    <div class="panel">
+    <div id="searchPanel" class="panel">
       <label for="fenInput">Position FEN</label>
       <textarea id="fenInput" rows="2"
         placeholder="Paste a FEN here…"></textarea>
@@ -194,6 +254,20 @@
         <button class="example-btn" data-fen="rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1">After 1. e4</button>
         <button class="example-btn" data-fen="rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2">1. e4 e5</button>
         <button class="example-btn" data-fen="r1b5/pp1nkpr1/2q1p3/8/3N4/3B4/P1P2PPP/R2Q1RK1 b - - 4 18">specific puzzle</button>
+      </div>
+    </div>
+
+    <div id="drillPanel" class="panel" hidden>
+      <div class="drill-header">
+        <span class="drill-id" id="drillId">—</span>
+        <span class="drill-rating" id="drillRating">—</span>
+      </div>
+      <div class="drill-themes" id="drillThemes"></div>
+      <div class="drill-opening" id="drillOpening"></div>
+      <div class="drill-controls">
+        <button id="hintBtn">Hint</button>
+        <button id="backBtn" class="primary">Back to results</button>
+        <a id="lichessLink" class="lichess-link" href="#" target="_blank" rel="noopener">view on lichess ↗</a>
       </div>
     </div>
 
@@ -209,6 +283,10 @@
   <script src="https://cdn.jsdelivr.net/npm/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.js"></script>
   <!-- Shared posKey lib (must produce byte-identical keys with the build) -->
   <script src="lib/posKey.js"></script>
+  <!-- FSRS scheduler (must precede drill.js + progress.js — they reference root.FSRS) -->
+  <script src="lib/fsrs.js"></script>
+  <script src="lib/drill.js"></script>
+  <script src="lib/progress.js"></script>
 
   <script>
   'use strict';
@@ -220,11 +298,32 @@
     // Pages site. Cross-origin fetch is fine — Pages sets ACAO:* by default.
     var DATA_BASE_URL = 'https://skaeglund.github.io/puzzle-explorer-data/';
 
+    // Mode + drill state. mode flips between 'search' and 'drill'; the
+    // search panel/result list and the drill panel are mutually-exclusive
+    // views over the shared #board. Re-initializing chessboard.js between
+    // modes keeps onDrop handler closures + draggable flag clean.
+    var mode = 'search';
+    var drillState = null;       // current Drill state machine result
+    var drillPuzzle = null;      // the body object {id, fen, moves, rating, themes, ...}
+    var lastMatches = null;      // cached for re-render on back-from-drill
+    var searchFen = null;        // remembered so we can restore the board on back
+    var pendingOppReply = null;  // UCI of opp's auto-reply, scheduled in onSnapEnd
+    var oppReplyTimeout = null;  // setTimeout id; cleared on back/destroy
+    // Edge case: drill.attemptUserMove permits a 'complete' result that
+    // carries an opponentReply (even-length solutionUci — opp gets the
+    // last move). Lichess convention is odd-length so this is rare/never
+    // in real data, but match the state machine's contract: queue the opp
+    // move, defer completion UI until after the animation.
+    var pendingCompletionResult = null;
+
     function init() {
       var missing = [];
       if (typeof Chess !== 'function') missing.push('chess.js');
       if (typeof Chessboard !== 'function') missing.push('chessboard.js');
       if (typeof fenPositionKey !== 'function') missing.push('lib/posKey.js');
+      if (typeof FSRS !== 'object' || !FSRS) missing.push('lib/fsrs.js');
+      if (typeof Drill !== 'object' || !Drill) missing.push('lib/drill.js');
+      if (typeof Progress !== 'object' || !Progress) missing.push('lib/progress.js');
       if (missing.length) {
         setStatus('Failed to load: ' + missing.join(', ') + '. Check the browser console / network tab.', 'error');
         return;
@@ -245,6 +344,15 @@
       $(document).on('click', '.example-btn', function () {
         $('#fenInput').val($(this).data('fen'));
         applyFen();
+      });
+
+      // Drill UI handlers. Result-row click is delegated since rows are
+      // re-rendered on each search.
+      $('#hintBtn').on('click', onHintClick);
+      $('#backBtn').on('click', onBackClick);
+      $('#results').on('click', 'li[data-puzzle-id]', function () {
+        var pid = $(this).attr('data-puzzle-id');
+        if (pid) startDrillByPuzzleId(pid);
       });
 
       loadDatasetInfo();
@@ -271,6 +379,7 @@
         return;
       }
       var fen = chess.fen();
+      searchFen = fen;
       var key = fenPositionKey(fen);
       var shard;
       try {
@@ -318,20 +427,350 @@
     }
 
     function renderResults(matches) {
+      lastMatches = matches;
       var $list = $('#results').empty();
       var $meta = $('#resultsMeta');
       if (!matches.length) { $meta.hide(); return; }
       // sort by rating asc; stable enough for our purposes
       matches.sort(function (a, b) { return a[1] - b[1]; });
       var shown = matches.slice(0, MAX_RESULTS);
-      $meta.text('id · rating  (sorted by rating, lowest first)').show();
+      $meta.text('id · rating  (sorted by rating, lowest first — click a row to drill)').show();
       for (var i = 0; i < shown.length; i++) {
         var m = shown[i];
-        var $li = $('<li></li>');
-        $li.append($('<span class="puzzle-id"></span>').text(m[0]));
-        $li.append($('<span class="puzzle-rating"></span>').text(m[1] || '—'));
+        var pid = m[0];
+        var rating = m[1];
+        var $li = $('<li></li>')
+          .attr('data-puzzle-id', pid)
+          .attr('data-rating', rating || '');
+        var $left = $('<span class="result-left"></span>');
+        if (Progress.isCompleted(pid)) {
+          $left.append($('<span class="done-badge" title="Previously completed">✓</span>'));
+        }
+        $left.append($('<span class="puzzle-id"></span>').text(pid));
+        $li.append($left);
+        $li.append($('<span class="puzzle-rating"></span>').text(rating || '—'));
         $list.append($li);
       }
+    }
+
+    // ─── drill mode ─────────────────────────────────────────────────────
+    // Click on a result row → fetch puzzle body shard → find by id → drill.
+    // Body shards are keyed by SHA-1 prefix of puzzleId (per build-index.js
+    // shardId(body.id)). Same hashing as positions, just over a different
+    // input. ndjson: one body per line, no ordering guarantee.
+    async function startDrillByPuzzleId(puzzleId) {
+      setStatus('Loading puzzle ' + puzzleId + '…', 'info');
+      var bodyShard;
+      try {
+        bodyShard = await shardIdAsync(puzzleId);
+      } catch (e) {
+        setStatus('SHA-1 hashing not available (Web Crypto required, http context).', 'error');
+        return;
+      }
+      var url = DATA_BASE_URL + 'puzzles/' + bodyShard + '.ndjson';
+      try {
+        var res = await fetch(url);
+        if (!res.ok) {
+          setStatus('Body shard ' + bodyShard + ' fetch failed (HTTP ' + res.status + ').', 'error');
+          return;
+        }
+        var text = await res.text();
+        var puzzle = null;
+        var lines = text.split('\n');
+        for (var i = 0; i < lines.length; i++) {
+          var line = lines[i];
+          if (!line) continue;
+          // Defensive parse — a corrupt line shouldn't kill the whole search.
+          var obj;
+          try { obj = JSON.parse(line); } catch (e) { continue; }
+          if (obj && obj.id === puzzleId) { puzzle = obj; break; }
+        }
+        if (!puzzle) {
+          setStatus('Puzzle ' + puzzleId + ' not found in body shard ' + bodyShard + '.', 'error');
+          return;
+        }
+        if (!puzzle.fen || !Array.isArray(puzzle.moves) || puzzle.moves.length === 0) {
+          setStatus('Puzzle ' + puzzleId + ' body is malformed (missing fen/moves).', 'error');
+          return;
+        }
+        enterDrillMode(puzzle);
+      } catch (e) {
+        setStatus('Body fetch error: ' + e.message, 'error');
+      }
+    }
+
+    function enterDrillMode(puzzle) {
+      mode = 'drill';
+      drillPuzzle = puzzle;
+      try {
+        drillState = Drill.start({
+          puzzleId: puzzle.id,
+          fen: puzzle.fen,
+          solutionUci: puzzle.moves
+        });
+      } catch (e) {
+        setStatus('Drill init failed: ' + e.message, 'error');
+        return;
+      }
+      pendingOppReply = null;
+      pendingCompletionResult = null;
+      if (oppReplyTimeout) { clearTimeout(oppReplyTimeout); oppReplyTimeout = null; }
+
+      // Swap panels.
+      $('#searchPanel').hide();
+      $('#resultsMeta').hide();
+      $('#results').hide();
+      $('#drillPanel').show();
+      $('#drillId').text(puzzle.id);
+      $('#drillRating').text(puzzle.rating ? ('rating ' + puzzle.rating) : '');
+      var themesText = (puzzle.themes && puzzle.themes.length) ? puzzle.themes.join(' · ') : '';
+      $('#drillThemes').text(themesText).toggle(!!themesText);
+      $('#drillOpening').text(puzzle.opening || '').toggle(!!puzzle.opening);
+      if (puzzle.gameUrl) {
+        $('#lichessLink').attr('href', puzzle.gameUrl).show();
+      } else {
+        $('#lichessLink').hide();
+      }
+      $('#hintBtn').prop('disabled', false).text('Hint');
+
+      // Reset chess.js to puzzle position. v0.10.3 load() returns boolean.
+      chess = new Chess();
+      if (!chess.load(puzzle.fen)) {
+        setStatus('chess.js could not load puzzle FEN: ' + puzzle.fen, 'error');
+        return;
+      }
+
+      // Rebuild the board with drill handlers + correct orientation. The
+      // board element is the same #board div used by search mode.
+      var orientation = Drill.userColor(drillState) === 'b' ? 'black' : 'white';
+      destroyBoard();
+      board = Chessboard('board', {
+        position: puzzle.fen,
+        pieceTheme: 'https://chessboardjs.com/img/chesspieces/wikipedia/{piece}.png',
+        showNotation: true,
+        draggable: true,
+        orientation: orientation,
+        onDragStart: onDragStart,
+        onDrop: onDrop,
+        onSnapEnd: onSnapEnd
+      });
+
+      setStatus('Your move.', 'info');
+    }
+
+    function destroyBoard() {
+      // chessboard.js v1 has destroy(); be defensive in case it's absent.
+      if (board && typeof board.destroy === 'function') {
+        try { board.destroy(); } catch (e) { /* ignore */ }
+      }
+      board = null;
+      $('#board').empty();
+    }
+
+    function rebuildSearchBoard() {
+      destroyBoard();
+      var fen = searchFen || 'start';
+      board = Chessboard('board', {
+        position: fen,
+        pieceTheme: 'https://chessboardjs.com/img/chesspieces/wikipedia/{piece}.png',
+        showNotation: true
+      });
+      // Keep chess.js in sync with what's on the board, so a follow-up
+      // Search picks up the same position the user sees.
+      chess = new Chess();
+      if (searchFen) chess.load(searchFen);
+    }
+
+    // ─── drag/drop handlers ─────────────────────────────────────────────
+    // chessboard.js calls these in drill mode only. onDragStart filters
+    // illegal grabs; onDrop validates + classifies; onSnapEnd syncs the
+    // board to chess.js (covers castling/EP/promotion glyphs) and schedules
+    // the opp auto-reply.
+    function onDragStart(source, piece /*, position, orientation */) {
+      if (!drillState || drillState.complete) return false;
+      // Only the side-to-move's pieces are draggable.
+      if (chess.turn() !== piece[0]) return false;
+      // Block grabs while it's the opponent's turn (during the 400ms
+      // window between user move and scheduled opp reply, chess.turn()
+      // is opponent's color, so this guards naturally).
+      if (chess.turn() !== Drill.userColor(drillState)) return false;
+      return true;
+    }
+
+    function onDrop(source, target) {
+      if (!drillState || drillState.complete) return 'snapback';
+      if (source === target) return 'snapback';
+
+      // Default to queen-promotion. Under-promotions aren't reachable via
+      // drag-drop in MVP — if a puzzle solution requires e.g. e8=N, the
+      // user gets marked wrong on first try (Again). Acceptable trade-off;
+      // promotion-picker UI is a future enhancement.
+      var moveObj;
+      try {
+        moveObj = chess.move({ from: source, to: target, promotion: 'q' });
+      } catch (e) {
+        moveObj = null;  // chess.js v0.10 returns null; v1+ throws — guard both
+      }
+      if (!moveObj) return 'snapback'; // illegal in chess.js terms
+
+      var uci = moveObj.from + moveObj.to + (moveObj.promotion || '');
+      var result = Drill.attemptUserMove(drillState, uci);
+      drillState = result.state;
+
+      if (result.result === 'wrong') {
+        // First wrong locks Again — record now (subsequent wrongs return
+        // toRecord=null, the state machine handles the lock).
+        if (result.toRecord !== null) {
+          Progress.recordReview(drillState.puzzleId, result.toRecord);
+        }
+        chess.undo();              // revert the wrong move on chess.js
+        flashSquare(target, 'flash-error');
+        setStatus('Not the move — try again.', 'warn');
+        return 'snapback';
+      }
+
+      // Correct: clear any prior hint highlight, queue opp reply if any,
+      // let chessboard.js animate the user's piece to target. Final sync
+      // happens in onSnapEnd.
+      clearSquareHighlights();
+      if (result.result === 'continue') {
+        pendingOppReply = result.opponentReply;
+        setStatus('Good — opponent replies…', 'info');
+      } else if (result.result === 'complete') {
+        if (result.opponentReply) {
+          // Edge: even-length solutionUci means opp has the last move.
+          // Queue it and defer completion UI until after the animation.
+          pendingOppReply = result.opponentReply;
+          pendingCompletionResult = result;
+          setStatus('Good — final reply…', 'info');
+        } else {
+          pendingOppReply = null;
+          handleCompletion(result);
+        }
+      }
+      // No return value (or undefined) tells chessboard.js to keep the move.
+    }
+
+    function onSnapEnd() {
+      // ALWAYS animate:false here per project conventions (teleport
+      // artifact rule). Castling rook, EP capture, promotion glyph all
+      // get reconciled by chess.js's resulting FEN.
+      if (board) board.position(chess.fen(), false);
+      if (pendingOppReply && drillState && !drillState.complete) {
+        var oppMove = pendingOppReply;
+        pendingOppReply = null;
+        oppReplyTimeout = setTimeout(function () {
+          oppReplyTimeout = null;
+          playOppReply(oppMove);
+        }, 400);
+      }
+    }
+
+    function playOppReply(uci) {
+      // mode could have changed (user clicked back). Safety check.
+      if (mode !== 'drill' || !drillState) return;
+      var from = uci.slice(0, 2);
+      var to = uci.slice(2, 4);
+      var promotion = uci[4] || undefined;
+      var moveObj;
+      try {
+        moveObj = chess.move({ from: from, to: to, promotion: promotion });
+      } catch (e) {
+        moveObj = null;
+      }
+      if (!moveObj) {
+        setStatus('Internal error: opponent reply illegal (' + uci + '). Solution data may be corrupt.', 'error');
+        return;
+      }
+      // Animated update — default chessboard.js behavior, NOT onSnapEnd here.
+      if (board) board.position(chess.fen());
+      // If a 'complete' result carried an opp reply, the puzzle ended on
+      // the opp's move — show completion UI now that the animation has run.
+      if (pendingCompletionResult) {
+        var pc = pendingCompletionResult;
+        pendingCompletionResult = null;
+        handleCompletion(pc);
+      } else {
+        setStatus('Your move.', 'info');
+      }
+    }
+
+    function handleCompletion(result) {
+      if (result.toRecord !== null) {
+        Progress.recordReview(drillState.puzzleId, result.toRecord);
+      }
+      var grade = drillState.gradeRecorded;
+      var msg, kind;
+      if (grade === FSRS.GRADE.again) {
+        msg = '✗ Solved with errors — graded Again.';
+        kind = 'error';
+      } else if (grade === FSRS.GRADE.hard) {
+        msg = '✓ Solved with a hint — graded Hard.';
+        kind = 'warn';
+      } else {
+        msg = '✓ Solved cleanly — graded Easy.';
+        kind = 'ok';
+      }
+      setStatus(msg, kind);
+      $('#hintBtn').prop('disabled', true);
+    }
+
+    // ─── hint + back buttons ────────────────────────────────────────────
+    function onHintClick() {
+      if (!drillState || drillState.complete) return;
+      var r = Drill.requestHint(drillState);
+      drillState = r.state;
+      if (r.hintInfo && r.hintInfo.fromSquare) {
+        clearSquareHighlights();
+        highlightSquare(r.hintInfo.fromSquare, 'highlight-hint');
+        setStatus('Hint: move from ' + r.hintInfo.fromSquare + '. (Caps grade at Hard.)', 'info');
+      }
+      // One-hint policy per project doc — don't escalate to level 2 (full
+      // arrow). A second hint = solution.
+      $('#hintBtn').prop('disabled', true);
+    }
+
+    function onBackClick() {
+      if (oppReplyTimeout) {
+        clearTimeout(oppReplyTimeout);
+        oppReplyTimeout = null;
+      }
+      pendingOppReply = null;
+      pendingCompletionResult = null;
+      var lastPid = drillPuzzle ? drillPuzzle.id : null;
+      drillState = null;
+      drillPuzzle = null;
+      mode = 'search';
+      $('#drillPanel').hide();
+      $('#searchPanel').show();
+      // Re-render the result list so a freshly-completed puzzle picks up
+      // its ✓ Done badge (cheap — capped at MAX_RESULTS rows).
+      if (lastMatches && lastMatches.length) {
+        renderResults(lastMatches);
+        $('#resultsMeta').show();
+        $('#results').show();
+      }
+      rebuildSearchBoard();
+      if (lastPid) {
+        setStatus('Back to results.', 'info');
+      } else {
+        setStatus('Set a position and click Search.', 'info');
+      }
+    }
+
+    // ─── square highlights ──────────────────────────────────────────────
+    // chessboard.js tags each square with .square-XX (e.g. .square-e4) plus
+    // .square-55d63. We layer our own classes on top via inset box-shadow.
+    function highlightSquare(square, className) {
+      $('#board .square-' + square).addClass(className);
+    }
+    function clearSquareHighlights() {
+      $('#board .square-55d63').removeClass('highlight-hint flash-error');
+    }
+    function flashSquare(square, className) {
+      var $sq = $('#board .square-' + square);
+      $sq.addClass(className);
+      setTimeout(function () { $sq.removeClass(className); }, 600);
     }
 
     function setStatus(msg, kind) {
