@@ -707,7 +707,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">followup-fixes</span>
+    <span id="buildVersion">preset-orientation</span>
     <span id="datasetInfo">loading dataset…</span>
     <button id="reviewBadge" class="review-pill" type="button" hidden></button>
   </header>
@@ -971,8 +971,19 @@
       $('#userPresetsRow').on('click', '.preset-face', function () {
         var fen = $(this).data('fen');
         if (!fen) return;
+        var savedOri = $(this).data('orientation');  // '', 'white', or 'black'
         $('#fenInput').val(fen);
+        // applyFen() sets chess.js + board position but doesn't touch the
+        // board's orientation (it reuses the existing chessboard.js
+        // instance). If the preset saved an orientation that differs from
+        // the current one, set searchOrientation BEFORE applyFen — and
+        // then rebuild the board, since chessboard.js can't change
+        // orientation on the fly.
+        var needsRebuild = (savedOri === 'white' || savedOri === 'black')
+          && savedOri !== searchOrientation;
+        if (needsRebuild) searchOrientation = savedOri;
         applyFen();
+        if (needsRebuild) rebuildSearchBoard();
       });
       $('#userPresetsRow').on('click', '.preset-del', function (e) {
         // The face and the × are siblings inside the same .preset wrapper;
@@ -3050,13 +3061,20 @@
       // Filter to well-formed entries — drop anything corrupt rather
       // than throwing. A surviving partial list is more useful than a
       // hard-error page on first load.
+      // orientation is optional (added in followup) — older presets
+      // without it just don't auto-flip on click; everything else
+      // works the same.
       var out = [];
       for (var i = 0; i < parsed.length; i++) {
         var e = parsed[i];
         if (!e || typeof e !== 'object') continue;
         if (typeof e.name !== 'string' || typeof e.fen !== 'string') continue;
         if (!e.name || !e.fen) continue;
-        out.push({ name: e.name, fen: e.fen });
+        var entry = { name: e.name, fen: e.fen };
+        if (e.orientation === 'white' || e.orientation === 'black') {
+          entry.orientation = e.orientation;
+        }
+        out.push(entry);
       }
       return out;
     }
@@ -3094,8 +3112,10 @@
         // export later.
         var $face = $('<button type="button" class="preset-face"></button>')
           .text(p.name)
-          .attr('title', p.name + '  ·  ' + p.fen)
-          .data('fen', p.fen);
+          .attr('title', p.name + '  ·  ' + p.fen +
+            (p.orientation ? '  ·  ' + p.orientation + ' perspective' : ''))
+          .data('fen', p.fen)
+          .data('orientation', p.orientation || '');
         var $del = $('<button type="button" class="preset-del">×</button>')
           .attr('aria-label', 'Delete preset ' + p.name)
           .attr('data-preset-name', p.name);
@@ -3147,10 +3167,10 @@
         }
       }
 
-      existing.push({ name: name, fen: fen });
+      existing.push({ name: name, fen: fen, orientation: searchOrientation });
       if (!saveUserPresets(existing)) return;    // status set by saveUserPresets
       renderUserPresets();
-      setStatus('Saved preset "' + name + '".', 'ok');
+      setStatus('Saved preset "' + name + '" (' + searchOrientation + ' perspective).', 'ok');
     }
 
     function deleteUserPreset(name) {
