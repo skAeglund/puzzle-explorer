@@ -707,7 +707,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">preset-orientation</span>
+    <span id="buildVersion">srs-only-on-fail</span>
     <span id="datasetInfo">loading dataset…</span>
     <button id="reviewBadge" class="review-pill" type="button" hidden></button>
   </header>
@@ -2042,10 +2042,29 @@
     }
 
     function handleCompletion(result) {
+      // SRS-gating: only put a puzzle in the review queue if the user
+      // demonstrably needed help on it. Per project rule: wrong attempt
+      // OR hint used = SRS; clean first attempt = noted as seen, not
+      // scheduled. Re-drills of already-scheduled cards always re-grade
+      // (the queue keeps its schedule going).
+      var pid = drillState.puzzleId;
+      var alreadyScheduled = Progress.hasSrsCard(pid);
+      var needsSrs = drillState.wrongAttempts > 0
+        || drillState.hintUsed
+        || alreadyScheduled;
       if (result.toRecord !== null) {
-        Progress.recordReview(drillState.puzzleId, result.toRecord);
-        // Card just rescheduled (Easy/Hard → days out, or Again-on-final
-        // → tomorrow). Either way it's no longer due today.
+        if (needsSrs) {
+          Progress.recordReview(pid, result.toRecord);
+        } else {
+          // Clean first-attempt solve. Mark seen so the ✓ Done badge and
+          // session "X unsolved" counter both reflect the work, but do
+          // NOT create an SRS card — that would clutter the review queue
+          // with puzzles the user already knows.
+          Progress.markSeen(pid);
+        }
+        // Either path mutates progress state; refresh badge in case the
+        // count changed (recordReview reschedules; markSeen never adds
+        // to the queue, so the count is unchanged but the call is cheap).
         refreshReviewBadge();
       }
       var grade = drillState.gradeRecorded;
@@ -2053,27 +2072,33 @@
       var avgStr = (typeof avgMs === 'number' && Number.isFinite(avgMs))
         ? '~' + Math.round(avgMs / 1000) + 's/move'
         : '';
+      // Did this completion actually result in an SRS write? Used to
+      // tailor the message: "added to review queue" vs "not added".
+      var wroteSrs = result.toRecord !== null && needsSrs;
       var msg, kind;
       if (grade === FSRS.GRADE.again) {
-        msg = '✗ Solved with errors — graded Again.';
+        msg = '✗ Solved with errors — added to review queue.';
         kind = 'error';
-      } else if (grade === FSRS.GRADE.hard) {
-        // Hard comes from either: hint used, OR clean+slow (>60s/move).
-        // Disambiguate via hintUsed so the user knows WHY they got Hard.
-        msg = drillState.hintUsed
-          ? '✓ Solved with a hint — graded Hard.'
-          : '✓ Solved slowly (' + avgStr + ') — graded Hard.';
+      } else if (grade === FSRS.GRADE.hard && drillState.hintUsed) {
+        msg = '✓ Solved with a hint — added to review queue.';
         kind = 'warn';
-      } else if (grade === FSRS.GRADE.good) {
-        msg = '✓ Solved (' + avgStr + ') — graded Good.';
-        kind = 'ok';
       } else {
-        // Easy. Append avg time only when known (timing engaged); legacy
-        // / no-timing path keeps the original short message.
-        msg = avgStr
-          ? '✓ Solved cleanly (' + avgStr + ') — graded Easy.'
-          : '✓ Solved cleanly — graded Easy.';
-        kind = 'ok';
+        // Clean solve (no wrong, no hint). Two sub-cases: re-drill of an
+        // existing SRS card (show grade), or first-attempt no-SRS path
+        // (show clean-skip note).
+        var bracket = avgStr ? ' (' + avgStr + ')' : '';
+        if (wroteSrs) {
+          // Re-drill: include the grade name so the user knows how the
+          // schedule was updated.
+          var gradeName = (grade === FSRS.GRADE.hard) ? 'Hard'
+                        : (grade === FSRS.GRADE.good) ? 'Good'
+                        : 'Easy';
+          msg = '✓ Solved' + bracket + ' — graded ' + gradeName + '.';
+          kind = (grade === FSRS.GRADE.hard) ? 'warn' : 'ok';
+        } else {
+          msg = '✓ Solved cleanly' + bracket + '. Not added to review queue.';
+          kind = 'ok';
+        }
       }
       // Result text moves into the completion strip (between the controls
       // row and the global #status bar). The strip's Next-puzzle button

@@ -297,7 +297,11 @@ section('Progress.load default');
   check('empty storage → empty positions', JSON.stringify(d) === '{"positions":{}}');
   check('isCompleted on unknown puzzle = false', Progress.isCompleted('xxx') === false);
   check('getCard on unknown → fresh new', Progress.getCard('xxx').state === FSRS.STATE.new);
-  check('isDue on unknown → true (new)', Progress.isDue('xxx') === true);
+  check('hasSrsCard on unknown = false', Progress.hasSrsCard('xxx') === false);
+  // isDue on unknown is FALSE: unknown puzzles aren't in the review
+  // queue. Searched-and-drilled-cleanly puzzles get markSeen (no SRS
+  // card), and we don't want them re-surfacing as due-today.
+  check('isDue on unknown → false (no SRS card)', Progress.isDue('xxx') === false);
 }
 
 section('Progress.recordReview lifecycle');
@@ -338,6 +342,63 @@ section('Progress.stats');
   Progress.importData(data);
   const s2 = Progress.stats();
   check('backdated card → due=1', s2.due === 1);
+}
+
+section('Progress.markSeen — completed without SRS scheduling');
+{
+  freshStorage();
+  const e = Progress.markSeen('p1');
+  check('returns the entry',                 e && e.completed === true);
+  check('isCompleted=true after markSeen',   Progress.isCompleted('p1') === true);
+  check('hasSrsCard=false after markSeen',   Progress.hasSrsCard('p1') === false);
+  check('isDue=false after markSeen',        Progress.isDue('p1') === false);
+  check('lastSeen is ISO',                   /^\d{4}-\d{2}-\d{2}T/.test(Progress.getEntry('p1').lastSeen));
+  // Stats should show it as completed but NOT due
+  const s = Progress.stats();
+  check('stats.total=1',                     s.total === 1);
+  check('stats.completed=1',                 s.completed === 1);
+  check('stats.due=0 (no SRS card)',         s.due === 0);
+
+  // Idempotent: second call updates lastSeen but doesn't introduce SRS
+  const before = Progress.getEntry('p1').lastSeen;
+  // small delay so ISO strings differ — bypass with a future Date
+  Progress.markSeen('p1', new Date(Date.parse(before) + 60000));
+  const after = Progress.getEntry('p1').lastSeen;
+  check('repeat markSeen advances lastSeen', after !== before);
+  check('repeat markSeen still no SRS',      Progress.hasSrsCard('p1') === false);
+}
+
+section('Progress: markSeen → recordReview transition (puzzle gets failed later)');
+{
+  freshStorage();
+  Progress.markSeen('p2');
+  check('initial: hasSrsCard=false', Progress.hasSrsCard('p2') === false);
+
+  // User re-encounters the puzzle and fails — recordReview creates the SRS card
+  Progress.recordReview('p2', FSRS.GRADE.again);
+  check('after recordReview: hasSrsCard=true', Progress.hasSrsCard('p2') === true);
+  check('after recordReview: isDue eventually false (1-day floor)',
+    Progress.isDue('p2') === false);  // due=tomorrow today
+  // Stats should now count it as in the queue (not due today, but scheduled)
+  const s = Progress.stats();
+  check('total=1', s.total === 1);
+  check('completed=1', s.completed === 1);
+}
+
+section('Progress: recordReview → markSeen (re-drilling a clean re-attempt)');
+{
+  // recordReview creates an SRS card. A subsequent markSeen MUST NOT
+  // wipe that card — the queue should keep its schedule. (User clicks
+  // a previously-failed puzzle from search and solves it; the queue
+  // path goes through recordReview, but if a code path ever called
+  // markSeen on a scheduled card, the schedule should survive.)
+  freshStorage();
+  Progress.recordReview('p3', FSRS.GRADE.again);
+  const cardBefore = JSON.stringify(Progress.getCard('p3'));
+  Progress.markSeen('p3');
+  const cardAfter = JSON.stringify(Progress.getCard('p3'));
+  check('markSeen preserves existing SRS card', cardBefore === cardAfter);
+  check('still hasSrsCard',                     Progress.hasSrsCard('p3') === true);
 }
 
 section('Progress: corrupt JSON → graceful fallback');
