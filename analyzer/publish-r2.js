@@ -29,7 +29,7 @@
  *
  * Usage:
  *   node analyzer/publish-r2.js
- *     [--data DIR]           local data directory (default ./data)
+ *     [--source-dir DIR]     local data directory (default ./data; alias --data)
  *     [--prefix STR]         override R2_PREFIX env
  *     [--concurrency N]      parallel ops (default 50)
  *     [--dry-run]            print plan without uploading/deleting
@@ -378,7 +378,7 @@ function loadEnv(dataDir) {
 // ─── CLI entry ───────────────────────────────────────────────────────────
 async function main() {
   const { flags } = parseArgs(process.argv.slice(2));
-  const DATA_DIR = path.resolve(flags.data || './data');
+  const DATA_DIR = path.resolve(flags['source-dir'] || flags.data || './data');
   const env = loadEnv(DATA_DIR);
 
   const accountId = env.R2_ACCOUNT_ID;

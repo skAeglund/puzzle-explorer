@@ -1,5 +1,9 @@
 #!/usr/bin/env node
-// Force-push ./data/ to the puzzle-explorer-data sibling repo.
+// Force-push a data dir to the puzzle-explorer-data sibling repo.
+//
+// Default source dir is ./data/. Override with --source-dir to publish a
+// different one — typically ./data-filtered/ produced by analyzer/filter-data.js
+// when filtering through a repertoire whitelist.
 //
 // Why a sibling repo: each rebuild rewrites all 4096 shards. Force-pushing a
 // fresh tree on every rebuild keeps .git at ~working-tree size (~2.4GB at
@@ -11,20 +15,38 @@
 //   2. Settings → Pages → Source: Deploy from a branch → main / root → Save.
 //   3. Extend the existing fine-grained PAT to include the new repo with
 //      Contents: Read and write. (Or generate a separate PAT.)
-//   4. cd data
+//   4. cd <source-dir>      # ./data or ./data-filtered or whatever
 //      git init -b main
 //      git remote add origin https://<PAT>@github.com/skAeglund/puzzle-explorer-data.git
 //
-// Then on every rebuild: node analyzer/publish-data.js
+// Then on every rebuild: node analyzer/publish-data.js [--source-dir DIR]
 //
-// The ./data dir lives inside the puzzle-explorer working tree but is its own
-// git repo (data/ is gitignored by the parent so they don't collide).
+// The source dir lives inside the puzzle-explorer working tree but is its own
+// git repo (data/ and data-filtered/ are gitignored by the parent so they
+// don't collide).
 
 const { execSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 
-const DATA_DIR = path.resolve(__dirname, '..', 'data');
+// Parse --source-dir flag (and any other --flags). Default ./data, but the
+// filter-data.js workflow produces ./data-filtered/ which is the typical
+// repertoire-driven publish source.
+function parseArgs(argv) {
+  const flags = Object.create(null);
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a.startsWith('--')) {
+      const eq = a.indexOf('=');
+      if (eq !== -1) flags[a.slice(2, eq)] = a.slice(eq + 1);
+      else if (i + 1 < argv.length && !argv[i + 1].startsWith('--')) flags[a.slice(2)] = argv[++i];
+      else flags[a.slice(2)] = true;
+    }
+  }
+  return flags;
+}
+const _flags = parseArgs(process.argv.slice(2));
+const DATA_DIR = path.resolve(_flags['source-dir'] || path.join(__dirname, '..', 'data'));
 
 function fail(msg) {
   console.error(msg);
@@ -36,15 +58,15 @@ function run(cmd, opts = {}) {
 }
 
 if (!fs.existsSync(DATA_DIR)) {
-  fail('./data does not exist; run analyzer/build-index.js first.');
+  fail(DATA_DIR + ' does not exist; run analyzer/build-index.js first.');
 }
 if (!fs.existsSync(path.join(DATA_DIR, 'index')) || !fs.existsSync(path.join(DATA_DIR, 'puzzles'))) {
-  fail('./data is missing index/ or puzzles/; run analyzer/build-index.js first.');
+  fail(DATA_DIR + ' is missing index/ or puzzles/; run analyzer/build-index.js first.');
 }
 if (!fs.existsSync(path.join(DATA_DIR, '.git'))) {
   fail([
-    './data is not initialized as a git repo. First-time setup:',
-    '  cd data',
+    DATA_DIR + ' is not initialized as a git repo. First-time setup:',
+    '  cd ' + DATA_DIR,
     '  git init -b main',
     '  git remote add origin https://<PAT>@github.com/skAeglund/puzzle-explorer-data.git',
     '',

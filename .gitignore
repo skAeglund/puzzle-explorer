@@ -5,6 +5,9 @@ node_modules/
 # Build outputs are large; default to ignoring. Comment these out if shipping
 # small sample data in repo for testing (open decision #2).
 data/
+# Repertoire-filtered output of analyzer/filter-data.js — by default published
+# instead of ./data when running with --source-dir. Same gitignore rationale.
+data-filtered/
 
 # R2 credentials — alongside data dir, never committed.
 .env.r2
