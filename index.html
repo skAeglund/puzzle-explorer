@@ -110,6 +110,16 @@
       width: 100%;
       margin: 0;
     }
+    /* chessboard.js's inner board renders a few px shy of #board's full
+       width (its CSS predates border-box defaults — its 2px border eats
+       into the width math). By default it left-aligns inside #board,
+       so the slack shows entirely on the right edge — reads as
+       'off-center'. Center the inner divs to split the slack evenly.
+       Targets both the outer .chessboard-NNNNN wrapper and the inner
+       .board-NNNNN grid (NNNNN is a chessboard.js salt — match by
+       attribute-prefix to be salt-agnostic). */
+    #board [class^="chessboard-"],
+    #board [class^="board-"] { margin-left: auto !important; margin-right: auto !important; }
     /* Annotation overlay — pinned to the board's rect via JS each
        render. Pointer-events:none so clicks/drags pass through to the
        board's own piece interactions; right-click drawing reads its
@@ -710,7 +720,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">board-fills-width</span>
+    <span id="buildVersion">center-board</span>
     <span id="datasetInfo">loading dataset…</span>
     <button id="reviewBadge" class="review-pill" type="button" hidden></button>
   </header>
