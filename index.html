@@ -3,8 +3,14 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#242424">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>Puzzle Explorer</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.css">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="lib/vendor/chessboard-1.0.0.min.css">
   <style>
     :root {
       --bg: #1a1a1a;
@@ -757,7 +763,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">promotion-picker</span>
+    <span id="buildVersion">pwa</span>
     <span id="datasetInfo">loading dataset…</span>
     <button id="reviewBadge" class="review-pill" type="button" hidden></button>
   </header>
@@ -873,10 +879,11 @@
     <ol id="results"></ol>
   </main>
 
-  <!-- Libraries: jQuery 3.7.1, chess.js 0.10.3, chessboard.js 1.0.0 (per project pin) -->
-  <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chess.js@0.10.3/chess.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.js"></script>
+  <!-- Libraries: jQuery 3.7.1, chess.js 0.10.3, chessboard.js 1.0.0 (per project pin).
+       Vendored in lib/vendor/ for offline use via the service worker (closes #8). -->
+  <script src="lib/vendor/jquery-3.7.1.min.js"></script>
+  <script src="lib/vendor/chess-0.10.3.js"></script>
+  <script src="lib/vendor/chessboard-1.0.0.min.js"></script>
   <!-- Shared posKey lib (must produce byte-identical keys with the build) -->
   <script src="lib/posKey.js"></script>
   <!-- FSRS scheduler (must precede drill.js + progress.js — they reference root.FSRS) -->
@@ -1666,7 +1673,7 @@
       destroyBoard();
       board = Chessboard('board', {
         position: initialFen,
-        pieceTheme: 'https://chessboardjs.com/img/chesspieces/wikipedia/{piece}.png',
+        pieceTheme: 'lib/vendor/pieces/{piece}.png',
         showNotation: true,
         draggable: true,
         orientation: orientation,
@@ -1750,7 +1757,7 @@
       // dispatch on the global `mode` flag.
       board = Chessboard('board', {
         position: fen,
-        pieceTheme: 'https://chessboardjs.com/img/chesspieces/wikipedia/{piece}.png',
+        pieceTheme: 'lib/vendor/pieces/{piece}.png',
         showNotation: true,
         draggable: true,
         orientation: searchOrientation,
@@ -2061,7 +2068,7 @@
         if (!$sqEl.length) continue;
         var sqRect = $sqEl[0].getBoundingClientRect();
         var pieceCode = (color === 'w' ? 'w' : 'b') + pieces[i].toUpperCase();
-        var imgUrl = 'https://chessboardjs.com/img/chesspieces/wikipedia/' + pieceCode + '.png';
+        var imgUrl = 'lib/vendor/pieces/' + pieceCode + '.png';
         var $tile = $('<div class="promo-tile" tabindex="0" role="button"></div>')
           .attr('aria-label', 'Promote to ' + pieceCode)
           .css({
@@ -3722,6 +3729,25 @@
       }
     }
   });
+
+  // ─── Service worker registration (PWA, closes #8) ─────────────────────
+  // Registers sw.js for offline app-shell + cached-shard fallback. NO
+  // skipWaiting in the SW: a new SW installs in the background and goes
+  // to "waiting" state; the user picks it up on next reload. This avoids
+  // the hazard of swapping the controlling SW mid-fetch and means an
+  // active drilling session won't see asset URLs change underneath it.
+  // No update banner in MVP — refresh-to-update is the contract.
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', function () {
+      navigator.serviceWorker.register('sw.js').catch(function (err) {
+        // Soft failure — page still works, just no offline. Logged for
+        // debugging; not surfaced in UI.
+        if (typeof console !== 'undefined' && console.warn) {
+          console.warn('Service worker registration failed:', err);
+        }
+      });
+    });
+  }
   </script>
 </body>
 </html>
