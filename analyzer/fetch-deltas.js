@@ -245,6 +245,7 @@ async function runFetch(opts) {
     skipPuzzleIds, post, token,
     rateMs, batchSize, limitBatches, limitPuzzles,
     validate, retries5xx,
+    onProgress,  // optional fn({phase, ...stats}) for progress logging
   } = opts;
 
   // ─── pass 1: stream CSV, build pending map ───
@@ -285,10 +286,19 @@ async function runFetch(opts) {
   const allGameIds = [...pendingByGameId.keys()];
   const batches = chunk(allGameIds, batchSize);
 
+  if (onProgress) onProgress({
+    phase: 'csv-scan-complete',
+    csvRows, candidatePuzzles, skippedByExisting, skippedByDone, badGameUrl,
+    pendingGameIds: allGameIds.length,
+    plannedBatches: batches.length,
+  });
+
   let written = 0, batchesDone = 0, batchesFailed = 0;
   let gamesReturned = 0, gamesMissing = 0;
   let validateFailures = 0;
   const errCounts = Object.create(null);
+
+  const tRunStart = Date.now();
 
   for (const batchIds of batches) {
     if (limitBatches > 0 && batchesDone >= limitBatches) break;
@@ -335,6 +345,13 @@ async function runFetch(opts) {
     // Append all batch IDs to checkpoint, including missing ones — those games
     // simply don't exist on Lichess (deleted/private) and we shouldn't retry.
     appendCheckpoint(checkpointDir, batchIds);
+
+    if (onProgress) onProgress({
+      phase: 'batch-complete',
+      batchesDone, batchesPlanned: batches.length, batchesFailed,
+      written, gamesReturned, gamesMissing,
+      elapsedMs: Date.now() - tRunStart,
+    });
 
     // Rate limit: ensure rateMs has elapsed since batch start before next.
     const elapsed = Date.now() - tStart;
@@ -386,6 +403,27 @@ async function main() {
   fs.mkdirSync(path.dirname(path.resolve(OUTPUT)), { recursive: true });
   const outFd = fs.openSync(OUTPUT, 'a');  // append-only — supports resume
 
+  // Default progress logger: print after the CSV scan finishes (so the user
+  // knows we got past pass 1) and every 10 batches thereafter (~11s at default
+  // rate). Includes ETA based on rolling average pace.
+  const progressLogger = (ev) => {
+    if (ev.phase === 'csv-scan-complete') {
+      console.log(`csv scan: ${ev.csvRows.toLocaleString()} rows read, ${ev.candidatePuzzles.toLocaleString()} candidate puzzles, ${ev.pendingGameIds.toLocaleString()} unique gameIds → ${ev.plannedBatches.toLocaleString()} batches planned`);
+      console.log(`  skipped: ${ev.skippedByExisting.toLocaleString()} already in data, ${ev.skippedByDone.toLocaleString()} in checkpoint, ${ev.badGameUrl} bad URLs`);
+      console.log('starting fetch...');
+      return;
+    }
+    if (ev.phase === 'batch-complete' && ev.batchesDone % 10 === 0) {
+      const pct = (100 * ev.batchesDone / ev.batchesPlanned).toFixed(1);
+      const pace = ev.elapsedMs / ev.batchesDone;  // ms per batch
+      const remaining = ev.batchesPlanned - ev.batchesDone;
+      const etaMs = remaining * pace;
+      const etaH = Math.floor(etaMs / 3600000);
+      const etaM = Math.floor((etaMs % 3600000) / 60000);
+      console.log(`  ${ev.batchesDone.toLocaleString()}/${ev.batchesPlanned.toLocaleString()} batches (${pct}%)  written=${ev.written.toLocaleString()}  failed=${ev.batchesFailed}  ETA ~${etaH}h${String(etaM).padStart(2,'0')}m`);
+    }
+  };
+
   const meta = await runFetch({
     inputCsv: INPUT, outFd, checkpointDir: CHECKPOINT,
     skipPuzzleIds: skip,
@@ -393,6 +431,7 @@ async function main() {
     rateMs: RATE, batchSize: BATCH,
     limitBatches: LIMIT_BATCHES, limitPuzzles: LIMIT_PUZZLES,
     validate: VALIDATE, retries5xx: 3,
+    onProgress: progressLogger,
   });
   fs.closeSync(outFd);
 
