@@ -93,6 +93,35 @@
       max-width: 400px;
       margin: 0 auto 16px;
     }
+    /* Board wrapper — establishes a positioned context for the
+       annotation SVG to overlay. Width matches #board's max-width so
+       the SVG and the board share the same bounding box. */
+    #boardWrap {
+      position: relative;
+      width: 100%;
+      max-width: 400px;
+      margin: 0 auto 16px;
+    }
+    #boardWrap > #board {
+      /* Inside the wrapper, drop the auto-margin / max-width — the
+         wrapper owns those now. Keeping width:100% so chessboard.js
+         expands to fill the wrapper. */
+      width: 100%;
+      max-width: none;
+      margin: 0;
+    }
+    /* Annotation overlay — pinned to the board's rect via JS each
+       render. Pointer-events:none so clicks/drags pass through to the
+       board's own piece interactions; right-click drawing reads its
+       coordinates from the underlying #board square DOM, not the SVG. */
+    #annotationLayer {
+      position: absolute;
+      top: 0;
+      left: 0;
+      pointer-events: none;
+      z-index: 10;
+    }
+    #annotationLayer.hidden { display: none; }
 
     .panel {
       background: var(--surface);
@@ -659,13 +688,20 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">user-presets</span>
+    <span id="buildVersion">arrow-annotations</span>
     <span id="datasetInfo">loading dataset…</span>
     <button id="reviewBadge" class="review-pill" type="button" hidden></button>
   </header>
 
   <main>
-    <div id="board"></div>
+    <!-- The board + annotation SVG share a positioned container so the
+         SVG can be pinned to the board's exact rect. The SVG is a sibling
+         of #board (not a child) — chessboard.js empties #board on every
+         destroy/rebuild, but the SVG persists across mode swaps. -->
+    <div id="boardWrap">
+      <div id="board"></div>
+      <svg id="annotationLayer" class="hidden"></svg>
+    </div>
 
     <div id="searchPanel" class="panel">
       <div id="moveBuilder">
@@ -813,6 +849,24 @@
     // move, defer completion UI until after the animation.
     var pendingCompletionResult = null;
 
+    // ── Right-click annotation state (issue #3) ──
+    // Right-click drag A→B paints a persistent arrow; right-click on a
+    // single square (mousedown + mouseup, no drag) toggles a circle.
+    // Modifier keys pick the color (Lichess convention):
+    //   default = green, Shift = red, Alt = blue, Shift+Alt = yellow.
+    // State lives in two Maps keyed by uci-like strings so toggling is
+    // O(1) and serialization is trivial. ghost* are transient previews
+    // shown during the right-click hold/drag, before mouseup commits.
+    // arrowStartSquare is non-null iff a right-click is in progress.
+    var activeArrows = new Map();         // "e2e4" → 'green'|'red'|'blue'|'yellow'
+    var activeCircles = new Map();        // "e4"   → color
+    var ghostArrow = null;                // {from,to} during drag
+    var ghostCircle = null;               // square string before drag
+    var ghostCircleWasColor = null;       // color of pre-existing circle, if any
+    var arrowStartSquare = null;          // square where current right-click started
+    var currentDrawColor = 'green';       // recomputed from modifiers on each mousedown
+    var isRightClicking = false;          // tracks an in-progress right-click gesture
+
     // Session state — null when not in a session. Built by Session.create
     // from the current `lastMatches` + slider range when the user clicks
     // "Start session". Walked by Session.advance on each "Next puzzle"
@@ -845,7 +899,10 @@
       // sets `chess` to a fresh Chess() (start position) and installs the
       // drag/drop handlers used by the move builder.
       rebuildSearchBoard();
-      $(window).on('resize', function () { if (board) board.resize(); });
+      $(window).on('resize', function () {
+        if (board) board.resize();
+        renderAnnotations();   // SVG follows the board's bounding box
+      });
 
       $('#applyBtn').on('click', applyFen);
       $('#searchBtn').on('click', searchPuzzles);
@@ -912,7 +969,8 @@
         boardEl.addEventListener('mousedown', onBoardMouseDown, true);
         boardEl.addEventListener('mouseup',   onBoardMouseUp,   true);
         // Suppress the browser context menu on right-click in either mode.
-        // Right-click is repurposed to deselect (handled in onBoardMouseDown).
+        // Right-click is repurposed for arrow/circle annotations
+        // (issue #3 — handled in onBoardMouseDown).
         boardEl.addEventListener('contextmenu', function (e) {
           e.preventDefault();
         });
@@ -922,12 +980,24 @@
         // CSS `touch-action: manipulation` on #board removes iOS's 350ms
         // tap delay so the synthetic mousedown still feels instant.
       }
-      // Escape clears any active selection (Lichess convention) — works in
-      // both search and drill modes.
+      // Window-level mousemove + mouseup for the right-click annotation
+      // gesture. mousemove updates the ghost arrow as the user drags;
+      // mouseup commits, even if the release is off-board (window-level
+      // catches it where boardEl wouldn't). The boardEl mouseup binding
+      // above remains and handles the on-board case — and onBoardMouseUp
+      // is idempotent on `isRightClicking` so a window+board double-fire
+      // resolves cleanly (the second call sees isRightClicking=false).
+      window.addEventListener('mousemove', onWindowMouseMove);
+      window.addEventListener('mouseup', onBoardMouseUp);
+      // Escape clears any active selection AND any drawn annotations
+      // (Lichess convention) — works in both search and drill modes.
       $(document).on('keydown', function (e) {
-        if (e.key === 'Escape' && selectedSquare) {
-          clearSelection();
-          deselectionPending = false;
+        if (e.key === 'Escape') {
+          if (selectedSquare) {
+            clearSelection();
+            deselectionPending = false;
+          }
+          if (hasAnyAnnotations()) clearAnnotations();
         }
       });
 
@@ -1247,6 +1317,15 @@
       // classes with it — but keep state vars in sync explicitly.
       clearSelection();
       deselectionPending = false;
+      // Cancel any in-flight right-click + wipe drawn annotations
+      // (issue #3). Mode swap re-orients the board, so coordinates
+      // saved against the old orientation would render wrong anyway.
+      isRightClicking = false;
+      arrowStartSquare = null;
+      ghostArrow = null;
+      ghostCircle = null;
+      ghostCircleWasColor = null;
+      clearAnnotations();
 
       // Swap panels.
       $('#searchPanel').hide();
@@ -1402,6 +1481,14 @@
       selectedSquare = null;
       deselectionPending = false;
       lastSuccessfulUserMove = null;
+      // Annotation state too (issue #3) — orientation may have changed
+      // and the SVG is anchored to the old board's bounding box.
+      isRightClicking = false;
+      arrowStartSquare = null;
+      ghostArrow = null;
+      ghostCircle = null;
+      ghostCircleWasColor = null;
+      clearAnnotations();
       // Surface the most recently played move (if any) and check status,
       // so e.g. coming back from drill with 1.e4 e5 played still shows the
       // green ply highlight. Deferred so chessboard.js has finished
@@ -2147,6 +2234,185 @@
       setStatus(statusMsg, 'ok');
     }
 
+    // ─── right-click annotations (issue #3) ─────────────────────────────
+    // SVG overlay drawn in lockstep with the board. Re-renders are cheap
+    // (~6 SVG nodes max in typical use) so we just rebuild innerHTML on
+    // every state change rather than tracking diffs.
+    var DRAW_COLORS = {
+      green:  { arrow: 'rgba(21, 120, 27, 0.7)',  circle: 'rgba(21, 120, 27, 0.85)' },
+      red:    { arrow: 'rgba(175, 30, 30, 0.7)',  circle: 'rgba(175, 30, 30, 0.85)' },
+      blue:   { arrow: 'rgba(40, 100, 220, 0.7)', circle: 'rgba(40, 100, 220, 0.85)' },
+      yellow: { arrow: 'rgba(200, 180, 0, 0.7)',  circle: 'rgba(200, 180, 0, 0.85)' }
+    };
+
+    // Lichess convention: default=green, Shift=red, Alt=blue,
+    // Shift+Alt=yellow. We also fold in Ctrl/Meta as Shift-equivalents
+    // for users on layouts where Shift is awkward, matching MistakeLab.
+    function getDrawColor(e) {
+      var shift = !!(e.shiftKey || e.ctrlKey || e.metaKey);
+      var alt   = !!e.altKey;
+      if (shift && alt) return 'yellow';
+      if (alt)          return 'blue';
+      if (shift)        return 'red';
+      return 'green';
+    }
+
+    // Map a mouse event's clientX/Y to a square name, accounting for
+    // board orientation. Returns null if the event is off-board (which
+    // happens routinely during a drag — the drag can leave the rect).
+    // chessboard.js sets data-square on every square element, but using
+    // it from a mousemove event isn't reliable (the SVG sits over the
+    // board and even with pointer-events:none, the cursor's e.target is
+    // the SVG). Bounding-box math is faster anyway.
+    function getSquareFromMouseEvent(e) {
+      var boardEl = document.querySelector('#board [class^="board-"]');
+      if (!boardEl || !board) return null;
+      var rect = boardEl.getBoundingClientRect();
+      var x = e.clientX - rect.left;
+      var y = e.clientY - rect.top;
+      if (x < 0 || y < 0 || x > rect.width || y > rect.height) return null;
+      var sqSize = rect.width / 8;
+      var fileIdx = Math.floor(x / sqSize);
+      var rankIdx = Math.floor(y / sqSize);
+      var isWhite = board.orientation() === 'white';
+      var file = isWhite ? String.fromCharCode(97 + fileIdx) : String.fromCharCode(104 - fileIdx);
+      var rank = isWhite ? (8 - rankIdx) : (1 + rankIdx);
+      return file + rank;
+    }
+
+    // Anything currently on screen?
+    function hasAnyAnnotations() {
+      return activeArrows.size > 0 || activeCircles.size > 0 ||
+             ghostArrow !== null || ghostCircle !== null;
+    }
+
+    // Wipe all annotations (called on move played, board re-init, Esc).
+    // Doesn't touch the in-flight gesture state — if the user is mid-
+    // right-click the next mouseup still completes correctly. (For move-
+    // played callers this won't matter; the user can't be drawing AND
+    // making a move at the same time.)
+    function clearAnnotations() {
+      activeArrows.clear();
+      activeCircles.clear();
+      ghostArrow = null;
+      ghostCircle = null;
+      ghostCircleWasColor = null;
+      renderAnnotations();
+    }
+
+    function renderAnnotations() {
+      var svg = document.getElementById('annotationLayer');
+      if (!svg) return;
+      var boardEl = document.querySelector('#board [class^="board-"]');
+      if (!boardEl) {
+        // Board not built yet — nothing to render against.
+        svg.classList.add('hidden');
+        svg.innerHTML = '';
+        return;
+      }
+      if (!hasAnyAnnotations()) {
+        svg.classList.add('hidden');
+        svg.innerHTML = '';
+        return;
+      }
+
+      // Pin SVG to the board's exact rect within the wrapper. Read both
+      // rects each render — the board may have resized (window resize,
+      // mode swap, etc.) and chessboard.js doesn't notify us.
+      var boardRect = svg.parentElement.querySelector('#board')
+        ? boardEl.getBoundingClientRect() : null;
+      if (!boardRect) {
+        svg.classList.add('hidden');
+        return;
+      }
+      var wrapRect = svg.parentElement.getBoundingClientRect();
+      svg.style.left = (boardRect.left - wrapRect.left) + 'px';
+      svg.style.top  = (boardRect.top  - wrapRect.top ) + 'px';
+      svg.style.width  = boardRect.width + 'px';
+      svg.style.height = boardRect.height + 'px';
+      svg.setAttribute('viewBox', '0 0 ' + boardRect.width + ' ' + boardRect.height);
+      svg.classList.remove('hidden');
+
+      var sqSize = boardRect.width / 8;
+      var shaftWidth = sqSize * 0.18;
+      var headWidth  = shaftWidth * 3.5;
+      var headLength = headWidth * 0.75;
+
+      // Resolve a square name to its center within the SVG's coordinate
+      // system. Read live from the DOM rather than computing — robust
+      // against any stray padding/border chessboard.js might apply.
+      function sqCenter(sq) {
+        var el = document.querySelector('[data-square="' + sq + '"]');
+        if (!el) return null;
+        var r = el.getBoundingClientRect();
+        return {
+          x: r.left - boardRect.left + r.width / 2,
+          y: r.top  - boardRect.top  + r.height / 2
+        };
+      }
+
+      var html = '';
+      function drawArrow(from, to, color, opacity) {
+        var s = sqCenter(from);
+        var e = sqCenter(to);
+        if (!s || !e) return;
+        var angle = Math.atan2(e.y - s.y, e.x - s.x);
+        // 0.1px overlap between shaft and head closes the AA seam at the
+        // join. Without it, semi-transparent arrows show a hairline gap.
+        var overlap = 0.1;
+        var shaftEndX = e.x - (headLength - overlap) * Math.cos(angle);
+        var shaftEndY = e.y - (headLength - overlap) * Math.sin(angle);
+        var p1x = e.x, p1y = e.y;
+        var p2x = e.x - headLength * Math.cos(angle) + (headWidth / 2) * Math.sin(angle);
+        var p2y = e.y - headLength * Math.sin(angle) - (headWidth / 2) * Math.cos(angle);
+        var p3x = e.x - headLength * Math.cos(angle) - (headWidth / 2) * Math.sin(angle);
+        var p3y = e.y - headLength * Math.sin(angle) + (headWidth / 2) * Math.cos(angle);
+        html += '<g opacity="' + opacity + '">' +
+                  '<line x1="' + s.x + '" y1="' + s.y + '" ' +
+                       'x2="' + shaftEndX + '" y2="' + shaftEndY + '" ' +
+                       'stroke="' + color + '" stroke-width="' + shaftWidth + '" ' +
+                       'stroke-linecap="butt" />' +
+                  '<polygon points="' + p1x + ',' + p1y + ' ' +
+                                       p2x + ',' + p2y + ' ' +
+                                       p3x + ',' + p3y + '" ' +
+                          'fill="' + color + '" />' +
+                '</g>';
+      }
+      function drawCircle(sq, color, opacity, strokeMul) {
+        var c = sqCenter(sq);
+        if (!c) return;
+        var radius = sqSize * 0.46;
+        var stroke = sqSize * 0.056 * (strokeMul || 1);
+        html += '<circle cx="' + c.x + '" cy="' + c.y + '" r="' + radius + '" ' +
+                       'fill="none" stroke="' + color + '" ' +
+                       'stroke-width="' + stroke + '" ' +
+                       'opacity="' + opacity + '" />';
+      }
+
+      // User-committed arrows
+      activeArrows.forEach(function (color, key) {
+        var c = DRAW_COLORS[color] || DRAW_COLORS.green;
+        drawArrow(key.substring(0, 2), key.substring(2, 4), c.arrow, 1);
+      });
+      // Ghost arrow (preview during right-click drag)
+      if (ghostArrow) {
+        var gc = DRAW_COLORS[currentDrawColor] || DRAW_COLORS.green;
+        drawArrow(ghostArrow.from, ghostArrow.to, gc.arrow, 0.6);
+      }
+      // User-committed circles
+      activeCircles.forEach(function (color, sq) {
+        var c = DRAW_COLORS[color] || DRAW_COLORS.green;
+        drawCircle(sq, c.circle, 0.9, 1);
+      });
+      // Ghost circle (preview during right-click hold before drag)
+      if (ghostCircle) {
+        var gc2 = DRAW_COLORS[currentDrawColor] || DRAW_COLORS.green;
+        drawCircle(ghostCircle, gc2.circle, 0.5, 0.7);
+      }
+
+      svg.innerHTML = html;
+    }
+
     // ─── square highlights ──────────────────────────────────────────────
     // chessboard.js v1 tags each square with .square-XX (algebraic, e.g.
     // .square-e4), .square-55d63 (the obfuscated lib class), and exposes
@@ -2207,8 +2473,11 @@
       setTimeout(function () { showCheck(c); }, 250);
     }
     // Convenience: paint lastmove + check together with the same animation
-    // settling delay. Used after every animated board update.
+    // settling delay. Used after every animated board update. Also clears
+    // any drawn annotations — a move played invalidates the position the
+    // arrows were drawn on, so they shouldn't survive (issue #3).
     function applyLastMoveAndCheckDeferred(from, to) {
+      if (hasAnyAnnotations()) clearAnnotations();
       showLastMoveDeferred(from, to);
       showCheckDeferred(chess);
     }
@@ -2332,25 +2601,78 @@
     // doesn't deselect on the trailing mouseup.
     function onBoardMouseDown(e) {
       if (!chess) return;
-      // Mode-specific gating. Drill mode has additional guards around
-      // drillState/turn; search mode lets either side move freely.
-      if (mode === 'drill') {
-        if (!drillState || drillState.complete) return;
-        // Block clicks while it's the opponent's turn (intro pause and
-        // opp-reply window — chess.turn() is opp's color).
-        if (chess.turn() !== Drill.userColor(drillState)) return;
-      } else if (mode !== 'search') {
+      if (mode !== 'drill' && mode !== 'search') return;
+
+      // Right-click → start a draw gesture (issue #3). Right-click only:
+      // middle-click (button 1) on a Mac trackpad or trackball is most
+      // often a misclick for browser back, not an intentional draw.
+      // Handled BEFORE the drill-mode turn gating below, since drawing
+      // arrows during the opponent's reply window is exactly what users
+      // want (e.g. marking a tactical idea while watching the reply).
+      // Per issue: do NOT clear the click-to-move selection — selection-
+      // clear by right-click is non-standard and users complained about
+      // it. Mid-drag the SVG paints a ghost arrow / circle; mouseup
+      // commits it via onBoardMouseUp (this same module).
+      if (e.button === 2) {
+        // Reset any stale gesture state. If a previous right-click was
+        // released outside the window (or while the tab was inactive),
+        // mouseup may never have fired and isRightClicking could be
+        // stuck true. Clearing here ensures a clean start.
+        if (isRightClicking) {
+          ghostArrow = null;
+          ghostCircle = null;
+          if (ghostCircleWasColor && arrowStartSquare) {
+            // Restore a circle that was lifted into ghost state by the
+            // stuck gesture, otherwise it'd vanish silently.
+            activeCircles.set(arrowStartSquare, ghostCircleWasColor);
+          }
+          ghostCircleWasColor = null;
+          arrowStartSquare = null;
+        }
+        // Suppress chessboard.js drag tracking on whatever piece is under
+        // the cursor — we don't want a right-click on an own piece to
+        // start a drag-and-drop. chessboard.js binds on mousedown without
+        // a button filter, so without this it'd start a drag we'd never
+        // resolve.
+        e.stopPropagation();
+        if (e.preventDefault) e.preventDefault();
+        isRightClicking = true;
+        var rsqEl = (e.target && e.target.closest) ? e.target.closest('[data-square]') : null;
+        var rsq = rsqEl ? rsqEl.getAttribute('data-square') : null;
+        if (!rsq) {
+          // Click landed off any square (notation label, padding). Treat
+          // as a no-op draw start; mouseup with arrowStartSquare === null
+          // does nothing.
+          return;
+        }
+        arrowStartSquare = rsq;
+        ghostArrow = null;
+        currentDrawColor = getDrawColor(e);
+        // If the square already has a circle, lift it into ghost state
+        // so the user sees a preview of "if you mouseup here, this
+        // circle will be removed" (or replaced). Mouseup logic resolves.
+        ghostCircleWasColor = activeCircles.has(rsq) ? activeCircles.get(rsq) : null;
+        if (ghostCircleWasColor) activeCircles.delete(rsq);
+        ghostCircle = rsq;
+        renderAnnotations();
         return;
       }
 
-      // Right-click (or middle-click) → cancel any current selection.
-      // Matches MistakeLab + Lichess behavior. The contextmenu listener
-      // separately suppresses the browser's right-click menu.
-      if (typeof e.button === 'number' && e.button !== 0) {
-        if (selectedSquare) clearSelection();
-        deselectionPending = false;
-        return;
+      // Left-click — drill mode adds gating now that right-click is
+      // already handled. Drill-state / turn checks block move attempts
+      // during the intro pause and opp-reply window. Search mode lets
+      // either side move freely.
+      if (mode === 'drill') {
+        if (!drillState || drillState.complete) return;
+        if (chess.turn() !== Drill.userColor(drillState)) return;
       }
+
+      // Left-click on the board clears any drawn annotations (Lichess
+      // convention). Always — selection-pending or not, square or not.
+      // The clear is cheap (innerHTML='' + Map.clear()) and matches what
+      // users expect: "I'm starting a new interaction, get rid of the
+      // arrows from the last one".
+      if (hasAnyAnnotations()) clearAnnotations();
 
       // Locate the square element under the event target.
       var t = e.target;
@@ -2412,10 +2734,86 @@
       }
     }
 
-    function onBoardMouseUp(/* e */) {
+    function onBoardMouseUp(e) {
+      // Right-click release → commit the in-progress annotation. Note:
+      // the right-click might end on a square that's NOT under the
+      // original click (the user dragged), or off-board entirely. We
+      // bind this on the board element AND on window (see init), so a
+      // release outside the board still resolves the gesture.
+      if (e && e.button === 2 && isRightClicking) {
+        var endSq = getSquareFromMouseEvent(e);
+        if (arrowStartSquare && endSq && endSq !== arrowStartSquare) {
+          // Drag from start → end. Toggle: same color same key removes;
+          // anything else replaces.
+          var key = arrowStartSquare + endSq;
+          if (activeArrows.has(key) && activeArrows.get(key) === currentDrawColor) {
+            activeArrows.delete(key);
+          } else {
+            activeArrows.set(key, currentDrawColor);
+          }
+        } else if (arrowStartSquare && endSq && endSq === arrowStartSquare) {
+          // Same-square click → toggle a circle. If the square already
+          // had a circle of the SAME color, the mousedown branch lifted
+          // it into ghost state (i.e. activeCircles already lacks it),
+          // and we want to leave it removed. If it had a DIFFERENT color,
+          // ghostCircleWasColor is set and we replace with the new color.
+          // If there was no prior circle, just add the new one.
+          if (ghostCircleWasColor && ghostCircleWasColor === currentDrawColor) {
+            // Confirm removal — do nothing, the lift in mousedown stays.
+          } else {
+            activeCircles.set(endSq, currentDrawColor);
+          }
+        } else if (arrowStartSquare && !endSq) {
+          // Released off-board. Cancel cleanly — restore any pre-existing
+          // circle that was lifted into ghost on mousedown.
+          if (ghostCircleWasColor) {
+            activeCircles.set(arrowStartSquare, ghostCircleWasColor);
+          }
+        }
+        arrowStartSquare = null;
+        ghostArrow = null;
+        ghostCircle = null;
+        ghostCircleWasColor = null;
+        isRightClicking = false;
+        renderAnnotations();
+        return;
+      }
+
+      // Left-click release: original deselection-pending logic.
       if (deselectionPending) {
         deselectionPending = false;
         clearSelection();
+      }
+    }
+
+    // Window-level mousemove so a drag that strays off-board still
+    // updates the ghost arrow. mousemove fires every frame during a
+    // drag, but renderAnnotations is cheap enough (innerHTML rewrite of
+    // ≤6 nodes) that we don't bother throttling.
+    function onWindowMouseMove(e) {
+      if (!isRightClicking || !arrowStartSquare) return;
+      var cur = getSquareFromMouseEvent(e);
+      if (cur && cur !== arrowStartSquare) {
+        // Dragged onto a different square → arrow takes over from the
+        // ghost circle. If a pre-existing circle was lifted into ghost
+        // state on mousedown, restore it now (so cancelling the drag
+        // by releasing on the start doesn't lose the original circle).
+        if (ghostCircle) {
+          ghostCircle = null;
+          if (ghostCircleWasColor) activeCircles.set(arrowStartSquare, ghostCircleWasColor);
+        }
+        if (!ghostArrow || ghostArrow.from !== arrowStartSquare || ghostArrow.to !== cur) {
+          ghostArrow = { from: arrowStartSquare, to: cur };
+          renderAnnotations();
+        }
+      } else if (cur && cur === arrowStartSquare && ghostArrow) {
+        // Dragged back to the start square → arrow goes away, restore
+        // the ghost-circle preview (and re-lift any pre-existing
+        // circle, mirroring mousedown).
+        ghostArrow = null;
+        if (ghostCircleWasColor) activeCircles.delete(arrowStartSquare);
+        ghostCircle = arrowStartSquare;
+        renderAnnotations();
       }
     }
 
