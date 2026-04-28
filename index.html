@@ -688,7 +688,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">analyze-on-lichess</span>
+    <span id="buildVersion">site-url-normalize</span>
     <span id="datasetInfo">loading dataset…</span>
     <button id="reviewBadge" class="review-pill" type="button" hidden></button>
   </header>
@@ -1339,8 +1339,15 @@
       var themesText = (puzzle.themes && puzzle.themes.length) ? puzzle.themes.join(' · ') : '';
       $('#drillThemes').text(themesText).toggle(!!themesText);
       $('#drillOpening').text(puzzle.opening || '').toggle(!!puzzle.opening);
-      if (puzzle.gameUrl) {
-        $('#lichessLink').attr('href', puzzle.gameUrl).show();
+      // Normalize the source-game URL (issue #5). Han Schut's PGN data
+      // sometimes stores the Site header without a scheme (e.g.
+      // 'lichess.org/training/...'), which makes the browser resolve
+      // it as RELATIVE to the current page — so a click goes to
+      // 'https://skaeglund.github.io/puzzle-explorer/lichess.org/...'
+      // and 404s. Prepend https:// when no scheme is present.
+      var gameUrl = normalizeExternalUrl(puzzle.gameUrl);
+      if (gameUrl) {
+        $('#lichessLink').attr('href', gameUrl).show();
       } else {
         $('#lichessLink').hide();
       }
@@ -2831,6 +2838,27 @@
 
     function setStatus(msg, kind) {
       $('#status').text(msg).attr('data-kind', kind || 'info');
+    }
+
+    // Normalize a possibly-scheme-less external URL (issue #5).
+    // Han Schut's PGN Site header is sometimes 'lichess.org/training/...'
+    // with no scheme. As an <a href> that resolves RELATIVE to the
+    // current page (e.g. https://skaeglund.github.io/puzzle-explorer/
+    // lichess.org/...) and 404s. Prepend https:// when no scheme is
+    // present.
+    //   - empty / non-string → ''   (caller hides the link)
+    //   - already has '://' or starts with '//' → unchanged
+    //   - otherwise → 'https://' + trimmed input
+    function normalizeExternalUrl(u) {
+      if (typeof u !== 'string') return '';
+      var s = u.trim();
+      if (!s) return '';
+      // Protocol-relative ('//host/path') and any scheme ('http://',
+      // 'https://', etc.) are passed through. The '://' check covers
+      // any future scheme variant Han's data might emit.
+      if (s.indexOf('://') !== -1) return s;
+      if (s.charAt(0) === '/' && s.charAt(1) === '/') return s;
+      return 'https://' + s;
     }
 
     // Build a Lichess analysis URL for a puzzle (issue #4).

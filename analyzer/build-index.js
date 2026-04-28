@@ -24,32 +24,54 @@ const { fenPositionKey, SHARD_HEX_LEN } = require('../lib/posKey');
 // SHARD_HEX_LEN comes from lib/posKey so it stays in sync with the runtime.
 
 // Minimal CLI: positional args for input + output, flags with --key=value or --key value.
-const _args = process.argv.slice(2);
-const _pos = [];
-const _flags = Object.create(null);
-for (let i = 0; i < _args.length; i++) {
-  const a = _args[i];
-  if (a.startsWith('--')) {
-    const eq = a.indexOf('=');
-    if (eq !== -1) _flags[a.slice(2, eq)] = a.slice(eq + 1);
-    else if (i + 1 < _args.length && !_args[i + 1].startsWith('--')) _flags[a.slice(2)] = _args[++i];
-    else _flags[a.slice(2)] = true;
-  } else {
-    _pos.push(a);
+// Gated behind a require.main check so this file can also be `require()`d by
+// tests for its pure helpers (normalizeExternalUrl) without the script
+// trying to parse CLI args / call process.exit.
+let SOURCE_PGN, OUT_DIR, LIMIT;
+if (require.main === module) {
+  const _args = process.argv.slice(2);
+  const _pos = [];
+  const _flags = Object.create(null);
+  for (let i = 0; i < _args.length; i++) {
+    const a = _args[i];
+    if (a.startsWith('--')) {
+      const eq = a.indexOf('=');
+      if (eq !== -1) _flags[a.slice(2, eq)] = a.slice(eq + 1);
+      else if (i + 1 < _args.length && !_args[i + 1].startsWith('--')) _flags[a.slice(2)] = _args[++i];
+      else _flags[a.slice(2)] = true;
+    } else {
+      _pos.push(a);
+    }
   }
-}
-const SOURCE_PGN = _pos[0];
-const OUT_DIR = _pos[1] || './data';
-const LIMIT = _flags.limit ? parseInt(_flags.limit, 10) : 0;
+  SOURCE_PGN = _pos[0];
+  OUT_DIR = _pos[1] || './data';
+  LIMIT = _flags.limit ? parseInt(_flags.limit, 10) : 0;
 
-if (!SOURCE_PGN) {
-  console.error('usage: node build-index.js <input.pgn> [out_dir] [--limit N]');
-  process.exit(1);
+  if (!SOURCE_PGN) {
+    console.error('usage: node build-index.js <input.pgn> [out_dir] [--limit N]');
+    process.exit(1);
+  }
 }
 
 // ─── sharding ────────────────────────────────────────────────────────────
 function shardId(s) {
   return crypto.createHash('sha1').update(s).digest('hex').slice(0, SHARD_HEX_LEN);
+}
+
+// ─── URL normalization (issue #5) ────────────────────────────────────────
+// Han Schut's PGN Site header is sometimes scheme-less (e.g.
+// 'lichess.org/training/12345'). Without normalization, the frontend's
+// <a href> would resolve it relative to the host page and 404. Mirror
+// the frontend's normalizeExternalUrl so freshly-published datasets
+// contain fully-qualified URLs (defense in depth — the frontend also
+// normalizes at render-time, so older shards are fine too).
+function normalizeExternalUrl(u) {
+  if (typeof u !== 'string') return '';
+  const s = u.trim();
+  if (!s) return '';
+  if (s.indexOf('://') !== -1) return s;
+  if (s.charAt(0) === '/' && s.charAt(1) === '/') return s;
+  return 'https://' + s;
 }
 
 // ─── per-game processing ────────────────────────────────────────────────
@@ -96,7 +118,7 @@ function processGame(pgnText) {
     previousMove: blunder.lan,
     rating: parseInt(h.PuzzleRating, 10) || 0,
     themes,
-    gameUrl: h.Site || '',
+    gameUrl: normalizeExternalUrl(h.Site),
     opening: h.Opening || '',
     // mainline (full PGN) omitted for MVP (~60% body size reduction);
     // regenerate if a source-game viewer is added later.
@@ -317,4 +339,8 @@ async function main() {
   console.log(JSON.stringify(meta, null, 2));
 }
 
-main().catch(err => { console.error(err); process.exit(1); });
+if (require.main === module) {
+  main().catch(err => { console.error(err); process.exit(1); });
+}
+
+module.exports = { normalizeExternalUrl };
