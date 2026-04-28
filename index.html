@@ -151,6 +151,50 @@
     .row > button { flex: 0 0 auto; }
     .row.examples { margin-top: 10px; }
     .row.examples > button { font-size: 11px; padding: 5px 9px; }
+    /* User presets — same compact look as the examples row but with an
+       inline × delete handle. The preset button + × handle are a single
+       composite affordance laid out as inline-flex so they hug each other
+       and wrap together when the row overflows. The × is its own <button>
+       so it's keyboard-focusable and screen-reader accessible (with an
+       aria-label), and the preset face is also a <button> so semantics
+       match the example-btns above. */
+    .row.user-presets { margin-top: 6px; }
+    .preset {
+      display: inline-flex;
+      align-items: stretch;
+      border-radius: 3px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+    }
+    .preset:hover { border-color: var(--accent); }
+    .preset > .preset-face {
+      font-family: var(--mono);
+      font-size: 11px;
+      padding: 5px 9px;
+      background: var(--surface-2);
+      color: var(--fg);
+      border: none;
+      border-radius: 0;
+      cursor: pointer;
+      max-width: 180px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .preset > .preset-face:hover { background: var(--bg); }
+    .preset > .preset-del {
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1;
+      padding: 0 7px;
+      background: var(--surface-2);
+      color: var(--fg-dim);
+      border: none;
+      border-left: 1px solid var(--border);
+      border-radius: 0;
+      cursor: pointer;
+    }
+    .preset > .preset-del:hover { background: var(--error); color: var(--bg); }
 
     /* Move-builder UI: drag pieces on the board (or click-to-move) to set
        a position one ply at a time. Move list mirrors what's been played;
@@ -615,7 +659,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">srs-review-queue</span>
+    <span id="buildVersion">user-presets</span>
     <span id="datasetInfo">loading dataset…</span>
     <button id="reviewBadge" class="review-pill" type="button" hidden></button>
   </header>
@@ -640,12 +684,15 @@
       <div class="row">
         <button id="applyBtn">Apply FEN</button>
         <button id="searchBtn" class="primary">Search puzzles</button>
+        <button id="savePresetBtn" title="Save the current position as a preset">Save position</button>
       </div>
       <div class="row examples">
         <button class="example-btn" data-fen="rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1">After 1. e4</button>
         <button class="example-btn" data-fen="rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2">1. e4 e5</button>
         <button class="example-btn" data-fen="r1b5/pp1nkpr1/2q1p3/8/3N4/3B4/P1P2PPP/R2Q1RK1 b - - 4 18">specific puzzle</button>
       </div>
+      <!-- User-saved presets. Hidden when empty; populated by renderUserPresets(). -->
+      <div class="row user-presets" id="userPresetsRow" hidden></div>
     </div>
 
     <div id="drillPanel" class="panel" hidden>
@@ -810,6 +857,27 @@
         applyFen();
       });
 
+      // User-preset buttons. Click the face → load the preset's FEN
+      // (same behavior as example-btn). Click the × → delete with
+      // confirm. Both are delegated since the row is re-rendered on
+      // every save / delete.
+      $('#savePresetBtn').on('click', onSavePresetClick);
+      $('#userPresetsRow').on('click', '.preset-face', function () {
+        var fen = $(this).data('fen');
+        if (!fen) return;
+        $('#fenInput').val(fen);
+        applyFen();
+      });
+      $('#userPresetsRow').on('click', '.preset-del', function (e) {
+        // The face and the × are siblings inside the same .preset wrapper;
+        // clicks on the × bubble up through .preset, which itself has no
+        // handler, so no propagation guard is needed here. The handler is
+        // bound on .preset-del directly.
+        e.stopPropagation();
+        var name = $(this).attr('data-preset-name');
+        if (typeof name === 'string') deleteUserPreset(name);
+      });
+
       // Move-builder buttons.
       $('#undoBtn').on('click', undoSearchMove);
       $('#resetBtn').on('click', resetSearchPosition);
@@ -865,6 +933,7 @@
 
       loadDatasetInfo();
       refreshReviewBadge();
+      renderUserPresets();
     }
 
     function applyFen() {
@@ -2352,6 +2421,151 @@
 
     function setStatus(msg, kind) {
       $('#status').text(msg).attr('data-kind', kind || 'info');
+    }
+
+    // ─── user FEN presets (issue #2) ────────────────────────────────────
+    // localStorage-backed list of {name, fen} the user can save and recall.
+    // Stored as a JSON array; insertion order is presentation order
+    // (newest at the end). Defensive against corrupt JSON / quota /
+    // private-mode failures, same pattern as lib/progress.js. The
+    // hardcoded .example-btn presets above are NOT touched by this
+    // feature — they're uneditable defaults.
+    var PRESETS_STORAGE_KEY = 'puzzle_explorer_presets';
+    var PRESET_NAME_MAX = 60;
+    var PRESET_NAME_MIN = 1;
+
+    function _presetsStorage() {
+      // Wrap localStorage access. Browsers in incognito sometimes throw
+      // on the property access itself (Safari historically); guard at
+      // the call site. Returns null when storage isn't usable.
+      try { return window.localStorage || null; } catch (e) { return null; }
+    }
+    function loadUserPresets() {
+      var s = _presetsStorage();
+      if (!s) return [];
+      var raw;
+      try { raw = s.getItem(PRESETS_STORAGE_KEY); } catch (e) { return []; }
+      if (!raw) return [];
+      var parsed;
+      try { parsed = JSON.parse(raw); } catch (e) { return []; }
+      if (!Array.isArray(parsed)) return [];
+      // Filter to well-formed entries — drop anything corrupt rather
+      // than throwing. A surviving partial list is more useful than a
+      // hard-error page on first load.
+      var out = [];
+      for (var i = 0; i < parsed.length; i++) {
+        var e = parsed[i];
+        if (!e || typeof e !== 'object') continue;
+        if (typeof e.name !== 'string' || typeof e.fen !== 'string') continue;
+        if (!e.name || !e.fen) continue;
+        out.push({ name: e.name, fen: e.fen });
+      }
+      return out;
+    }
+    function saveUserPresets(list) {
+      var s = _presetsStorage();
+      if (!s) return false;
+      try { s.setItem(PRESETS_STORAGE_KEY, JSON.stringify(list)); return true; }
+      catch (e) {
+        // Quota exceeded / private-mode write failure. Surface a status
+        // line so the user knows why their save didn't stick rather
+        // than letting the row silently fail to update.
+        setStatus('Could not save preset — browser storage is full or unavailable.', 'error');
+        return false;
+      }
+    }
+
+    function renderUserPresets() {
+      var list = loadUserPresets();
+      var $row = $('#userPresetsRow').empty();
+      if (!list.length) { $row.prop('hidden', true); return; }
+      $row.prop('hidden', false);
+      for (var i = 0; i < list.length; i++) {
+        var p = list[i];
+        var $wrap = $('<span class="preset"></span>');
+        // Use jQuery .text() / .data() / .attr() for both children — never
+        // string-concat user-supplied names into HTML. Names go through
+        // window.prompt() but defense in depth still matters since the
+        // store could be modified via devtools or restored from a corrupt
+        // export later.
+        var $face = $('<button type="button" class="preset-face"></button>')
+          .text(p.name)
+          .attr('title', p.name + '  ·  ' + p.fen)
+          .data('fen', p.fen);
+        var $del = $('<button type="button" class="preset-del">×</button>')
+          .attr('aria-label', 'Delete preset ' + p.name)
+          .attr('data-preset-name', p.name);
+        $wrap.append($face).append($del);
+        $row.append($wrap);
+      }
+    }
+
+    function onSavePresetClick() {
+      // Use the applied position (chess.fen()), not whatever's typed in
+      // the textarea. Matches example-btn semantics: user must Apply
+      // first if they want to save typed-but-not-committed FEN.
+      if (!chess) {
+        setStatus('Board not ready yet — try again in a moment.', 'warn');
+        return;
+      }
+      var fen;
+      try { fen = chess.fen(); } catch (e) { fen = ''; }
+      if (!fen) {
+        setStatus('Could not read the current position.', 'error');
+        return;
+      }
+      // Defensive: chess.js always emits a valid FEN, but cheap to check.
+      var verify = new Chess();
+      if (!verify.load(fen)) {
+        setStatus('Current position is invalid — cannot save.', 'error');
+        return;
+      }
+
+      var existing = loadUserPresets();
+      var raw = window.prompt('Name this position:');
+      if (raw === null) return;                  // user cancelled
+      var name = raw.trim();
+      if (name.length < PRESET_NAME_MIN) {
+        setStatus('Preset name cannot be empty.', 'warn');
+        return;
+      }
+      if (name.length > PRESET_NAME_MAX) {
+        setStatus('Preset name too long (' + name.length + ' chars; max ' + PRESET_NAME_MAX + ').', 'warn');
+        return;
+      }
+      // Case-insensitive duplicate check. A user expecting "London" to
+      // be distinct from "london" is more confusing than helpful here.
+      var lower = name.toLowerCase();
+      for (var i = 0; i < existing.length; i++) {
+        if (existing[i].name.toLowerCase() === lower) {
+          setStatus('A preset named "' + existing[i].name + '" already exists.', 'warn');
+          return;
+        }
+      }
+
+      existing.push({ name: name, fen: fen });
+      if (!saveUserPresets(existing)) return;    // status set by saveUserPresets
+      renderUserPresets();
+      setStatus('Saved preset "' + name + '".', 'ok');
+    }
+
+    function deleteUserPreset(name) {
+      var list = loadUserPresets();
+      var idx = -1;
+      for (var i = 0; i < list.length; i++) {
+        if (list[i].name === name) { idx = i; break; }
+      }
+      if (idx === -1) {
+        // Name vanished between render and click (corrupt store, or
+        // another tab edited storage). Just re-render and bail.
+        renderUserPresets();
+        return;
+      }
+      if (!window.confirm('Delete preset "' + name + '"?')) return;
+      list.splice(idx, 1);
+      if (!saveUserPresets(list)) return;
+      renderUserPresets();
+      setStatus('Deleted preset "' + name + '".', 'info');
     }
 
     async function loadDatasetInfo() {
