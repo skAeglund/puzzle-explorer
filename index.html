@@ -720,7 +720,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">center-board</span>
+    <span id="buildVersion">auto-next</span>
     <span id="datasetInfo">loading dataset…</span>
     <button id="reviewBadge" class="review-pill" type="button" hidden></button>
   </header>
@@ -799,6 +799,11 @@
       <div class="drill-controls">
         <button id="hintBtn">Hint</button>
         <button id="backBtn" class="primary">Back to results</button>
+        <!-- Session-only setting (hidden in single-puzzle drilling, mirroring
+             the Next-puzzle button's gating). Glyph + label match the
+             color-filter button's lightweight toggle treatment — this is
+             a session preference, not a primary action. -->
+        <button id="autoNextBtn" hidden title="When ON, automatically advance to the next session puzzle after a 1.5s delay (only when the puzzle was solved without errors).">☐ Auto-next</button>
         <a id="lichessLink" class="lichess-link" href="#" target="_blank" rel="noopener">view source game ↗</a>
         <a id="analyzeLink" class="lichess-link" href="#" target="_blank" rel="noopener" title="Open this position on Lichess's analysis board with engine evaluation">analyze on Lichess ↗</a>
       </div>
@@ -891,6 +896,14 @@
     var pendingOppReply = null;  // UCI of opp's auto-reply, scheduled in onSnapEnd
     var oppReplyTimeout = null;  // setTimeout id; cleared on back/destroy
     var introTimeout = null;     // setTimeout id for the pre-puzzle blunder animation
+    // Auto-next: persisted toggle in .drill-controls. When ON, a clean
+    // completion (grade !== Again) in session mode schedules a programmatic
+    // Next-puzzle click after a brief delay. autoNextTimeout tracks the
+    // pending setTimeout so any user action (Back, manual Next, toggle off,
+    // or any document-level mousedown/keydown via the .autonext namespace)
+    // can cancel cleanly. See loadSettings + cancelAutoNext.
+    var autoNextEnabled = false; // populated from localStorage on init
+    var autoNextTimeout = null;  // setTimeout id; cleared on cancel paths
     // Click-to-move state. selectedSquare tracks the user's currently-selected
     // own piece. deselectionPending implements MistakeLab's mousedown/mouseup
     // dance: clicking the already-selected square doesn't deselect immediately
@@ -1020,6 +1033,7 @@
       $('#hintBtn').on('click', onHintClick);
       $('#backBtn').on('click', onBackClick);
       $('#nextPuzzleBtn').on('click', onNextPuzzleClick);
+      $('#autoNextBtn').on('click', onAutoNextToggleClick);
       $('#startSessionBtn').on('click', onStartSessionClick);
       $('#reviewBadge').on('click', onReviewBadgeClick);
       $('#detailsToggleBtn').on('click', onDetailsToggleClick);
@@ -1078,6 +1092,11 @@
       loadDatasetInfo();
       refreshReviewBadge();
       renderUserPresets();
+      // Persisted settings (auto-next toggle today; future settings live in
+      // the same storage object). Loaded after the button is in the DOM
+      // so updateAutoNextBtn can sync the glyph immediately.
+      autoNextEnabled = loadSettings().autoNext;
+      updateAutoNextBtn();
     }
 
     function applyFen() {
@@ -1411,6 +1430,10 @@
       lastSuccessfulUserMove = null;
       if (oppReplyTimeout) { clearTimeout(oppReplyTimeout); oppReplyTimeout = null; }
       if (introTimeout) { clearTimeout(introTimeout); introTimeout = null; }
+      // Auto-next pending? Drop it. enterDrillMode is called when starting
+      // a new puzzle (manual or auto-advance) — either path means a fresh
+      // drill is taking over and any leftover timer would fire mid-puzzle.
+      cancelAutoNext();
       // destroyBoard() below empties #board, taking the highlight DOM
       // classes with it — but keep state vars in sync explicitly.
       clearSelection();
@@ -1486,6 +1509,10 @@
         $('#sessionProgress').prop('hidden', true);
         $('#backBtn').addClass('primary').text('Back to results');
       }
+      // Auto-next is session-only — the Next-puzzle button it triggers only
+      // exists in session mode. Hide the toggle in single-puzzle drilling
+      // so it doesn't suggest a behavior that won't happen.
+      $('#autoNextBtn').prop('hidden', !sessionState);
       // Reset completion-strip + result badges for the new puzzle.
       // destroyBoard() already wipes the board DOM (so square-correct /
       // square-wrong-x classes vanish with it), but be explicit.
@@ -2128,6 +2155,18 @@
         $('#nextPuzzleBtn').prop({ disabled: false, hidden: false }).focus();
         var exitLabel = (sessionState.kind === 'review') ? 'Exit review' : 'Exit session';
         setStatus('Click Next puzzle to continue, or ' + exitLabel + ' to stop.', 'info');
+        // Auto-next: schedule a programmatic Next-click after a brief delay,
+        // BUT only when (a) the toggle is on, (b) the user solved without
+        // errors (Again means they're more likely to want to study the
+        // mistake), and (c) there's actually a next puzzle in the queue.
+        // The last-puzzle case falls through to manual-Next so the user
+        // sees the session-complete state intentionally rather than auto-
+        // sliding into it. setStatus is overridden by scheduleAutoNext.
+        if (autoNextEnabled
+            && grade !== FSRS.GRADE.again
+            && sessionState.cursor + 1 < sessionState.queue.length) {
+          scheduleAutoNext();
+        }
       } else {
         $('#nextPuzzleBtn').prop({ disabled: true, hidden: true });
         setStatus('Click Back to return to results.', 'info');
@@ -2183,6 +2222,9 @@
         clearTimeout(introTimeout);
         introTimeout = null;
       }
+      // Auto-next pending? Cancel — Back is the explicit "stop" signal.
+      // Caller's setStatus below overwrites cancelAutoNext's restore.
+      cancelAutoNext();
       pendingOppReply = null;
       pendingCompletionResult = null;
       var lastPid = drillPuzzle ? drillPuzzle.id : null;
@@ -2364,6 +2406,11 @@
     async function onNextPuzzleClick() {
       if (sessionLoading) return;
       if (!sessionState || sessionState.complete) return;
+      // Cancel any pending auto-next timer. Manual click and auto-fire both
+      // funnel through here; if the timer is mid-flight, clear it so we
+      // don't double-advance. (When auto-fire calls us, autoNextTimeout is
+      // already null — cancelAutoNext is a no-op then.)
+      cancelAutoNext();
       $('#nextPuzzleBtn').prop('disabled', true);
       sessionLoading = true;
       try {
@@ -2392,6 +2439,7 @@
         $('#sessionProgress').prop('hidden', true);
         $('#completionStrip').prop('hidden', true);
         $('#nextPuzzleBtn').prop('hidden', true);
+        $('#autoNextBtn').prop('hidden', true);
         // In review mode there's no result list to return to — Back
         // closes the drill panel and drops the user at search-mode home.
         $('#backBtn').addClass('primary').text(wasReview ? 'Done' : 'Back to results');
@@ -2416,12 +2464,106 @@
         .text(bannerLead + total + bannerTail)
         .prop('hidden', false);
       $('#nextPuzzleBtn').prop({ disabled: true, hidden: true });
+      $('#autoNextBtn').prop('hidden', true);
       $('#hintBtn').prop('disabled', true);
       $('#backBtn').addClass('primary').text(isReview ? 'Done' : 'Back to results');
       var statusMsg = isReview
         ? 'All due reviews cleared. Click Done to return.'
         : 'All unsolved puzzles in range cleared. Back to results to start another session.';
       setStatus(statusMsg, 'ok');
+    }
+
+    // ─── auto-next ──────────────────────────────────────────────────────
+    // Persisted toggle that auto-advances to the next session puzzle a
+    // short delay after a clean completion. Only active in session mode
+    // (single-puzzle drilling has no Next-puzzle button to call). Cancel
+    // surface is broad on purpose — any click or keypress on the page
+    // bails out, matching the user-visible "click anywhere to cancel"
+    // promise. Document-level listeners are namespaced with .autonext so
+    // teardown removes only ours.
+    var AUTO_NEXT_DELAY_MS = 1500;
+
+    function onAutoNextToggleClick() {
+      autoNextEnabled = !autoNextEnabled;
+      saveSettings({ autoNext: autoNextEnabled });
+      updateAutoNextBtn();
+      // Toggling OFF mid-delay should also stop the pending advance.
+      // Toggling ON mid-puzzle does NOT retroactively schedule — the
+      // setting takes effect at the NEXT completion.
+      if (!autoNextEnabled) cancelAutoNext();
+    }
+
+    function updateAutoNextBtn() {
+      // Glyph + label match the color-filter toggle's lightweight style.
+      $('#autoNextBtn').text((autoNextEnabled ? '☑' : '☐') + ' Auto-next');
+    }
+
+    function scheduleAutoNext() {
+      // Caller (handleCompletion) verified: in session, grade != Again,
+      // there's a next puzzle in the queue. Job here is just timer +
+      // status + cancellation listeners.
+      $(document).on('mousedown.autonext keydown.autonext', cancelAutoNext);
+      setStatus('Auto-advancing in 1.5s — click anywhere to cancel.', 'info');
+      autoNextTimeout = setTimeout(function () {
+        autoNextTimeout = null;
+        $(document).off('.autonext');
+        onNextPuzzleClick();
+      }, AUTO_NEXT_DELAY_MS);
+    }
+
+    function cancelAutoNext() {
+      var hadTimer = !!autoNextTimeout;
+      if (hadTimer) {
+        clearTimeout(autoNextTimeout);
+        autoNextTimeout = null;
+      }
+      $(document).off('.autonext');
+      // If we just cancelled an active timer AND we're still showing the
+      // completion strip for the same puzzle, restore the standard "Click
+      // Next…" guidance. Caller paths that follow up with their own
+      // setStatus (Back, manual Next, enterDrillMode) overwrite this — so
+      // it's specifically here for the in-place cancels (toggle off, page
+      // click, keypress) where no caller-side status follows.
+      if (hadTimer && sessionState && drillState && drillState.complete) {
+        var exitLabel = (sessionState.kind === 'review') ? 'Exit review' : 'Exit session';
+        setStatus('Click Next puzzle to continue, or ' + exitLabel + ' to stop.', 'info');
+      }
+    }
+
+    // ─── settings storage ───────────────────────────────────────────────
+    // Single JSON object under puzzle_explorer_settings. Future settings
+    // get added as new keys here rather than each as its own LS entry.
+    // Defensive read pattern matches lib/progress.js / user presets:
+    // any failure (missing / corrupt JSON / non-object) → defaults.
+    var SETTINGS_STORAGE_KEY = 'puzzle_explorer_settings';
+
+    function _settingsStorage() {
+      try { return window.localStorage || null; } catch (e) { return null; }
+    }
+    function loadSettings() {
+      var defaults = { autoNext: false };
+      var s = _settingsStorage();
+      if (!s) return defaults;
+      var raw;
+      try { raw = s.getItem(SETTINGS_STORAGE_KEY); } catch (e) { return defaults; }
+      if (!raw) return defaults;
+      var parsed;
+      try { parsed = JSON.parse(raw); } catch (e) { return defaults; }
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return defaults;
+      // Strict typing on each known key — anything weird falls back to
+      // the default. Forward-compat: unknown keys in stored JSON are
+      // ignored (not echoed back), so an older app version reading a
+      // newer write doesn't carry forward fields it doesn't understand.
+      return { autoNext: parsed.autoNext === true };
+    }
+    function saveSettings(obj) {
+      var s = _settingsStorage();
+      if (!s) return false;
+      try { s.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(obj)); return true; }
+      catch (e) {
+        setStatus('Could not save setting — browser storage is full or unavailable.', 'error');
+        return false;
+      }
     }
 
     // ─── right-click annotations (issue #3) ─────────────────────────────
