@@ -193,6 +193,43 @@ section('gradeForAttempt — puzzle-explorer mapping');
   check('no opts → easy',     F.gradeForAttempt() === F.GRADE.easy);
 }
 
+section('gradeForAttempt — time-based grading for clean solves');
+{
+  // Thresholds: <=10s → easy, 10-60s → good, >60s → hard.
+  // Strict > comparisons, so boundaries land in the lower bucket.
+  check('1ms avg → easy',
+    F.gradeForAttempt({ avgMoveTimeMs: 1 }) === F.GRADE.easy);
+  check('5s avg → easy',
+    F.gradeForAttempt({ avgMoveTimeMs: 5000 }) === F.GRADE.easy);
+  check('exactly 10s → easy (boundary)',
+    F.gradeForAttempt({ avgMoveTimeMs: 10000 }) === F.GRADE.easy);
+  check('10.001s → good',
+    F.gradeForAttempt({ avgMoveTimeMs: 10001 }) === F.GRADE.good);
+  check('30s avg → good',
+    F.gradeForAttempt({ avgMoveTimeMs: 30000 }) === F.GRADE.good);
+  check('exactly 60s → good (boundary)',
+    F.gradeForAttempt({ avgMoveTimeMs: 60000 }) === F.GRADE.good);
+  check('60.001s → hard',
+    F.gradeForAttempt({ avgMoveTimeMs: 60001 }) === F.GRADE.hard);
+  check('120s avg → hard',
+    F.gradeForAttempt({ avgMoveTimeMs: 120000 }) === F.GRADE.hard);
+
+  // Hint dominates time-based logic
+  check('hint + fast → hard',
+    F.gradeForAttempt({ hintUsed: true, avgMoveTimeMs: 1000 }) === F.GRADE.hard);
+  // Wrong dominates everything
+  check('wrong + slow → again',
+    F.gradeForAttempt({ wrong: true, avgMoveTimeMs: 100000 }) === F.GRADE.again);
+
+  // Non-finite / non-number avgMoveTimeMs falls through to easy (legacy)
+  check('null avg → easy',
+    F.gradeForAttempt({ avgMoveTimeMs: null }) === F.GRADE.easy);
+  check('NaN avg → easy',
+    F.gradeForAttempt({ avgMoveTimeMs: NaN }) === F.GRADE.easy);
+  check('string avg → easy',
+    F.gradeForAttempt({ avgMoveTimeMs: '30000' }) === F.GRADE.easy);
+}
+
 // ─── due-date computation: review now, due field is set N days later ─────
 section('scheduling: due-date arithmetic across DST-ish dates');
 {

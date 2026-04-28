@@ -185,6 +185,105 @@ section('Drill.userColor');
   check('weird side defaults to w', Drill.userColor({ fen: 'rn... ? KQkq - 0 1' }) === 'w');
 }
 
+section('Drill timing — userMoveCount + computeAvgMoveTimeMs');
+{
+  // Solution alternates user/opp starting with user, so user gets ceil(N/2)
+  check('1-move solution → 1 user move',  Drill.userMoveCount(Drill.start(PUZZLE_1)) === 1);
+  check('3-move solution → 2 user moves', Drill.userMoveCount(Drill.start(PUZZLE_3)) === 2);
+
+  // No markSolveStart → null (timing not engaged)
+  let s = Drill.start(PUZZLE_3);
+  check('no solveStartedAt → avg=null',
+    Drill.computeAvgMoveTimeMs(s, new Date()) === null);
+
+  // markSolveStart sets the baseline
+  const t0 = new Date('2026-01-01T12:00:00Z');
+  s = Drill.markSolveStart(s, t0);
+  check('markSolveStart sets solveStartedAt', typeof s.solveStartedAt === 'number');
+
+  // 20s elapsed, 2 user moves → 10s avg
+  const t20s = new Date(t0.getTime() + 20000);
+  check('20s/2 moves → 10000ms avg',
+    Drill.computeAvgMoveTimeMs(s, t20s) === 10000);
+
+  // markSolveStart is idempotent — second call doesn't reset the timer
+  let s2 = Drill.markSolveStart(s, new Date(t0.getTime() + 5000));
+  check('markSolveStart idempotent', s2.solveStartedAt === s.solveStartedAt);
+
+  // Negative elapsed (clock skew or now < start) → null, not a negative avg
+  const tBefore = new Date(t0.getTime() - 1000);
+  check('negative elapsed → null',
+    Drill.computeAvgMoveTimeMs(s, tBefore) === null);
+}
+
+section('Drill grading — clean solve, time-based');
+{
+  const t0 = new Date('2026-01-01T12:00:00Z');
+  // PUZZLE_3: user moves are 'e2g4' and 'd1g4' (2 user moves)
+
+  // Fast solve: 2 moves in 8s → 4s avg → Easy
+  let s = Drill.markSolveStart(Drill.start(PUZZLE_3), t0);
+  let r = Drill.attemptUserMove(s, 'e2g4', { now: new Date(t0.getTime() + 4000) });
+  r = Drill.attemptUserMove(r.state, 'd1g4', { now: new Date(t0.getTime() + 8000) });
+  check('fast clean solve (4s avg) → easy',  r.toRecord === FSRS.GRADE.easy);
+  check('avgMoveTimeMs stored on state',     r.state.avgMoveTimeMs === 4000);
+
+  // Medium: 2 moves in 50s → 25s avg → Good
+  s = Drill.markSolveStart(Drill.start(PUZZLE_3), t0);
+  r = Drill.attemptUserMove(s, 'e2g4', { now: new Date(t0.getTime() + 30000) });
+  r = Drill.attemptUserMove(r.state, 'd1g4', { now: new Date(t0.getTime() + 50000) });
+  check('medium clean solve (25s avg) → good', r.toRecord === FSRS.GRADE.good);
+
+  // Slow: 2 moves in 150s → 75s avg → Hard
+  s = Drill.markSolveStart(Drill.start(PUZZLE_3), t0);
+  r = Drill.attemptUserMove(s, 'e2g4', { now: new Date(t0.getTime() + 70000) });
+  r = Drill.attemptUserMove(r.state, 'd1g4', { now: new Date(t0.getTime() + 150000) });
+  check('slow clean solve (75s avg) → hard',   r.toRecord === FSRS.GRADE.hard);
+
+  // Boundary: exactly 10s avg → easy (strict > comparison)
+  s = Drill.markSolveStart(Drill.start(PUZZLE_3), t0);
+  r = Drill.attemptUserMove(s, 'e2g4', { now: new Date(t0.getTime() + 10000) });
+  r = Drill.attemptUserMove(r.state, 'd1g4', { now: new Date(t0.getTime() + 20000) });
+  check('exactly 10s avg → easy (boundary)',   r.toRecord === FSRS.GRADE.easy);
+
+  // Boundary: exactly 60s avg → good (strict > comparison)
+  s = Drill.markSolveStart(Drill.start(PUZZLE_3), t0);
+  r = Drill.attemptUserMove(s, 'e2g4', { now: new Date(t0.getTime() + 50000) });
+  r = Drill.attemptUserMove(r.state, 'd1g4', { now: new Date(t0.getTime() + 120000) });
+  check('exactly 60s avg → good (boundary)',   r.toRecord === FSRS.GRADE.good);
+}
+
+section('Drill grading — timing does NOT override hint or wrong');
+{
+  const t0 = new Date('2026-01-01T12:00:00Z');
+  // Hint + fast solve → still Hard (hint dominates)
+  let s = Drill.markSolveStart(Drill.start(PUZZLE_3), t0);
+  s = Drill.requestHint(s).state;
+  let r = Drill.attemptUserMove(s, 'e2g4', { now: new Date(t0.getTime() + 1000) });
+  r = Drill.attemptUserMove(r.state, 'd1g4', { now: new Date(t0.getTime() + 2000) });
+  check('hint + fast → hard (hint wins)',  r.toRecord === FSRS.GRADE.hard);
+
+  // Wrong + slow solve → still locked at Again from first wrong
+  s = Drill.markSolveStart(Drill.start(PUZZLE_3), t0);
+  r = Drill.attemptUserMove(s, 'a2a4', { now: new Date(t0.getTime() + 5000) });
+  check('first wrong → again',             r.toRecord === FSRS.GRADE.again);
+  r = Drill.attemptUserMove(r.state, 'e2g4', { now: new Date(t0.getTime() + 200000) });
+  r = Drill.attemptUserMove(r.state, 'd1g4', { now: new Date(t0.getTime() + 400000) });
+  check('wrong + slow finish → still again', r.state.gradeRecorded === FSRS.GRADE.again);
+}
+
+section('Drill grading — backward-compat: no timing engaged → Easy');
+{
+  // Existing tests above already cover this (no markSolveStart calls).
+  // Add an explicit assertion to document the contract.
+  let s = Drill.start(PUZZLE_3);
+  let r = Drill.attemptUserMove(s, 'e2g4');
+  r = Drill.attemptUserMove(r.state, 'd1g4');
+  check('no markSolveStart → grade=easy',  r.toRecord === FSRS.GRADE.easy);
+  check('no markSolveStart → avgMoveTimeMs=null',
+    r.state.avgMoveTimeMs === null);
+}
+
 // ━━━ PROGRESS storage ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 function freshStorage() {

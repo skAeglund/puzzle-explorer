@@ -171,8 +171,17 @@
 
     .row { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
     .row > button { flex: 0 0 auto; }
+    /* Search row sits at the top of the panel, no row above it — zero
+       top margin so the panel padding alone provides breathing room.
+       Button stretches full-width to feel intentional, not orphaned. */
+    .row.search-row { margin-top: 0; }
+    .row.search-row > button { flex: 1 1 auto; }
     .row.examples { margin-top: 10px; }
     .row.examples > button { font-size: 11px; padding: 5px 9px; }
+    /* When expanded, the FEN-tools section needs the same vertical
+       breathing room as a .row would give. The inner Apply-FEN row has
+       its own .row margin-top, so we just lift the top edge here. */
+    #fenTools { margin-top: 8px; }
     /* User presets — same compact look as the examples row but with an
        inline × delete handle. The preset button + × handle are a single
        composite affordance laid out as inline-flex so they hug each other
@@ -263,17 +272,10 @@
       font-size: 11px;
       padding: 5px 9px;
     }
-    /* Toggle-button "active" state (matches Lichess's settings-toggle look).
-       Used by the color-filter button to show "My color only" is on. */
-    .move-controls > button.active {
-      background: var(--accent);
-      color: var(--bg);
-      border-color: var(--accent);
-    }
-    .move-controls > button.active:hover {
-      background: var(--accent-hover);
-      border-color: var(--accent-hover);
-    }
+    /* (No .active state — the color-filter toggle now indicates its
+       state with a ☐/☑ glyph in the label, keeping it visually equal
+       to the other move-controls buttons rather than stealing focus
+       with an accent fill.) */
 
     #status {
       font-size: 12px;
@@ -356,6 +358,24 @@
       text-overflow: ellipsis;
       white-space: nowrap;
     }
+    /* Small toggle next to id+rating — hides themes + opening by default
+       to avoid inadvertent solution hints (themes like 'mateIn1' or
+       'discoveredAttack' can give the puzzle away) and to save vertical
+       space on mobile. The opening is already implied by the user's
+       search, so showing it back is redundant. */
+    .details-toggle {
+      font-family: var(--mono);
+      font-size: 10px;
+      padding: 2px 7px;
+      background: transparent;
+      color: var(--fg-dim);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      cursor: pointer;
+      letter-spacing: 0.04em;
+      text-transform: lowercase;
+    }
+    .details-toggle:hover { border-color: var(--accent); color: var(--fg); }
     .drill-controls { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
     .lichess-link {
       font-size: 12px;
@@ -620,19 +640,20 @@
     }
     .session-progress.complete { color: var(--ok); }
 
-    /* Completion strip — appears at the bottom of the drill panel when the
-       puzzle is solved. Holds the result text on the left (color-coded by
-       grade) and a prominent "Next puzzle" CTA on the right (session
-       mode only — single-puzzle mode shows just the text). Border-top
-       separates it from the controls row above. */
+    /* Completion strip — appears at the TOP of the drill panel when the
+       puzzle is solved (closest to the board, where the user's eye lands).
+       Holds the result text on the left (color-coded by grade) and a
+       prominent "Next puzzle" CTA on the right (session mode only —
+       single-puzzle mode shows just the text). Border-bottom separates
+       it from the puzzle metadata (id/rating/themes/opening) below. */
     .completion-strip {
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 12px;
-      margin-top: 12px;
-      padding-top: 12px;
-      border-top: 1px solid var(--border);
+      margin-bottom: 12px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--border);
       flex-wrap: wrap;
     }
     .completion-text {
@@ -681,7 +702,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">audit-cleanup</span>
+    <span id="buildVersion">time-grading-and-ui-polish</span>
     <span id="datasetInfo">loading dataset…</span>
     <button id="reviewBadge" class="review-pill" type="button" hidden></button>
   </header>
@@ -697,6 +718,14 @@
     </div>
 
     <div id="searchPanel" class="panel">
+      <!-- Search action sits at the very top of the panel — closest to the
+           board, where the user's eye lands after setting up a position
+           (via drag/click, FEN paste+Apply, or preset). The setup tools
+           below are means; Search is the action. Full-width to feel
+           intentional rather than orphaned. -->
+      <div class="row search-row">
+        <button id="searchBtn" class="primary">Search puzzles</button>
+      </div>
       <div id="moveBuilder">
         <div id="moveBuilderHelp">Drag pieces on the board (or click-to-move) to set a position from the start.</div>
         <div id="moveList" class="empty">starting position</div>
@@ -704,18 +733,25 @@
           <button id="undoBtn" title="Undo last move">Undo</button>
           <button id="resetBtn" title="Reset to start position">Reset</button>
           <button id="flipBtn" title="Flip board orientation">Flip</button>
-          <button id="colorFilterBtn" title="Filter puzzles by board orientation (the color you're playing)">My color only</button>
+          <button id="colorFilterBtn" title="Filter puzzles by board orientation (the color you're playing)">☑ My color only</button>
         </div>
       </div>
-      <label for="fenInput">Position FEN</label>
-      <textarea id="fenInput" rows="2"
-        placeholder="Paste a FEN here…"></textarea>
       <div class="row">
-        <button id="applyBtn">Apply FEN</button>
-        <button id="searchBtn" class="primary">Search puzzles</button>
+        <button id="fenToggleBtn" type="button" title="Show the FEN paste field">Paste FEN…</button>
         <button id="savePresetBtn" title="Save the current position as a preset">Save position</button>
       </div>
-      <div class="row examples">
+      <!-- FEN paste tools hidden by default — pasting a FEN is rare next to
+           building up a position by dragging pieces. Toggled open via the
+           Paste-FEN button. -->
+      <div id="fenTools" hidden>
+        <label for="fenInput">Position FEN</label>
+        <textarea id="fenInput" rows="2"
+          placeholder="Paste a FEN here…"></textarea>
+        <div class="row">
+          <button id="applyBtn">Apply FEN</button>
+        </div>
+      </div>
+      <div class="row examples" id="examplesRow">
         <button class="example-btn" data-fen="rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1">After 1. e4</button>
         <button class="example-btn" data-fen="rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2">1. e4 e5</button>
         <button class="example-btn" data-fen="r1b5/pp1nkpr1/2q1p3/8/3N4/3B4/P1P2PPP/R2Q1RK1 b - - 4 18">specific puzzle</button>
@@ -725,24 +761,28 @@
     </div>
 
     <div id="drillPanel" class="panel" hidden>
+      <!-- Completion strip — populated and shown by handleCompletion.
+           Lives at the TOP of the panel so feedback + the Next-puzzle CTA
+           sit closest to the board (where the user's eye lands after
+           solving). The Next-puzzle button inside is itself toggled by
+           session mode. -->
+      <div id="completionStrip" class="completion-strip" hidden>
+        <span id="completionText" class="completion-text"></span>
+        <button id="nextPuzzleBtn" class="primary big-cta" disabled hidden>Next puzzle →</button>
+      </div>
       <div class="session-progress" id="sessionProgress" hidden></div>
       <div class="drill-header">
         <span class="drill-id" id="drillId">—</span>
         <span class="drill-rating" id="drillRating">—</span>
+        <button id="detailsToggleBtn" class="details-toggle" hidden>show details</button>
       </div>
-      <div class="drill-themes" id="drillThemes"></div>
-      <div class="drill-opening" id="drillOpening"></div>
+      <div class="drill-themes" id="drillThemes" hidden></div>
+      <div class="drill-opening" id="drillOpening" hidden></div>
       <div class="drill-controls">
         <button id="hintBtn">Hint</button>
         <button id="backBtn" class="primary">Back to results</button>
         <a id="lichessLink" class="lichess-link" href="#" target="_blank" rel="noopener">view source game ↗</a>
         <a id="analyzeLink" class="lichess-link" href="#" target="_blank" rel="noopener" title="Open this position on Lichess's analysis board with engine evaluation">analyze on Lichess ↗</a>
-      </div>
-      <!-- Completion strip — populated and shown by handleCompletion. The
-           Next-puzzle button inside is itself toggled by session mode. -->
-      <div id="completionStrip" class="completion-strip" hidden>
-        <span id="completionText" class="completion-text"></span>
-        <button id="nextPuzzleBtn" class="primary big-cta" disabled hidden>Next puzzle →</button>
       </div>
     </div>
 
@@ -816,11 +856,20 @@
     // Color-of-perspective filter. When true (default), search results are
     // filtered to puzzles whose side-to-move matches searchOrientation —
     // i.e. you only see puzzles where the color you're playing is the one
-    // about to move. Toggled via the "All colors" / "My color only" button
-    // in the move-controls row. Filtering happens in searchPuzzles before
-    // rendering and caching, so session-mode + back-from-drill see the
-    // already-filtered set.
+    // about to move. Toggled via the "My color only" button (with ☐/☑
+    // glyph indicating state) in the move-controls row. Filtering
+    // happens in searchPuzzles before rendering and caching, so
+    // session-mode + back-from-drill see the already-filtered set.
     var matchOwnColorOnly = true;
+    // Themes + opening hidden by default. Themes can spoil the solution
+    // (e.g. 'mateIn2', 'discoveredAttack') and the opening is already
+    // implied — the user filtered to a position that came FROM that
+    // opening, so showing the name back is mostly redundant. Both eat a
+    // row of vertical space we don't want competing with the board on
+    // mobile. Toggled per-page-load via the details-toggle button in the
+    // drill header; no persistence (matches matchOwnColorOnly's
+    // precedent — page reload returns to default).
+    var showDetails = false;
     var pendingOppReply = null;  // UCI of opp's auto-reply, scheduled in onSnapEnd
     var oppReplyTimeout = null;  // setTimeout id; cleared on back/destroy
     var introTimeout = null;     // setTimeout id for the pre-puzzle blunder animation
@@ -899,6 +948,7 @@
       });
 
       $('#applyBtn').on('click', applyFen);
+      $('#fenToggleBtn').on('click', onFenToggleClick);
       $('#searchBtn').on('click', searchPuzzles);
       $('#fenInput').on('keydown', function (e) {
         if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); applyFen(); }
@@ -943,6 +993,7 @@
       $('#nextPuzzleBtn').on('click', onNextPuzzleClick);
       $('#startSessionBtn').on('click', onStartSessionClick);
       $('#reviewBadge').on('click', onReviewBadgeClick);
+      $('#detailsToggleBtn').on('click', onDetailsToggleClick);
       // Slider 'input' fires continuously as the user drags; 'change'
       // fires only on release. Use 'input' for live count + fill updates.
       $('#ratingMin, #ratingMax').on('input', onRatingSliderInput);
@@ -1035,6 +1086,26 @@
       lastMatches = null;
     }
 
+    // Toggle the FEN-paste section. Hidden by default — pasting raw FEN
+    // is rare next to the build-by-dragging workflow. On expand we focus
+    // and select the textarea so the user can paste immediately, and the
+    // button label flips so the toggle is reversible.
+    function onFenToggleClick() {
+      var $tools = $('#fenTools');
+      var willShow = $tools.prop('hidden');
+      $tools.prop('hidden', !willShow);
+      $('#fenToggleBtn').text(willShow ? 'Hide FEN' : 'Paste FEN…');
+      if (willShow) {
+        // Defer to next tick: the textarea was display:none until the
+        // line above; some browsers refuse focus on an element that
+        // wasn't visible at the moment focus() was called.
+        setTimeout(function () {
+          var ta = document.getElementById('fenInput');
+          if (ta) { ta.focus(); ta.select(); }
+        }, 0);
+      }
+    }
+
     async function searchPuzzles() {
       if (typeof fenPositionKey !== 'function') {
         setStatus('lib/posKey.js failed to load — check the network tab.', 'error');
@@ -1084,7 +1155,7 @@
             // All matches were the wrong color. Tell the user how to see them.
             setStatus(rawMatches.length + ' match' +
               (rawMatches.length === 1 ? '' : 'es') +
-              ' found, but none match your color. Click "All colors" or Flip the board.', 'info');
+              ' found, but none match your color. Uncheck "My color only" or Flip the board.', 'info');
           } else {
             setStatus('No puzzles found at this position. (Shard ' + shard + ' fetched, but the position key isn\'t indexed.)', 'info');
           }
@@ -1334,8 +1405,15 @@
       $('#drillId').text(puzzle.id);
       $('#drillRating').text(puzzle.rating ? ('rating ' + puzzle.rating) : '');
       var themesText = (puzzle.themes && puzzle.themes.length) ? puzzle.themes.join(' · ') : '';
-      $('#drillThemes').text(themesText).toggle(!!themesText);
-      $('#drillOpening').text(puzzle.opening || '').toggle(!!puzzle.opening);
+      var openingText = puzzle.opening || '';
+      // Themes + opening default-hidden. Toggle button is itself only
+      // visible when at least ONE of them has content — no point offering
+      // to reveal nothing. Both rows respect showDetails.
+      $('#drillThemes').text(themesText).toggle(!!themesText && showDetails);
+      $('#drillOpening').text(openingText).toggle(!!openingText && showDetails);
+      $('#detailsToggleBtn')
+        .toggle(!!themesText || !!openingText)
+        .text(showDetails ? 'hide details' : 'show details');
       // Normalize the source-game URL (issue #5). Han Schut's PGN data
       // sometimes stores the Site header without a scheme (e.g.
       // 'lichess.org/training/...'), which makes the browser resolve
@@ -1444,6 +1522,7 @@
             chess.load(puzzle.fen);
             if (board) board.position(puzzle.fen, false);
             showCheck(chess);
+            drillState = Drill.markSolveStart(drillState, new Date());
             setStatus('(could not animate setup move ' + uci + ') Your move.', 'warn');
             return;
           }
@@ -1452,12 +1531,20 @@
           // the player's king if applicable. Deferred so the highlights
           // survive the position-animation's DOM rebuild.
           applyLastMoveAndCheckDeferred(m.from, m.to);
+          // Start the solve clock NOW — the user can finally move. Doing
+          // it here (vs at Drill.start) excludes the 700ms intro delay
+          // from the time-based grading; without this, the first user
+          // move's "thinking time" would be inflated by ~700ms which
+          // matters at the 10s/move (Easy) threshold.
+          drillState = Drill.markSolveStart(drillState, new Date());
           setStatus('Your move.', 'info');
         }, 700);
       } else {
         // No-intro path: still surface check on the puzzle's starting
         // position (e.g. mate-in-1 with the user already in check).
         showCheck(chess);
+        // Start the solve clock — same as the intro path's tail.
+        drillState = Drill.markSolveStart(drillState, new Date());
         setStatus('Your move.', 'info');
       }
     }
@@ -1619,7 +1706,9 @@
       if (!moveObj) return { ok: false };
 
       var uci = moveObj.from + moveObj.to + (moveObj.promotion || '');
-      var result = Drill.attemptUserMove(drillState, uci);
+      // Pass `now` so completion-time grading can compute avgMoveTimeMs
+      // against the solveStartedAt baseline set in enterDrillMode.
+      var result = Drill.attemptUserMove(drillState, uci, { now: new Date() });
       drillState = result.state;
 
       if (result.result === 'wrong') {
@@ -1852,14 +1941,14 @@
         : 'Showing puzzles for both colors. Click Search.', 'info');
     }
 
-    // Sync the color-filter button's label + active class to state.
+    // Sync the color-filter button's label to state. Label name stays
+    // constant ("My color only") — the leading ☐/☑ glyph carries the
+    // on/off info. This is intentionally less attention-grabbing than
+    // the previous accent-fill .active style: the filter is one of
+    // several setup tools, not a primary action.
     function updateColorFilterBtn() {
       var $btn = $('#colorFilterBtn');
-      if (matchOwnColorOnly) {
-        $btn.addClass('active').text('My color only');
-      } else {
-        $btn.removeClass('active').text('All colors');
-      }
+      $btn.text((matchOwnColorOnly ? '☑' : '☐') + ' My color only');
     }
 
     // Filter a freshly-fetched matches array by the perspective rule.
@@ -1944,15 +2033,30 @@
         refreshReviewBadge();
       }
       var grade = drillState.gradeRecorded;
+      var avgMs = drillState.avgMoveTimeMs;  // null if timing wasn't engaged
+      var avgStr = (typeof avgMs === 'number' && Number.isFinite(avgMs))
+        ? '~' + Math.round(avgMs / 1000) + 's/move'
+        : '';
       var msg, kind;
       if (grade === FSRS.GRADE.again) {
         msg = '✗ Solved with errors — graded Again.';
         kind = 'error';
       } else if (grade === FSRS.GRADE.hard) {
-        msg = '✓ Solved with a hint — graded Hard.';
+        // Hard comes from either: hint used, OR clean+slow (>60s/move).
+        // Disambiguate via hintUsed so the user knows WHY they got Hard.
+        msg = drillState.hintUsed
+          ? '✓ Solved with a hint — graded Hard.'
+          : '✓ Solved slowly (' + avgStr + ') — graded Hard.';
         kind = 'warn';
+      } else if (grade === FSRS.GRADE.good) {
+        msg = '✓ Solved (' + avgStr + ') — graded Good.';
+        kind = 'ok';
       } else {
-        msg = '✓ Solved cleanly — graded Easy.';
+        // Easy. Append avg time only when known (timing engaged); legacy
+        // / no-timing path keeps the original short message.
+        msg = avgStr
+          ? '✓ Solved cleanly (' + avgStr + ') — graded Easy.'
+          : '✓ Solved cleanly — graded Easy.';
         kind = 'ok';
       }
       // Result text moves into the completion strip (between the controls
@@ -2000,6 +2104,20 @@
       // One-hint policy per project doc — don't escalate to level 2 (full
       // arrow). A second hint = solution.
       $('#hintBtn').prop('disabled', true);
+    }
+
+    // Details-toggle: flips showDetails for the rest of the page-load.
+    // The change is purely visual — the themes + opening rows get shown/
+    // hidden together and the button label flips. No re-fetch, no
+    // state-machine touch. Subsequent puzzles in the same session pick
+    // up the new default via enterDrillMode.
+    function onDetailsToggleClick() {
+      showDetails = !showDetails;
+      var hasThemes  = $('#drillThemes').text().length > 0;
+      var hasOpening = $('#drillOpening').text().length > 0;
+      $('#drillThemes').toggle(hasThemes && showDetails);
+      $('#drillOpening').toggle(hasOpening && showDetails);
+      $('#detailsToggleBtn').text(showDetails ? 'hide details' : 'show details');
     }
 
     function onBackClick() {
@@ -2953,6 +3071,12 @@
     function renderUserPresets() {
       var list = loadUserPresets();
       var $row = $('#userPresetsRow').empty();
+      // The hardcoded demo presets above are useful as orientation when
+      // the saved-presets list is empty, and pure noise once the user has
+      // curated their own. Toggle them as the inverse of the saved list.
+      // Self-healing: if the user ever deletes all their saved presets,
+      // the demos return to help re-orient.
+      $('#examplesRow').prop('hidden', list.length > 0);
       if (!list.length) { $row.prop('hidden', true); return; }
       $row.prop('hidden', false);
       for (var i = 0; i < list.length; i++) {
