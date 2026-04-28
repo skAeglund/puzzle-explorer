@@ -763,7 +763,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">pwa</span>
+    <span id="buildVersion">r2-publish</span>
     <span id="datasetInfo">loading dataset…</span>
     <button id="reviewBadge" class="review-pill" type="button" hidden></button>
   </header>
@@ -900,9 +900,14 @@
     var board = null;
     var chess = null;
     var MAX_RESULTS = 100;       // cap visible matches; filters/pagination later
-    // Shards live in a sibling repo (puzzle-explorer-data) served via its own
-    // Pages site. Cross-origin fetch is fine — Pages sets ACAO:* by default.
+    // Shards are served from a static host — either a Pages site (small datasets,
+    // 1GB cap) or a Cloudflare R2 bucket via its public dev URL or custom domain
+    // (no quota concerns; analyzer/publish-r2.js handles the upload). Either
+    // way, cross-origin fetch is fine — Pages sets ACAO:* by default and R2
+    // honors the bucket's CORS rules (configure once via the Cloudflare dash).
+    // Trailing slash is enforced below so the constant tolerates either form.
     var DATA_BASE_URL = 'https://skaeglund.github.io/puzzle-explorer-data/';
+    if (DATA_BASE_URL && DATA_BASE_URL.charAt(DATA_BASE_URL.length - 1) !== '/') DATA_BASE_URL += '/';
 
     // ─── meta.json + cache bootstrap ──────────────────────────────────────
     // We fetch meta.json exactly once per page load and share the result

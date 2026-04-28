@@ -45,6 +45,38 @@ After setup, every rebuild is one command:
 node analyzer/publish-data.js
 ```
 
+For datasets larger than the GitHub Pages 1GB cap (~3M+ puzzles after the
+per-position rating cap), publish to a Cloudflare R2 bucket instead — same
+ETag-based skip-unchanged behavior, no quota concerns, free egress via
+Cloudflare's CDN. Set R2 credentials in env (`R2_ACCOUNT_ID`, `R2_BUCKET`,
+`R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`) or a `.env.r2` file alongside the
+data dir, then point `DATA_BASE_URL` in `index.html` at the bucket's public
+URL. See `analyzer/publish-r2.js` header for full setup details.
+
+```sh
+node analyzer/publish-r2.js [--dry-run] [--prefix v1]
+```
+
+## Extend the puzzle set
+
+Han's set covers ~1.2M opening puzzles through Sept 2022. To extend coverage
+through the current Lichess CSV (~5.88M puzzles), use the importers:
+
+```sh
+# 1. Convert mcognetta's combined puzzle+game ndjson (Sept 2022 snapshot)
+#    into Han-format PGN, skipping puzzles already in our data:
+node analyzer/import-mcognetta.js mcognetta.ndjson.bz2 mcognetta-delta.pgn \
+    --skip-data ./data
+
+# 2. Fetch source-game JSON via the Lichess API for everything not yet
+#    covered, with checkpoint-based resumability across multi-hour runs:
+node analyzer/fetch-deltas.js lichess_db_puzzle.csv.zst api-delta.pgn \
+    --skip-data ./data
+```
+
+Concatenate the resulting PGNs into one input file and re-run
+`build-index.js` to produce the full set.
+
 ## Slice a sample fixture
 
 ```sh
