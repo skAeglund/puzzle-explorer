@@ -88,14 +88,9 @@
       outline-offset: 2px;
     }
 
-    #board {
-      width: 100%;
-      max-width: 400px;
-      margin: 0 auto 16px;
-    }
     /* Board wrapper — establishes a positioned context for the
-       annotation SVG to overlay. Width matches #board's max-width so
-       the SVG and the board share the same bounding box. */
+       annotation SVG to overlay. Width matches the previous standalone
+       #board so the board+SVG share the same bounding box. */
     #boardWrap {
       position: relative;
       width: 100%;
@@ -103,11 +98,9 @@
       margin: 0 auto 16px;
     }
     #boardWrap > #board {
-      /* Inside the wrapper, drop the auto-margin / max-width — the
-         wrapper owns those now. Keeping width:100% so chessboard.js
-         expands to fill the wrapper. */
+      /* The wrapper owns width/max-width/margin now. width:100% lets
+         chessboard.js expand to fill the wrapper. */
       width: 100%;
-      max-width: none;
       margin: 0;
     }
     /* Annotation overlay — pinned to the board's rect via JS each
@@ -688,7 +681,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">site-url-normalize</span>
+    <span id="buildVersion">audit-cleanup</span>
     <span id="datasetInfo">loading dataset…</span>
     <button id="reviewBadge" class="review-pill" type="button" hidden></button>
   </header>
@@ -1026,6 +1019,10 @@
       clearLastMove();
       clearCheck();
       showCheckDeferred(c);
+      // Drawn annotations are anchored to specific squares of the OLD
+      // position; the new FEN may put different pieces on those squares.
+      // Clear so a misleading arrow doesn't survive (issue #3 follow-up).
+      if (hasAnyAnnotations()) clearAnnotations();
       updateMoveListDisplay();
       updateFenInputFromBoard();
       setStatus('Position loaded. Click Search.', 'ok');
@@ -1321,11 +1318,11 @@
       // Cancel any in-flight right-click + wipe drawn annotations
       // (issue #3). Mode swap re-orients the board, so coordinates
       // saved against the old orientation would render wrong anyway.
+      // clearAnnotations() handles ghostArrow/ghostCircle/ghostCircle-
+      // WasColor + the active Maps; the gesture vars below are not
+      // touched by it and must reset explicitly.
       isRightClicking = false;
       arrowStartSquare = null;
-      ghostArrow = null;
-      ghostCircle = null;
-      ghostCircleWasColor = null;
       clearAnnotations();
 
       // Swap panels.
@@ -1502,11 +1499,10 @@
       lastSuccessfulUserMove = null;
       // Annotation state too (issue #3) — orientation may have changed
       // and the SVG is anchored to the old board's bounding box.
+      // clearAnnotations() handles ghost* + active Maps; gesture vars
+      // below it are not touched by clear and must reset explicitly.
       isRightClicking = false;
       arrowStartSquare = null;
-      ghostArrow = null;
-      ghostCircle = null;
-      ghostCircleWasColor = null;
       clearAnnotations();
       // Surface the most recently played move (if any) and check status,
       // so e.g. coming back from drill with 1.e4 e5 played still shows the
@@ -1802,6 +1798,9 @@
       if (board) board.position('start', false);
       clearLastMove();
       clearCheck();
+      // Drawn annotations are anchored to squares of the previous
+      // position; resetting to start makes them stale (issue #3 follow-up).
+      if (hasAnyAnnotations()) clearAnnotations();
       updateMoveListDisplay();
       updateFenInputFromBoard();
       $('#results').empty();
@@ -2337,13 +2336,9 @@
 
       // Pin SVG to the board's exact rect within the wrapper. Read both
       // rects each render — the board may have resized (window resize,
-      // mode swap, etc.) and chessboard.js doesn't notify us.
-      var boardRect = svg.parentElement.querySelector('#board')
-        ? boardEl.getBoundingClientRect() : null;
-      if (!boardRect) {
-        svg.classList.add('hidden');
-        return;
-      }
+      // mode swap, etc.) and chessboard.js doesn't notify us. boardEl
+      // is non-null at this point (guarded above).
+      var boardRect = boardEl.getBoundingClientRect();
       var wrapRect = svg.parentElement.getBoundingClientRect();
       svg.style.left = (boardRect.left - wrapRect.left) + 'px';
       svg.style.top  = (boardRect.top  - wrapRect.top ) + 'px';
@@ -2659,9 +2654,11 @@
         var rsqEl = (e.target && e.target.closest) ? e.target.closest('[data-square]') : null;
         var rsq = rsqEl ? rsqEl.getAttribute('data-square') : null;
         if (!rsq) {
-          // Click landed off any square (notation label, padding). Treat
-          // as a no-op draw start; mouseup with arrowStartSquare === null
-          // does nothing.
+          // Click landed off any square (notation label, padding).
+          // isRightClicking stays true so a subsequent mouseup still
+          // resolves cleanly via the unconditional state-cleanup path
+          // in onBoardMouseUp; all three commit branches there require
+          // arrowStartSquare truthy, so nothing is committed.
           return;
         }
         arrowStartSquare = rsq;
@@ -2892,7 +2889,8 @@
       //   board:    rank/rank/rank/.../rank   ← slashes literal
       //   metadata: side, castling, EP, halfmove, fullmove
       var parts = fen.split(/\s+/);
-      if (!parts.length) return '#';
+      // String.split always returns ≥1 element, so parts[0] is always
+      // defined. Empty FEN is already handled by the guard at the top.
       var board = parts[0].split('/').map(encodeURIComponent).join('/');
       var meta = parts.slice(1).map(encodeURIComponent);
       var encoded = [board].concat(meta).join('%20');
