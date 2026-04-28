@@ -176,7 +176,10 @@ function appendCheckpoint(checkpointDir, ids) {
 // ─── HTTP ────────────────────────────────────────────────────────────────
 // Pluggable so tests can inject a mock without hitting the network.
 async function defaultPostGameIds(ids, { token } = {}) {
-  const url = 'https://lichess.org/api/games/export/_ids?moves=true&opening=true&clocks=false&evals=false';
+  // pgnInJson=true: include the PGN string as a field in each ndjson line.
+  // Without this, Lichess returns moves in the JSON `moves` field but no
+  // `pgn` field, and convertOne errors out with no_game_pgn for every entry.
+  const url = 'https://lichess.org/api/games/export/_ids?moves=true&pgnInJson=true&opening=true&clocks=false&evals=false';
   const headers = {
     'Content-Type': 'text/plain',
     'Accept': 'application/x-ndjson',
