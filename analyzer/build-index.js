@@ -27,7 +27,15 @@ const { fenPositionKey, SHARD_HEX_LEN } = require('../lib/posKey');
 // Gated behind a require.main check so this file can also be `require()`d by
 // tests for its pure helpers (normalizeExternalUrl) without the script
 // trying to parse CLI args / call process.exit.
-let SOURCE_PGN, OUT_DIR, LIMIT;
+let SOURCE_PGN, OUT_DIR, LIMIT, MAX_PER_POSITION;
+// Default cap on entries-per-position written to a shard. At full 1.2M+ scale
+// the "after 1.e4" hot shard would otherwise grow to ~12MB raw / ~2MB gzipped;
+// capping at 2000 (sorted by rating desc) drops it to ~150KB while losing
+// nothing user-visible, since the UI already displays the top 100 by rating.
+// Each puzzle is indexed at ~28-60 different position shards (every ply of
+// its source game), so a puzzle dropped from one hot position is still
+// discoverable at every other position in its game.
+const MAX_PER_POSITION_DEFAULT = 2000;
 if (require.main === module) {
   const _args = process.argv.slice(2);
   const _pos = [];
@@ -46,9 +54,14 @@ if (require.main === module) {
   SOURCE_PGN = _pos[0];
   OUT_DIR = _pos[1] || './data';
   LIMIT = _flags.limit ? parseInt(_flags.limit, 10) : 0;
+  // 0 disables the cap; negative values are treated as 0 too. Anything else
+  // is the per-position keep-N value.
+  MAX_PER_POSITION = _flags['max-per-position'] != null
+    ? Math.max(0, parseInt(_flags['max-per-position'], 10) || 0)
+    : MAX_PER_POSITION_DEFAULT;
 
   if (!SOURCE_PGN) {
-    console.error('usage: node build-index.js <input.pgn> [out_dir] [--limit N]');
+    console.error('usage: node build-index.js <input.pgn> [out_dir] [--limit N] [--max-per-position N]');
     process.exit(1);
   }
 }
@@ -56,6 +69,29 @@ if (require.main === module) {
 // ─── sharding ────────────────────────────────────────────────────────────
 function shardId(s) {
   return crypto.createHash('sha1').update(s).digest('hex').slice(0, SHARD_HEX_LEN);
+}
+
+// ─── per-position cap ────────────────────────────────────────────────────
+// Trim hot positions to the top-N entries by rating descending. Mutates the
+// `grouped` map in place. Returns { entriesDropped, positionsCapped }.
+//
+// Sort is by rating desc (entry[1]) with stable tiebreaks (Array.sort is stable
+// since ES2019). Entries below the cutoff are gone from THIS shard but the
+// puzzle is still indexed at every other ply of its source game (~28-60 shards),
+// so nothing is globally lost — only locally trimmed at hot positions.
+//
+// maxN <= 0 means "no cap" — for byte-equivalent rebuilds against pre-cap data.
+function capPerPosition(grouped, maxN) {
+  if (!maxN || maxN <= 0) return { entriesDropped: 0, positionsCapped: 0 };
+  let dropped = 0, capped = 0;
+  for (const arr of grouped.values()) {
+    if (arr.length <= maxN) continue;
+    arr.sort((a, b) => b[1] - a[1]);
+    dropped += arr.length - maxN;
+    arr.length = maxN;
+    capped++;
+  }
+  return { entriesDropped: dropped, positionsCapped: capped };
 }
 
 // ─── URL normalization (issue #5) ────────────────────────────────────────
@@ -266,6 +302,8 @@ async function main() {
   // ─── Phase 2: build final index JSON files from tmp ndjson ───
   let indexBytes = 0;
   let uniquePositions = 0;
+  let totalEntriesDropped = 0;
+  let totalPositionsCapped = 0;
   const shardSizes = [];
   for (const sid of allIndexShards) {
     const tmpFile = path.join(indexTmpDir, sid + '.ndjson');
@@ -288,6 +326,10 @@ async function main() {
       if (lineEnd === -1) break;
       lineStart = lineEnd + 1;
     }
+    // Cap hot positions before serialization (trims top-N by rating desc).
+    const { entriesDropped, positionsCapped } = capPerPosition(grouped, MAX_PER_POSITION);
+    totalEntriesDropped += entriesDropped;
+    totalPositionsCapped += positionsCapped;
     // Build object from Map preserving insertion order — matches old build.
     const obj = {};
     for (const [k, v] of grouped) obj[k] = v;
@@ -323,11 +365,14 @@ async function main() {
     gamesInFile: null,  // streaming reader doesn't pre-count
     gamesProcessed: gameCount,
     limit: LIMIT || null,
+    maxPerPosition: MAX_PER_POSITION || null,
     puzzlesParsed: parsed,
     parseErrors: errCounts,
     positionEntries,
     uniquePositions,
     avgPuzzlesPerPosition: +(positionEntries / uniquePositions).toFixed(2),
+    entriesDroppedByCap: totalEntriesDropped,
+    positionsCapped: totalPositionsCapped,
     indexBytes,
     bodyBytes,
     indexShardBytes: { min: minShard?.bytes, median: medShard?.bytes, max: maxShard?.bytes },
@@ -343,4 +388,4 @@ if (require.main === module) {
   main().catch(err => { console.error(err); process.exit(1); });
 }
 
-module.exports = { normalizeExternalUrl };
+module.exports = { normalizeExternalUrl, capPerPosition };
