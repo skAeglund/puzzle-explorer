@@ -720,7 +720,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">auto-next</span>
+    <span id="buildVersion">indexeddb-cache</span>
     <span id="datasetInfo">loading dataset…</span>
     <button id="reviewBadge" class="review-pill" type="button" hidden></button>
   </header>
@@ -847,6 +847,8 @@
   <script src="lib/drill.js"></script>
   <script src="lib/session.js"></script>
   <script src="lib/progress.js"></script>
+  <!-- IndexedDB shard cache (independent leaf module; safe to load last) -->
+  <script src="lib/cache.js"></script>
 
   <script>
   'use strict';
@@ -857,6 +859,82 @@
     // Shards live in a sibling repo (puzzle-explorer-data) served via its own
     // Pages site. Cross-origin fetch is fine — Pages sets ACAO:* by default.
     var DATA_BASE_URL = 'https://skaeglund.github.io/puzzle-explorer-data/';
+
+    // ─── meta.json + cache bootstrap ──────────────────────────────────────
+    // We fetch meta.json exactly once per page load and share the result
+    // between two consumers: the dataset-info footer (loadDatasetInfo) and
+    // the build-stamp cache invalidation (cacheReadyPromise). Without this
+    // share, both would refetch the same file.
+    //
+    // Both promises ALWAYS resolve (never reject) — failures are recorded as
+    // structured { error } values so consumers can render a sensible UI.
+    var metaPromise = (function () {
+      return fetch(DATA_BASE_URL + 'meta.json')
+        .then(function (res) {
+          if (!res.ok) return { error: 'no-dataset' };
+          return res.json().then(function (meta) { return { meta: meta }; });
+        })
+        .catch(function () { return { error: 'unreachable' }; });
+    })();
+
+    // cacheReadyPromise gates cache READS so a stale shard from a prior build
+    // can't be served before checkBuildVersion has had a chance to wipe.
+    // Cache writes don't need to wait — putting fresh data into a cache
+    // that's about to be wiped is harmless (the wipe just deletes it again,
+    // and the fresh data also gets written to disk via the network path).
+    var cacheReadyPromise = metaPromise.then(function (result) {
+      if (!result || !result.meta || !result.meta.builtAt) return;
+      if (typeof Cache === 'undefined') return;
+      return Cache.checkBuildVersion(result.meta.builtAt);
+    }).catch(function () { /* never reject */ });
+
+    // Cache-aware fetch helpers. Return shape:
+    //   { json,  fromCache } for index shards
+    //   { text,  fromCache } for body shards
+    //   { status: 404 }      for index shards that don't exist (structured
+    //                        signal so caller can show "not in dataset"
+    //                        without conflating with a transient error).
+    // Throw on any other HTTP/network failure. The error includes .status
+    // when available so callers can distinguish HTTP errors from network.
+    async function fetchIndexShardCached(shard) {
+      await cacheReadyPromise;
+      if (typeof Cache !== 'undefined' && Cache.available()) {
+        var hit = await Cache.getIndex(shard);
+        if (hit) return { json: hit.json, fromCache: true };
+      }
+      var res = await fetch(DATA_BASE_URL + 'index/' + shard + '.json');
+      if (res.status === 404) return { status: 404 };
+      if (!res.ok) {
+        var e = new Error('HTTP ' + res.status);
+        e.status = res.status;
+        throw e;
+      }
+      var json = await res.json();
+      // Fire-and-forget write — never blocks the caller.
+      if (typeof Cache !== 'undefined' && Cache.available()) {
+        Cache.putIndex(shard, json);
+      }
+      return { json: json, fromCache: false };
+    }
+
+    async function fetchBodyShardCached(shard) {
+      await cacheReadyPromise;
+      if (typeof Cache !== 'undefined' && Cache.available()) {
+        var hit = await Cache.getBody(shard);
+        if (hit) return { text: hit.text, fromCache: true };
+      }
+      var res = await fetch(DATA_BASE_URL + 'puzzles/' + shard + '.ndjson');
+      if (!res.ok) {
+        var e = new Error('HTTP ' + res.status);
+        e.status = res.status;
+        throw e;
+      }
+      var text = await res.text();
+      if (typeof Cache !== 'undefined' && Cache.available()) {
+        Cache.putBody(shard, text);
+      }
+      return { text: text, fromCache: false };
+    }
 
     // Mode + drill state. mode flips between 'search' and 'drill'; the
     // search panel/result list and the drill panel are mutually-exclusive
@@ -1170,18 +1248,14 @@
         return;
       }
       setStatus('Fetching shard ' + shard + '…', 'info');
-      var url = DATA_BASE_URL + 'index/' + shard + '.json';
       try {
-        var res = await fetch(url);
-        if (!res.ok) {
-          if (res.status === 404) {
-            renderResults([]);
-            setStatus('No puzzles found at this position. (Shard ' + shard + ' not present — that bucket has no entries in the current dataset.)', 'info');
-            return;
-          }
-          throw new Error('HTTP ' + res.status);
+        var fetchResult = await fetchIndexShardCached(shard);
+        if (fetchResult.status === 404) {
+          renderResults([]);
+          setStatus('No puzzles found at this position. (Shard ' + shard + ' not present — that bucket has no entries in the current dataset.)', 'info');
+          return;
         }
-        var idx = await res.json();
+        var idx = fetchResult.json;
         var rawMatches = idx[key] || [];
         // Filter by color-of-perspective (off → no-op slice; on → keeps
         // entries matching the orientation, plus legacy entries with no
@@ -1378,14 +1452,9 @@
         setStatus('SHA-1 hashing not available (Web Crypto required, http context).', 'error');
         return false;
       }
-      var url = DATA_BASE_URL + 'puzzles/' + bodyShard + '.ndjson';
       try {
-        var res = await fetch(url);
-        if (!res.ok) {
-          setStatus('Body shard ' + bodyShard + ' fetch failed (HTTP ' + res.status + ').', 'error');
-          return false;
-        }
-        var text = await res.text();
+        var fetchResult = await fetchBodyShardCached(bodyShard);
+        var text = fetchResult.text;
         var puzzle = null;
         var lines = text.split('\n');
         for (var i = 0; i < lines.length; i++) {
@@ -1407,7 +1476,13 @@
         enterDrillMode(puzzle);
         return true;
       } catch (e) {
-        setStatus('Body fetch error: ' + e.message, 'error');
+        // Preserve the existing distinction between HTTP errors (we know
+        // the shard URL was reached but rejected) and other failures.
+        if (e && e.status) {
+          setStatus('Body shard ' + bodyShard + ' fetch failed (HTTP ' + e.status + ').', 'error');
+        } else {
+          setStatus('Body fetch error: ' + (e && e.message ? e.message : 'unknown'), 'error');
+        }
         return false;
       }
     }
@@ -3373,19 +3448,19 @@
     }
 
     async function loadDatasetInfo() {
-      try {
-        var res = await fetch(DATA_BASE_URL + 'meta.json');
-        if (!res.ok) {
-          $('#datasetInfo').text('no dataset (run analyzer)');
-          return;
-        }
-        var meta = await res.json();
-        var built = meta.builtAt ? new Date(meta.builtAt).toISOString().slice(0, 10) : '?';
-        var n = meta.puzzlesParsed || 0;
-        $('#datasetInfo').text(n.toLocaleString() + ' puzzles · ' + built);
-      } catch (e) {
-        $('#datasetInfo').text('dataset unreachable');
+      var result = await metaPromise;
+      if (!result || result.error === 'no-dataset') {
+        $('#datasetInfo').text('no dataset (run analyzer)');
+        return;
       }
+      if (result.error || !result.meta) {
+        $('#datasetInfo').text('dataset unreachable');
+        return;
+      }
+      var meta = result.meta;
+      var built = meta.builtAt ? new Date(meta.builtAt).toISOString().slice(0, 10) : '?';
+      var n = meta.puzzlesParsed || 0;
+      $('#datasetInfo').text(n.toLocaleString() + ' puzzles · ' + built);
     }
 
     $(init);
