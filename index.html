@@ -688,7 +688,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">arrow-annotations</span>
+    <span id="buildVersion">analyze-on-lichess</span>
     <span id="datasetInfo">loading dataset…</span>
     <button id="reviewBadge" class="review-pill" type="button" hidden></button>
   </header>
@@ -742,7 +742,8 @@
       <div class="drill-controls">
         <button id="hintBtn">Hint</button>
         <button id="backBtn" class="primary">Back to results</button>
-        <a id="lichessLink" class="lichess-link" href="#" target="_blank" rel="noopener">view on lichess ↗</a>
+        <a id="lichessLink" class="lichess-link" href="#" target="_blank" rel="noopener">view source game ↗</a>
+        <a id="analyzeLink" class="lichess-link" href="#" target="_blank" rel="noopener" title="Open this position on Lichess's analysis board with engine evaluation">analyze on Lichess ↗</a>
       </div>
       <!-- Completion strip — populated and shown by handleCompletion. The
            Next-puzzle button inside is itself toggled by session mode. -->
@@ -1343,6 +1344,17 @@
       } else {
         $('#lichessLink').hide();
       }
+      // "Analyze on Lichess" — opens Lichess's analysis board pre-loaded
+      // with the puzzle's starting FEN (issue #4). Lichess's URL flow
+      // (/analysis/<FEN>) only carries the position, NOT the solution
+      // moves: their inline-PGN URL (/analysis/pgn/...) doesn't accept
+      // [FEN ...] headers reliably (lila #16286), and there's no
+      // ?pgn= query param (lila #10205, still open). Engine evaluation
+      // works on whatever position loads — the moves the user just
+      // played are fresh in their head, and they'll typically want to
+      // explore alternatives anyway. So FEN-only is the right MVP and
+      // honest about what Lichess supports.
+      $('#analyzeLink').attr('href', buildLichessAnalysisUrl(puzzle));
       $('#hintBtn').prop('disabled', false).text('Hint');
 
       // Session-mode UI: progress label up top, Back demoted to "Exit
@@ -2819,6 +2831,45 @@
 
     function setStatus(msg, kind) {
       $('#status').text(msg).attr('data-kind', kind || 'info');
+    }
+
+    // Build a Lichess analysis URL for a puzzle (issue #4).
+    // Lichess's /analysis/<FEN> route accepts the FEN directly in the
+    // URL path: slashes between rank rows are kept literal (path-legal),
+    // and the metadata after the board (side-to-move, castling, EP,
+    // halfmove, fullmove) gets URL-encoded. Adds ?color=white|black so
+    // the orientation matches the user's perspective in the puzzle.
+    // Returns '#' if the FEN is missing/invalid — caller sets the href
+    // every time enterDrillMode runs, so a bad URL never lingers.
+    //
+    // We do NOT include the solution moves: Lichess's URL flow can't
+    // carry both a starting FEN and inline PGN in a single request.
+    // /analysis/pgn/<...> rejects [FEN ...] headers in the path (lila
+    // #16286), and there's no ?pgn= query param (lila #10205, still
+    // open as of writing). Engine evaluation works on whatever position
+    // loads — the moves the user just played are fresh in their head,
+    // and they'll typically want to explore alternatives anyway. So
+    // FEN-only is the right MVP and honest about what Lichess supports.
+    function buildLichessAnalysisUrl(puzzle) {
+      if (!puzzle || typeof puzzle.fen !== 'string' || !puzzle.fen) return '#';
+      var fen = puzzle.fen.trim();
+      // FEN has six space-separated fields. The board portion (parts[0])
+      // contains rank slashes that must stay LITERAL in the URL path —
+      // encoding them as %2F may or may not be canonicalized by the
+      // server, and the working examples in Lichess's own forum threads
+      // (#36, #34) all use literal slashes. So we encode each rank
+      // segment INDIVIDUALLY (which never contains a slash) and rejoin
+      // with '/', then encodeURIComponent the metadata fields. The
+      // whole thing joins with %20 between FEN fields.
+      //   board:    rank/rank/rank/.../rank   ← slashes literal
+      //   metadata: side, castling, EP, halfmove, fullmove
+      var parts = fen.split(/\s+/);
+      if (!parts.length) return '#';
+      var board = parts[0].split('/').map(encodeURIComponent).join('/');
+      var meta = parts.slice(1).map(encodeURIComponent);
+      var encoded = [board].concat(meta).join('%20');
+      var side = (parts[1] === 'b') ? 'black' : 'white';
+      return 'https://lichess.org/analysis/' + encoded + '?color=' + side;
     }
 
     // ─── user FEN presets (issue #2) ────────────────────────────────────
