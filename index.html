@@ -707,7 +707,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">srs-only-on-fail</span>
+    <span id="buildVersion">hidden-attr-bug</span>
     <span id="datasetInfo">loading dataset…</span>
     <button id="reviewBadge" class="review-pill" type="button" hidden></button>
   </header>
@@ -1094,11 +1094,11 @@
       updateFenInputFromBoard();
       setStatus('Position loaded. Click Search.', 'ok');
       $('#results').empty();
-      $('#resultsMeta').hide();
+      $('#resultsMeta').prop('hidden', true);
       // Hide the session panel — its slider/counts are tied to the
       // previous search's matches and would be misleading until the
       // user re-searches against the new FEN.
-      $('#sessionPanel').hide();
+      $('#sessionPanel').prop('hidden', true);
       lastMatches = null;
     }
 
@@ -1203,14 +1203,14 @@
       var $list = $('#results').empty();
       var $meta = $('#resultsMeta');
       if (!matches.length) {
-        $meta.hide();
-        $('#sessionPanel').hide();
+        $meta.prop('hidden', true);
+        $('#sessionPanel').prop('hidden', true);
         return;
       }
       // sort by rating asc; stable enough for our purposes
       matches.sort(function (a, b) { return a[1] - b[1]; });
       var shown = matches.slice(0, MAX_RESULTS);
-      $meta.text('id · rating  (sorted by rating, lowest first — click a row to drill)').show();
+      $meta.text('id · rating  (sorted by rating, lowest first — click a row to drill)').prop('hidden', false);
       for (var i = 0; i < shown.length; i++) {
         var m = shown[i];
         var pid = m[0];
@@ -1227,7 +1227,7 @@
         $li.append($('<span class="puzzle-rating"></span>').text(rating || '—'));
         $list.append($li);
       }
-      $('#sessionPanel').show();
+      $('#sessionPanel').prop('hidden', false);
     }
 
     // ─── session: rating slider config + live counts ────────────────────
@@ -1414,10 +1414,10 @@
 
       // Swap panels.
       $('#searchPanel').hide();
-      $('#sessionPanel').hide();
-      $('#resultsMeta').hide();
+      $('#sessionPanel').prop('hidden', true);
+      $('#resultsMeta').prop('hidden', true);
       $('#results').hide();
-      $('#drillPanel').show();
+      $('#drillPanel').prop('hidden', false);
       $('#drillId').text(puzzle.id);
       $('#drillRating').text(puzzle.rating ? ('rating ' + puzzle.rating) : '');
       var themesText = (puzzle.themes && puzzle.themes.length) ? puzzle.themes.join(' · ') : '';
@@ -1425,10 +1425,10 @@
       // Themes + opening default-hidden. Toggle button is itself only
       // visible when at least ONE of them has content — no point offering
       // to reveal nothing. Both rows respect showDetails.
-      $('#drillThemes').text(themesText).toggle(!!themesText && showDetails);
-      $('#drillOpening').text(openingText).toggle(!!openingText && showDetails);
+      $('#drillThemes').text(themesText).prop('hidden', !themesText || !showDetails);
+      $('#drillOpening').text(openingText).prop('hidden', !openingText || !showDetails);
       $('#detailsToggleBtn')
-        .toggle(!!themesText || !!openingText)
+        .prop('hidden', !themesText && !openingText)
         .text(showDetails ? 'hide details' : 'show details');
       // Normalize the source-game URL (issue #5). Han Schut's PGN data
       // sometimes stores the Site header without a scheme (e.g.
@@ -1466,19 +1466,19 @@
         $('#sessionProgress')
           .removeClass('complete')
           .text(label + prog.current + ' of ' + prog.total)
-          .show();
+          .prop('hidden', false);
         var exitLabel = (sessionState.kind === 'review') ? 'Exit review' : 'Exit session';
         $('#backBtn').removeClass('primary').text(exitLabel);
       } else {
-        $('#sessionProgress').hide();
+        $('#sessionProgress').prop('hidden', true);
         $('#backBtn').addClass('primary').text('Back to results');
       }
       // Reset completion-strip + result badges for the new puzzle.
       // destroyBoard() already wipes the board DOM (so square-correct /
       // square-wrong-x classes vanish with it), but be explicit.
-      $('#completionStrip').hide();
+      $('#completionStrip').prop('hidden', true);
       $('#completionText').removeClass('ok warn error').text('');
-      $('#nextPuzzleBtn').prop('disabled', true).hide();
+      $('#nextPuzzleBtn').prop({ disabled: true, hidden: true });
       clearCompletionBadge();
       clearWrongX();
 
@@ -1803,8 +1803,8 @@
       // board). Hide the session panel too — its slider/counts are tied
       // to lastMatches. Don't auto-search; user clicks Search when ready.
       $('#results').empty();
-      $('#resultsMeta').hide();
-      $('#sessionPanel').hide();
+      $('#resultsMeta').prop('hidden', true);
+      $('#sessionPanel').prop('hidden', true);
       lastMatches = null;
       setStatus('Position updated. Click Search.', 'info');
       return { ok: true, from: moveObj.from, to: moveObj.to };
@@ -1879,8 +1879,8 @@
         showCheckDeferred(chess);
       }
       $('#results').empty();
-      $('#resultsMeta').hide();
-      $('#sessionPanel').hide();
+      $('#resultsMeta').prop('hidden', true);
+      $('#sessionPanel').prop('hidden', true);
       lastMatches = null;
       setStatus('Undid last move. Click Search.', 'info');
     }
@@ -1909,8 +1909,8 @@
       updateMoveListDisplay();
       updateFenInputFromBoard();
       $('#results').empty();
-      $('#resultsMeta').hide();
-      $('#sessionPanel').hide();
+      $('#resultsMeta').prop('hidden', true);
+      $('#sessionPanel').prop('hidden', true);
       lastMatches = null;
       setStatus('Reset to start position. Drag pieces or paste a FEN.', 'info');
     }
@@ -1931,8 +1931,8 @@
       // when the filter is OFF, dropping the cache keeps the UX model
       // consistent: any state change → results stale → click Search.
       $('#results').empty();
-      $('#resultsMeta').hide();
-      $('#sessionPanel').hide();
+      $('#resultsMeta').prop('hidden', true);
+      $('#sessionPanel').prop('hidden', true);
       lastMatches = null;
       setStatus('Flipped to ' + searchOrientation + '. Click Search' +
         (matchOwnColorOnly ? ' for puzzles where ' +
@@ -1949,8 +1949,8 @@
       matchOwnColorOnly = !matchOwnColorOnly;
       updateColorFilterBtn();
       $('#results').empty();
-      $('#resultsMeta').hide();
-      $('#sessionPanel').hide();
+      $('#resultsMeta').prop('hidden', true);
+      $('#sessionPanel').prop('hidden', true);
       lastMatches = null;
       setStatus(matchOwnColorOnly
         ? 'Filtering to your color only. Click Search.'
@@ -2109,14 +2109,14 @@
         .removeClass('ok warn error')
         .addClass(kind)
         .text(msg);
-      $('#completionStrip').show();
+      $('#completionStrip').prop('hidden', false);
       $('#hintBtn').prop('disabled', true);
       if (sessionState) {
-        $('#nextPuzzleBtn').prop('disabled', false).show().focus();
+        $('#nextPuzzleBtn').prop({ disabled: false, hidden: false }).focus();
         var exitLabel = (sessionState.kind === 'review') ? 'Exit review' : 'Exit session';
         setStatus('Click Next puzzle to continue, or ' + exitLabel + ' to stop.', 'info');
       } else {
-        $('#nextPuzzleBtn').prop('disabled', true).hide();
+        $('#nextPuzzleBtn').prop({ disabled: true, hidden: true });
         setStatus('Click Back to return to results.', 'info');
       }
       // Paint the green check on the FINAL solution move's destination.
@@ -2156,8 +2156,8 @@
       showDetails = !showDetails;
       var hasThemes  = $('#drillThemes').text().length > 0;
       var hasOpening = $('#drillOpening').text().length > 0;
-      $('#drillThemes').toggle(hasThemes && showDetails);
-      $('#drillOpening').toggle(hasOpening && showDetails);
+      $('#drillThemes').prop('hidden', !hasThemes || !showDetails);
+      $('#drillOpening').prop('hidden', !hasOpening || !showDetails);
       $('#detailsToggleBtn').text(showDetails ? 'hide details' : 'show details');
     }
 
@@ -2179,8 +2179,8 @@
       drillPuzzle = null;
       sessionState = null;          // exit session if active
       mode = 'search';
-      $('#drillPanel').hide();
-      $('#completionStrip').hide();
+      $('#drillPanel').prop('hidden', true);
+      $('#completionStrip').prop('hidden', true);
       $('#searchPanel').show();
       // Result badges live on the board DOM, which rebuildSearchBoard
       // replaces wholesale below — but null the state vars explicitly
@@ -2195,7 +2195,7 @@
       // so an empty/no-prior-search state is also handled cleanly.
       if (lastMatches && lastMatches.length) {
         renderResults(lastMatches);
-        $('#resultsMeta').show();
+        $('#resultsMeta').prop('hidden', false);
         $('#results').show();
         // Refresh slider counts (unsolved count may have decreased while
         // drilling). Don't reconfigure bounds — preserve user's range.
@@ -2376,9 +2376,9 @@
         // exit (the previous puzzle's board may still be visible).
         var wasReview = (sessionState && sessionState.kind === 'review');
         sessionState = null;
-        $('#sessionProgress').hide();
-        $('#completionStrip').hide();
-        $('#nextPuzzleBtn').hide();
+        $('#sessionProgress').prop('hidden', true);
+        $('#completionStrip').prop('hidden', true);
+        $('#nextPuzzleBtn').prop('hidden', true);
         // In review mode there's no result list to return to — Back
         // closes the drill panel and drops the user at search-mode home.
         $('#backBtn').addClass('primary').text(wasReview ? 'Done' : 'Back to results');
@@ -2401,8 +2401,8 @@
       $('#sessionProgress')
         .addClass('complete')
         .text(bannerLead + total + bannerTail)
-        .show();
-      $('#nextPuzzleBtn').prop('disabled', true).hide();
+        .prop('hidden', false);
+      $('#nextPuzzleBtn').prop({ disabled: true, hidden: true });
       $('#hintBtn').prop('disabled', true);
       $('#backBtn').addClass('primary').text(isReview ? 'Done' : 'Back to results');
       var statusMsg = isReview
