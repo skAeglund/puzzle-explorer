@@ -5,3 +5,10 @@ node_modules/
 # Build outputs are large; default to ignoring. Comment these out if shipping
 # small sample data in repo for testing (open decision #2).
 data/
+
+# R2 credentials — alongside data dir, never committed.
+.env.r2
+
+# fetch-deltas resumable checkpoint dirs (named <output>.state by default).
+*.pgn.state/
+*.state/
