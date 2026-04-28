@@ -561,6 +561,43 @@
       50%      { opacity: 1; }
     }
 
+    /* ─── promotion picker overlay ─────────────────────────────────────────
+       Built on demand inside #boardWrap (not #board, since #board is wiped
+       by destroyBoard on mode swaps and we want the picker DOM to outlive
+       a single board instance only via explicit cancelPromotion). The
+       backdrop covers the entire boardWrap and dims/blocks board input;
+       four .promo-tile elements sit on top, each pinned to a board square's
+       bounding rect via inline style (left/top/width/height set in JS).
+       Lichess-style stack: queen first, then knight, rook, bishop —
+       rolling away from the promotion edge along the same file. */
+    .promo-backdrop {
+      position: absolute;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.55);
+      z-index: 50;
+      cursor: pointer;
+    }
+    .promo-tile {
+      position: absolute;
+      z-index: 51;
+      /* Light fill so both white and black piece glyphs read clearly,
+         distinct from the dimmed board behind. Hardcoded rather than a
+         theme var because we want this contrast regardless of theme. */
+      background-color: #f0f0f0;
+      background-repeat: no-repeat;
+      background-position: center;
+      background-size: 88% 88%;
+      border-radius: 50%;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+      cursor: pointer;
+      transition: transform 0.08s ease;
+    }
+    .promo-tile:hover,
+    .promo-tile:focus-visible {
+      transform: scale(1.08);
+      outline: none;
+    }
+
     /* ─── session mode: dual-range rating slider + counts + progress ─────
        Two stacked range inputs on a single track, with `pointer-events`
        routed only to the thumbs so both handles remain grabbable. The
@@ -720,7 +757,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">indexeddb-cache</span>
+    <span id="buildVersion">promotion-picker</span>
     <span id="datasetInfo">loading dataset…</span>
     <button id="reviewBadge" class="review-pill" type="button" hidden></button>
   </header>
@@ -974,6 +1011,15 @@
     var pendingOppReply = null;  // UCI of opp's auto-reply, scheduled in onSnapEnd
     var oppReplyTimeout = null;  // setTimeout id; cleared on back/destroy
     var introTimeout = null;     // setTimeout id for the pre-puzzle blunder animation
+    // Promotion picker state. When the user makes a pawn-to-rank-1/8 move,
+    // we hold off on calling chess.move and show a 4-piece picker overlay.
+    // pendingPromotion = { source, target, isDrag, mode } while open; null
+    // otherwise. Drag flow: chessboard.js has already snapped the pawn to
+    // target visually — onSnapEnd no-ops while pendingPromotion is set, and
+    // cancel re-syncs via board.position(chess.fen()) which animates the
+    // pawn back to source. Click flow: pawn never moved visually, sync is
+    // a no-op on cancel.
+    var pendingPromotion = null;
     // Auto-next: persisted toggle in .drill-controls. When ON, a clean
     // completion (grade !== Again) in session mode schedules a programmatic
     // Next-puzzle click after a brief delay. autoNextTimeout tracks the
@@ -1681,6 +1727,12 @@
     }
 
     function destroyBoard() {
+      // Tear down any pending promotion picker first — its DOM lives in
+      // #boardWrap (sibling of #board) and would orphan otherwise. Cancel
+      // does the right thing regardless of state: removes DOM, clears the
+      // keydown listener, drops pendingPromotion. The board.position sync
+      // it does on cancel is harmless here (board is about to be destroyed).
+      cancelPromotion();
       // chessboard.js v1 has destroy(); be defensive in case it's absent.
       if (board && typeof board.destroy === 'function') {
         try { board.destroy(); } catch (e) { /* ignore */ }
@@ -1744,6 +1796,10 @@
     // the board to chess.js (covers castling/EP/promotion glyphs) and
     // schedules the opp auto-reply (drill mode only — no-op in search).
     function onDragStart(source, piece /*, position, orientation */) {
+      // Promotion picker open — backdrop already intercepts mouse/touch
+      // events at z-index 50, but defensive belt-and-braces for the
+      // hypothetical race where a drag event slips through.
+      if (pendingPromotion) return false;
       // Search mode: any side-to-move piece is draggable. No drillState,
       // no userColor, no completion gating — just legality.
       if (mode === 'search') {
@@ -1796,21 +1852,18 @@
     //   { ok: false }                    — chess.js rejected (illegal)
     //   { ok: true, wrong: true }        — Drill said wrong; chess.js reverted
     //   { ok: true, from, to }           — continue or complete
+    //   { ok: true, pending: true }      — promotion picker open; commit deferred
     // Returns (search mode):
     //   { ok: false }                    — chess.js rejected (illegal)
     //   { ok: true, from, to }           — legal move applied
+    //   { ok: true, pending: true }      — promotion picker open; commit deferred
     function attemptMove(source, target) {
       if (mode === 'search') return attemptSearchMove(source, target);
-      // Drill-mode side effects:
-      //   - chess.js advanced (continue/complete) or reverted (wrong)
-      //   - drillState updated via the state machine
-      //   - Progress.recordReview on first-wrong + completion
-      //   - pendingOppReply / pendingCompletionResult set
-      //   - lastSuccessfulUserMove set on continue/complete
-      //   - selection cleared (success path)
-      //   - square-wrong flash on wrong-move target
       if (!drillState || drillState.complete) return { ok: false };
       if (source === target) return { ok: false };
+      // Don't process anything new while a picker is already open. Stale
+      // chessboard.js callbacks during the picker resolve as no-ops.
+      if (pendingPromotion) return { ok: false };
 
       // Clear any lingering wrong-X badge from a previous attempt — this
       // attempt either lands on a different square (no badge needed) or
@@ -1818,13 +1871,29 @@
       // before chess.move so an illegal-move return path also clears it.
       clearWrongX();
 
-      // Default to queen-promotion. Under-promotions aren't reachable via
-      // drag-drop in MVP — a puzzle solution requiring e.g. e8=N marks
-      // the user wrong on first try (Again). Acceptable trade-off;
-      // promotion-picker UI is a future enhancement.
+      // Promotion detection. If the from-square has any legal promotion
+      // move to target, defer the actual chess.move until the user picks
+      // a piece. Auto-queen is the BUG, not the fix — under-promotion
+      // solutions (knight forks, etc.) need to be selectable. Selection
+      // is cleared here too so the picker has full focus.
+      if (isPromotionMove(source, target)) {
+        clearSelection();
+        showPromotionPicker(source, target, /* isDrag */ true, 'drill');
+        return { ok: true, pending: true };
+      }
+
+      return commitDrillMove(source, target, undefined);
+    }
+
+    // The chess.move-and-classify body, shared between the direct (non-
+    // promotion) entry from attemptMove and the deferred (promotion-picker)
+    // entry from commitPromotion. promotion is undefined for non-promotion
+    // moves; chess.js v0.10 ignores it in that case. For pawn-to-rank-1/8
+    // it must be 'q'/'r'/'b'/'n' — caller has verified one applies.
+    function commitDrillMove(source, target, promotion) {
       var moveObj;
       try {
-        moveObj = chess.move({ from: source, to: target, promotion: 'q' });
+        moveObj = chess.move({ from: source, to: target, promotion: promotion || 'q' });
       } catch (e) {
         moveObj = null;  // chess.js v0.10 returns null; v1+ throws — guard both
       }
@@ -1892,12 +1961,22 @@
     //   - any stale results cleared (the position changed)
     function attemptSearchMove(source, target) {
       if (source === target) return { ok: false };
-      // Default to queen-promotion (same MVP trade-off as drill mode — under-
-      // promotion picker is future work). chess.js v0.10 returns null;
-      // v1+ throws — guard both.
+      if (pendingPromotion) return { ok: false };
+      // Search mode rarely promotes (you set up positions, you don't
+      // usually push pawns to rank 8 in setup) but the path exists. Same
+      // detection as drill mode. Selection cleared so the picker has focus.
+      if (isPromotionMove(source, target)) {
+        clearSelection();
+        showPromotionPicker(source, target, /* isDrag */ true, 'search');
+        return { ok: true, pending: true };
+      }
+      return commitSearchMove(source, target, undefined);
+    }
+
+    function commitSearchMove(source, target, promotion) {
       var moveObj;
       try {
-        moveObj = chess.move({ from: source, to: target, promotion: 'q' });
+        moveObj = chess.move({ from: source, to: target, promotion: promotion || 'q' });
       } catch (e) {
         moveObj = null;
       }
@@ -1923,6 +2002,164 @@
       lastMatches = null;
       setStatus('Position updated. Click Search.', 'info');
       return { ok: true, from: moveObj.from, to: moveObj.to };
+    }
+
+    // ─── promotion picker ───────────────────────────────────────────────
+    // Detect: does any legal move from `source` land on `target` AS A
+    // PROMOTION? chess.js v0.10's verbose move objects expose flags as a
+    // string of single chars; 'p' is the promotion flag. Multiple promo
+    // pieces show up as four separate entries (one per q/r/b/n) — we only
+    // need to know if at least one applies.
+    function isPromotionMove(source, target) {
+      var moves;
+      try {
+        moves = chess.moves({ square: source, verbose: true });
+      } catch (e) { return false; }
+      if (!moves || !moves.length) return false;
+      for (var i = 0; i < moves.length; i++) {
+        var m = moves[i];
+        if (m && m.to === target && m.flags && m.flags.indexOf('p') >= 0) return true;
+      }
+      return false;
+    }
+
+    // Build the picker DOM inside #boardWrap and wire up handlers.
+    // pickerMode is 'drill' or 'search' — used by commitPromotion to
+    // dispatch to the right commit function.
+    function showPromotionPicker(source, target, isDrag, pickerMode) {
+      pendingPromotion = {
+        source: source,
+        target: target,
+        isDrag: !!isDrag,
+        mode: pickerMode
+      };
+      var color = chess.turn();           // 'w' or 'b' — promoting side
+      // Stack: queen, knight, rook, bishop. Queen first (most common);
+      // knight second (typical under-promotion for fork). Rolling along
+      // the file away from the promotion edge.
+      var pieces = ['q', 'n', 'r', 'b'];
+      var file = target[0];
+      var targetRank = parseInt(target[1], 10);
+      // White promotes on 8 → tiles on 8,7,6,5. Black on 1 → 1,2,3,4.
+      var ranks = (targetRank === 8) ? [8, 7, 6, 5] : [1, 2, 3, 4];
+
+      var $bw = $('#boardWrap');
+      if (!$bw.length) return;
+      var bwRect = $bw[0].getBoundingClientRect();
+
+      // Backdrop first so tile clicks don't bubble to it.
+      var $backdrop = $('<div class="promo-backdrop"></div>');
+      $backdrop.on('click', function (e) {
+        e.stopPropagation();
+        cancelPromotion();
+      });
+      $bw.append($backdrop);
+
+      for (var i = 0; i < 4; i++) {
+        var sq = file + ranks[i];
+        var $sqEl = $('#board .square-' + sq);
+        if (!$sqEl.length) continue;
+        var sqRect = $sqEl[0].getBoundingClientRect();
+        var pieceCode = (color === 'w' ? 'w' : 'b') + pieces[i].toUpperCase();
+        var imgUrl = 'https://chessboardjs.com/img/chesspieces/wikipedia/' + pieceCode + '.png';
+        var $tile = $('<div class="promo-tile" tabindex="0" role="button"></div>')
+          .attr('aria-label', 'Promote to ' + pieceCode)
+          .css({
+            left:   (sqRect.left - bwRect.left) + 'px',
+            top:    (sqRect.top  - bwRect.top)  + 'px',
+            width:  sqRect.width  + 'px',
+            height: sqRect.height + 'px',
+            'background-image': 'url(' + imgUrl + ')'
+          })
+          .data('piece', pieces[i]);
+        // closure-capture the piece — `piece` mutates each iteration
+        (function (piece) {
+          $tile.on('click', function (e) {
+            e.stopPropagation();
+            commitPromotion(piece);
+          });
+        })(pieces[i]);
+        $bw.append($tile);
+      }
+
+      // Esc cancels. Namespace so we can clean up cleanly without affecting
+      // any other keydown listeners.
+      $(document).on('keydown.promotion', function (e) {
+        if (e.key === 'Escape' || e.keyCode === 27) {
+          e.preventDefault();
+          cancelPromotion();
+        }
+      });
+    }
+
+    function removePromotionPickerDom() {
+      $('#boardWrap > .promo-backdrop, #boardWrap > .promo-tile').remove();
+      $(document).off('keydown.promotion');
+    }
+
+    // User picked a piece. Clear picker DOM, then dispatch the deferred
+    // chess.move + side effects through the appropriate commit function.
+    // For drill mode we replicate the post-move work normally done by the
+    // drag/click caller (board.position sync, lastmove paint, opp reply).
+    // For search mode we just sync the board glyph.
+    function commitPromotion(piece) {
+      var p = pendingPromotion;
+      if (!p) return;
+      pendingPromotion = null;
+      removePromotionPickerDom();
+
+      if (p.mode === 'search') {
+        var rs = commitSearchMove(p.source, p.target, piece);
+        if (rs.ok && board) {
+          // Animated update reads naturally regardless of drag/click origin
+          // (drag: pawn glyph swaps to chosen piece on target; click: piece
+          //  slides from source to target as the chosen piece). Same paint
+          // call as the click handler — consistent across all entry paths.
+          board.position(chess.fen());
+          applyLastMoveAndCheckDeferred(rs.from, rs.to);
+        }
+        return;
+      }
+
+      // drill
+      var r = commitDrillMove(p.source, p.target, piece);
+      if (!r.ok) {
+        // Defensive — shouldn't happen since we pre-validated the promotion.
+        if (board) board.position(chess.fen(), false);
+        return;
+      }
+      if (r.wrong) {
+        // commitDrillMove already did chess.undo() + flashWrong + paintWrongX;
+        // sync the visual back to the pre-attempt state so the pawn snaps
+        // to source (drag case) or stays on source (click case).
+        if (board) board.position(chess.fen(), false);
+        return;
+      }
+      // continue / complete: animate to the new position with the chosen
+      // piece, paint lastmove + check, schedule any queued opp reply.
+      if (board) board.position(chess.fen());
+      applyLastMoveAndCheckDeferred(r.from, r.to);
+      // lastSuccessfulUserMove was set by commitDrillMove; null it so a
+      // subsequent unrelated onSnapEnd doesn't re-paint stale coords.
+      lastSuccessfulUserMove = null;
+      scheduleOppReplyIfPending();
+    }
+
+    // User cancelled (Esc, click backdrop, or programmatic — e.g.
+    // destroyBoard during a pending picker). chess.js never advanced;
+    // visual state needs sync only for the drag flow (pawn was placed on
+    // target by chessboard.js's drop animation). board.position with the
+    // current — pre-move — fen handles both cases: drag → pawn animates
+    // back to source; click → no-op (visual already matches).
+    function cancelPromotion() {
+      if (!pendingPromotion) return;
+      var wasDrag = pendingPromotion.isDrag;
+      pendingPromotion = null;
+      removePromotionPickerDom();
+      if (wasDrag && board) board.position(chess.fen());
+      // Status: only set if we're not in the middle of a teardown that
+      // will overwrite it anyway. Simple to just leave any prior status
+      // alone — cancel is silent.
     }
 
     // ─── search-mode UI helpers ─────────────────────────────────────────
@@ -2096,6 +2333,11 @@
     }
 
     function onSnapEnd() {
+      // Promotion picker open — the drag's drop animation has just settled
+      // but chess.js hasn't advanced yet (commit is gated on the picker).
+      // Skip the normal sync; commitPromotion / cancelPromotion will sync
+      // when the user resolves the picker.
+      if (pendingPromotion) return;
       // ALWAYS animate:false here per project conventions (teleport
       // artifact rule). Castling rook, EP capture, promotion glyph all
       // get reconciled by chess.js's resulting FEN.
@@ -3116,7 +3358,7 @@
         // case we just leave the selection cleared.
         clearSelection();
         var r = attemptMove(fromSq, sq);
-        if (r && r.ok && !r.wrong) {
+        if (r && r.ok && !r.wrong && !r.pending) {
           // chessboard.js wasn't involved in this move — animate it manually
           // and paint the lastmove + check highlights.
           if (board) board.position(chess.fen());
@@ -3129,6 +3371,8 @@
           // pendingOppReply null, so this no-ops).
           scheduleOppReplyIfPending();
         }
+        // r.pending: promotion picker is open — commit + sync happens in
+        // commitPromotion. Selection is already cleared (attemptMove did it).
         // Illegal: chess.js never advanced; selection already cleared.
         // Wrong:   chess.undo() reverted; selection cleared above.
         return;

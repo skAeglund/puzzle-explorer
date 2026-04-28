@@ -29,6 +29,18 @@ const PUZZLE_1 = {
   fen: 'r1b5/pp1nkpr1/2q1p3/8/3N4/3B4/P1P2PPP/R2Q1RK1 b - - 4 18',
   solutionUci: ['c6g2']
 };
+// Manufactured under-promotion fixture (closes #7). Real Lichess data
+// includes the underPromotion theme — e.g. a forced knight promo because
+// queen/rook would stalemate, or a knight promo that forks. The state
+// machine compares UCI strings; the FEN doesn't need to be one of those
+// exact puzzles, just has to drive the same code path. Solution `e7e8n`
+// would mark the user wrong if the UI auto-queened — which is the bug
+// the promotion picker fixes.
+const PUZZLE_UNDERPROMO = {
+  puzzleId: 'underpromo-fixture',
+  fen: '8/4P3/3k4/8/8/8/8/7K w - - 0 1',
+  solutionUci: ['e7e8n']
+};
 
 // ━━━ DRILL state machine ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -82,6 +94,38 @@ section('Drill.attemptUserMove — single-move puzzle (mateIn1)');
   check('no opp reply',              r.opponentReply === null);
   check('toRecord=easy',             r.toRecord === FSRS.GRADE.easy);
   check('idx past end',              r.state.currentMoveIdx === 1);
+}
+
+section('Drill.attemptUserMove — under-promotion solution (e7e8n)');
+{
+  // Correct: exact UCI match including the promotion piece. State machine
+  // doesn't care which piece — it's a string compare — but this locks in
+  // the contract that under-promotion is reachable end-to-end.
+  let s = Drill.start(PUZZLE_UNDERPROMO);
+  let r = Drill.attemptUserMove(s, 'e7e8n');
+  check('e7e8n accepted as correct',   r.result === 'complete');
+  check('toRecord=easy on first try',  r.toRecord === FSRS.GRADE.easy);
+
+  // Auto-queen would have submitted 'e7e8q' — verify that's wrong, and
+  // that it locks Again on first attempt (this is the user-facing bug
+  // the promotion picker fixes: without it, the user has no way to
+  // express "knight" and gets locked into a fail grade for a tactic
+  // they may have actually seen correctly).
+  s = Drill.start(PUZZLE_UNDERPROMO);
+  r = Drill.attemptUserMove(s, 'e7e8q');
+  check('e7e8q rejected as wrong',     r.result === 'wrong');
+  check('expected reflects e7e8n',     r.expected === 'e7e8n');
+  check('first-wrong locks Again',     r.toRecord === FSRS.GRADE.again);
+
+  // Other under-promotions (rook, bishop) are also wrong — only the exact
+  // UCI is the solution. Confirms we're not doing any "any promotion is
+  // fine" leniency.
+  s = Drill.start(PUZZLE_UNDERPROMO);
+  r = Drill.attemptUserMove(s, 'e7e8r');
+  check('e7e8r rejected as wrong',     r.result === 'wrong');
+  s = Drill.start(PUZZLE_UNDERPROMO);
+  r = Drill.attemptUserMove(s, 'e7e8b');
+  check('e7e8b rejected as wrong',     r.result === 'wrong');
 }
 
 section('Drill.attemptUserMove — first wrong locks Again immediately');
