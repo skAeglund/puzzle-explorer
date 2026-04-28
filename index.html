@@ -22,6 +22,10 @@
       --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
     }
     * { box-sizing: border-box; }
+    /* The UA's `[hidden] { display: none }` has lower specificity than
+       any explicit `display` rule (e.g. .row { display: flex }), so a
+       hidden .row would still render. Keep [hidden] authoritative. */
+    [hidden] { display: none !important; }
     html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg); }
     body {
       font-family: var(--mono);
@@ -231,6 +235,7 @@
        a position one ply at a time. Move list mirrors what's been played;
        Undo/Reset/Flip handle navigation; FEN textarea below stays synced. */
     #moveBuilder {
+      margin-top: 12px;
       margin-bottom: 10px;
       padding-bottom: 10px;
       border-bottom: 1px dashed var(--border);
@@ -702,7 +707,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">time-grading-and-ui-polish</span>
+    <span id="buildVersion">followup-fixes</span>
     <span id="datasetInfo">loading dataset…</span>
     <button id="reviewBadge" class="review-pill" type="button" hidden></button>
   </header>
