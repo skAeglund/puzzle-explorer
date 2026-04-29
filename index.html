@@ -783,7 +783,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">castle-check-sounds</span>
+    <span id="buildVersion">drop-meta-sfx</span>
     <button id="soundToggle" class="sound-toggle" type="button" aria-label="Toggle sound" title="Toggle sound effects">🔊</button>
     <span id="datasetInfo">loading dataset…</span>
     <button id="reviewBadge" class="review-pill" type="button" hidden></button>
@@ -1966,7 +1966,11 @@
           // due count → header badge needs to reflect that.
           refreshReviewBadge();
         }
-        Sound.play('error');        // wrong-move audio — pairs with red flash
+        // No audio for wrong moves — visual feedback (flash + X) is enough,
+        // and silence on a rejected move pairs with chessboard.js's snapback
+        // (the move "didn't really happen"). Only physical chess sounds —
+        // move/capture/check/castle — are in our surface; meta-feedback
+        // chimes (the old Error/Confirmation) were intentionally dropped.
         chess.undo();              // revert the wrong move on chess.js
         flashWrong(target);        // transient red wash (650ms fade)
         paintWrongX(target);       // persistent X badge until next attempt
@@ -2452,11 +2456,10 @@
     }
 
     function handleCompletion(result) {
-      // Completion fanfare. Delayed ~250ms so it follows the final move's
-      // own sound (Move/Capture/Check) instead of colliding with it. The
-      // delay also matches roughly when the chessboard.js animation has
-      // settled on the final position, which feels right perceptually.
-      setTimeout(function () { Sound.play('confirmation'); }, 250);
+      // No completion fanfare — the final move's own sound (move/capture/
+      // check/castle, fired upstream in commitDrillMove or playOppReply)
+      // serves as the audio cue for "puzzle done". The visual completion
+      // strip + status text + ✓ badge cover the rest.
       // SRS-gating: only put a puzzle in the review queue if the user
       // demonstrably needed help on it. Per project rule: wrong attempt
       // OR hint used = SRS; clean first attempt = noted as seen, not

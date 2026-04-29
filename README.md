@@ -102,8 +102,8 @@ python3 -m http.server 8000
 
 - Puzzle dataset by [Han Schut][han] (CC0).
 - Drilling sound effects from two sources:
-  - **lila** (the Lichess source repo): `Move`, `Capture`, `Error`,
-    `Confirmation` from the [standard sound set][lila-sound], all AGPLv3+.
+  - **lila** (the Lichess source repo): `Move`, `Capture` from the
+    [standard sound set][lila-sound], AGPLv3+.
   - **chess.com** default theme: `Check`, `Castle`. Proprietary; included
     under personal-use posture only — do not redistribute as part of a
     derivative product.
