@@ -900,7 +900,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">training-ranges</span>
+    <span id="buildVersion">auto-next-fast</span>
     <button id="soundToggle" class="sound-toggle" type="button" aria-label="Toggle sound" title="Toggle sound effects">🔊</button>
     <span id="datasetInfo">loading dataset…</span>
     <button id="reviewBadge" class="review-pill" type="button" hidden></button>
@@ -1000,7 +1000,7 @@
              the Next-puzzle button's gating). Glyph + label match the
              color-filter button's lightweight toggle treatment — this is
              a session preference, not a primary action. -->
-        <button id="autoNextBtn" hidden title="When ON, automatically advance to the next session puzzle after a 1.5s delay (only when the puzzle was solved without errors).">☐ Auto-next</button>
+        <button id="autoNextBtn" hidden title="When ON, automatically advance to the next session puzzle after a brief delay (only when the puzzle was solved without errors).">☐ Auto-next</button>
         <a id="lichessLink" class="lichess-link" href="#" target="_blank" rel="noopener">view source game ↗</a>
         <a id="analyzeLink" class="lichess-link" href="#" target="_blank" rel="noopener" title="Open this position on Lichess's analysis board with engine evaluation">analyze on Lichess ↗</a>
       </div>
@@ -1271,6 +1271,13 @@
     // can cancel cleanly. See loadSettings + cancelAutoNext.
     var autoNextEnabled = false; // populated from localStorage on init
     var autoNextTimeout = null;  // setTimeout id; cleared on cancel paths
+    // True for the brief window between auto-next firing and enterDrillMode
+    // consuming it. Signals to enterDrillMode that the next puzzle should
+    // use the fast pre-puzzle intro (no 700ms wait, just the move animation)
+    // since the user is grinding through with auto-next on. Reset to false
+    // by enterDrillMode AND on Back / cancel paths so a manual Next or a
+    // navigation never inherits a stale "fast" flag.
+    var autoNextInFlight = false;
     // Click-to-move state. selectedSquare tracks the user's currently-selected
     // own piece. deselectionPending implements MistakeLab's mousedown/mouseup
     // dance: clicking the already-selected square doesn't deselect immediately
@@ -2113,7 +2120,16 @@
       // pre-blunder position briefly, then animate the move that creates
       // the tactic. Backward-compatible: older bodies without these fields
       // start the user directly at puzzle.fen.
+      //
+      // Auto-next users are grinding through; the 700ms cinematic wait
+      // is dead time. fastIntro skips the wait but keeps the 200ms move
+      // animation, so the user still sees the blunder happen — just
+      // without the pre-roll. Total intro shrinks from ~900ms to ~200ms.
+      // Guarded by sessionState — a stale flag from a body-fetch failure
+      // can't leak into a single-puzzle row-click drill.
       var hasIntro = !!(puzzle.previousFen && puzzle.previousMove);
+      var fastIntro = autoNextInFlight && hasIntro && !!sessionState;
+      autoNextInFlight = false;     // consume regardless — one-shot
       var initialFen = hasIntro ? puzzle.previousFen : puzzle.fen;
 
       // Reset chess.js to the initial position. v0.10.3 load() returns boolean.
@@ -2142,11 +2158,11 @@
       });
 
       if (hasIntro) {
-        // During the wait, onDragStart already blocks user from moving
-        // because chess.turn() is the opponent's color at previousFen.
-        // No lastmove highlight yet — the blunder hasn't been "played".
-        setStatus('Opponent to move…', 'info');
-        introTimeout = setTimeout(function () {
+        // The blunder-play closure is shared between the cinematic path
+        // (700ms wait) and the fast path (no wait). Both end at the
+        // same state: chess.js advanced to puzzle.fen, board animated,
+        // lastmove + check painted, solve clock started.
+        var playBlunderIntro = function () {
           introTimeout = null;
           if (mode !== 'drill' || !drillState) return; // user backed out
           var uci = puzzle.previousMove;
@@ -2178,13 +2194,28 @@
           // survive the position-animation's DOM rebuild.
           applyLastMoveAndCheckDeferred(m.from, m.to);
           // Start the solve clock NOW — the user can finally move. Doing
-          // it here (vs at Drill.start) excludes the 700ms intro delay
-          // from the time-based grading; without this, the first user
-          // move's "thinking time" would be inflated by ~700ms which
-          // matters at the 10s/move (Easy) threshold.
+          // it here (vs at Drill.start) excludes the intro delay from the
+          // time-based grading; without this, the first user move's
+          // "thinking time" would be inflated which matters at the 10s/move
+          // (Easy) threshold. Fast-intro path: there's no 700ms wait, so
+          // the exclusion is just the ~200ms animation, which is fine.
           drillState = Drill.markSolveStart(drillState, new Date());
           setStatus('Your move.', 'info');
-        }, 700);
+        };
+        if (fastIntro) {
+          // Auto-next: skip the 700ms wait. The 200ms move animation
+          // inside playBlunderIntro still plays, so the user sees the
+          // blunder happen — just immediately, no dead time. setStatus
+          // ('Your move.') at the tail wins; no need for the "Opponent
+          // to move…" pre-roll text since it would never visibly paint.
+          playBlunderIntro();
+        } else {
+          // During the wait, onDragStart already blocks user from moving
+          // because chess.turn() is the opponent's color at previousFen.
+          // No lastmove highlight yet — the blunder hasn't been "played".
+          setStatus('Opponent to move…', 'info');
+          introTimeout = setTimeout(playBlunderIntro, 700);
+        }
       } else {
         // No-intro path: still surface check on the puzzle's starting
         // position (e.g. mate-in-1 with the user already in check).
@@ -3123,6 +3154,10 @@
       // next training session from seeing stale outcomes if (somehow)
       // renderTrainingPostCompletion runs before onStartTrainingClick resets.
       trainingOutcomes = null;
+      // Belt-and-braces — fastIntro's sessionState guard already prevents
+      // a stuck flag from leaking into single-puzzle drilling, but explicit
+      // reset keeps the invariant tidy.
+      autoNextInFlight = false;
       mode = 'search';
       $('#drillPanel').prop('hidden', true);
       $('#completionStrip').prop('hidden', true);
@@ -3448,6 +3483,7 @@
         // from a prior session-complete state (e.g. user clicked Retry,
         // body fetch failed before any new puzzle painted).
         trainingOutcomes = null;
+        autoNextInFlight = false;
         $('#trainingStats').prop('hidden', true).empty();
         $('#retryFailedBtn').prop('hidden', true).removeData('failedItems');
         $('#sessionProgress').prop('hidden', true);
@@ -3505,6 +3541,7 @@
         var wasReview = (sessionState && sessionState.kind === 'review');
         sessionState = null;
         trainingOutcomes = null;
+        autoNextInFlight = false;
         $('#trainingStats').prop('hidden', true).empty();
         $('#retryFailedBtn').prop('hidden', true).removeData('failedItems');
         $('#sessionProgress').prop('hidden', true);
@@ -3641,7 +3678,12 @@
     // bails out, matching the user-visible "click anywhere to cancel"
     // promise. Document-level listeners are namespaced with .autonext so
     // teardown removes only ours.
-    var AUTO_NEXT_DELAY_MS = 1500;
+    //
+    // Delay is short (500ms) — auto-next is for grinding through, not
+    // pausing to admire the solution. The cancel surface still works at
+    // 500ms (any keypress or page-click bails) but users who want to
+    // study should toggle auto-next off.
+    var AUTO_NEXT_DELAY_MS = 500;
 
     function onAutoNextToggleClick() {
       autoNextEnabled = !autoNextEnabled;
@@ -3661,12 +3703,15 @@
     function scheduleAutoNext() {
       // Caller (handleCompletion) verified: in session, grade != Again,
       // there's a next puzzle in the queue. Job here is just timer +
-      // status + cancellation listeners.
+      // status + cancellation listeners. Sets autoNextInFlight INSIDE the
+      // timer callback (not at scheduleAutoNext call time) so a cancel
+      // before the timer fires never leaves the flag set.
       $(document).on('mousedown.autonext keydown.autonext', cancelAutoNext);
-      setStatus('Auto-advancing in 1.5s — click anywhere to cancel.', 'info');
+      setStatus('Auto-advancing — click anywhere to cancel.', 'info');
       autoNextTimeout = setTimeout(function () {
         autoNextTimeout = null;
         $(document).off('.autonext');
+        autoNextInFlight = true;
         onNextPuzzleClick();
       }, AUTO_NEXT_DELAY_MS);
     }
