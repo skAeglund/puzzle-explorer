@@ -98,6 +98,20 @@ python3 -m http.server 8000
 # open http://localhost:8000/
 ```
 
+## Credits
+
+- Puzzle dataset by [Han Schut][han] (CC0).
+- Drilling sound effects from [lila][lila] (the Lichess source repo) —
+  `Move`, `Capture`, `Error`, `Confirmation` from the standard set, `Check`
+  from the sfx set (composed by [Enigmahack][enigma]). All AGPLv3+.
+
+[lila]: https://github.com/lichess-org/lila/tree/master/public/sound
+[enigma]: https://github.com/Enigmahack
+
 ## License
 
-CC0 — same as the upstream puzzle data.
+Code: CC0 — same as the upstream puzzle data.
+
+The bundled audio files in `sounds/` retain their upstream **AGPLv3+**
+license; reuse and redistribution must comply with that license, not CC0.
+

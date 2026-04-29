@@ -69,6 +69,26 @@
       width: 100%;
       margin-top: 4px;
     }
+    /* Tiny icon-only toggle in the header. Sits inline with h1 + buildVersion
+       on the top row (flex-wrap pushes datasetInfo and reviewBadge below).
+       Ghost styling — text-color + transparent bg — keeps it visually quiet
+       so the puzzle UI stays the focal point. */
+    .sound-toggle {
+      background: transparent;
+      border: none;
+      cursor: pointer;
+      font-size: 14px;
+      line-height: 1;
+      padding: 2px 6px;
+      color: var(--fg-dim);
+      border-radius: 3px;
+      transition: color 0.1s, background 0.1s;
+    }
+    .sound-toggle:hover { color: var(--fg); background: var(--border); }
+    .sound-toggle:focus-visible {
+      outline: 2px solid var(--accent-hover);
+      outline-offset: 2px;
+    }
     /* Review-due badge in the header. Doubles as the entry point — hidden
        at zero due, clickable when the count is positive. Sits on its own
        row (width:100%) below #datasetInfo, since #datasetInfo claims a full
@@ -763,7 +783,8 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">r2-publish</span>
+    <span id="buildVersion">sound-effects</span>
+    <button id="soundToggle" class="sound-toggle" type="button" aria-label="Toggle sound" title="Toggle sound effects">🔊</button>
     <span id="datasetInfo">loading dataset…</span>
     <button id="reviewBadge" class="review-pill" type="button" hidden></button>
   </header>
@@ -893,6 +914,7 @@
   <script src="lib/progress.js"></script>
   <!-- IndexedDB shard cache (independent leaf module; safe to load last) -->
   <script src="lib/cache.js"></script>
+  <script src="lib/sound.js"></script>
 
   <script>
   'use strict';
@@ -1101,6 +1123,7 @@
       if (typeof Drill !== 'object' || !Drill) missing.push('lib/drill.js');
       if (typeof Session !== 'object' || !Session) missing.push('lib/session.js');
       if (typeof Progress !== 'object' || !Progress) missing.push('lib/progress.js');
+      if (typeof Sound !== 'object' || !Sound) missing.push('lib/sound.js');
       if (missing.length) {
         setStatus('Failed to load: ' + missing.join(', ') + '. Check the browser console / network tab.', 'error');
         return;
@@ -1173,6 +1196,14 @@
       $('#startSessionBtn').on('click', onStartSessionClick);
       $('#reviewBadge').on('click', onReviewBadgeClick);
       $('#detailsToggleBtn').on('click', onDetailsToggleClick);
+      // Sound toggle — preload audio elements, restore persisted on/off state,
+      // then sync the button label to whatever Sound.isEnabled() ended up as.
+      Sound.init();
+      $('#soundToggle').on('click', function () {
+        Sound.setEnabled(!Sound.isEnabled());
+        refreshSoundToggle();
+      });
+      refreshSoundToggle();
       // Slider 'input' fires continuously as the user drags; 'change'
       // fires only on release. Use 'input' for live count + fill updates.
       $('#ratingMin, #ratingMax').on('input', onRatingSliderInput);
@@ -1716,6 +1747,9 @@
             return;
           }
           if (board) board.position(chess.fen()); // animated by default
+          // Audio for the opponent's blunder. chess.in_check / in_checkmate
+          // reflect post-move state: was the USER (now to move) put in check?
+          Sound.playForMove(m, chess.in_check(), chess.in_checkmate());
           // Show the blunder squares as the lastmove + paint check on
           // the player's king if applicable. Deferred so the highlights
           // survive the position-animation's DOM rebuild.
@@ -1932,6 +1966,7 @@
           // due count → header badge needs to reflect that.
           refreshReviewBadge();
         }
+        Sound.play('error');        // wrong-move audio — pairs with red flash
         chess.undo();              // revert the wrong move on chess.js
         flashWrong(target);        // transient red wash (650ms fade)
         paintWrongX(target);       // persistent X badge until next attempt
@@ -1940,8 +1975,11 @@
       }
 
       // Correct: clear hint, queue opp reply if any, mark the move so
-      // onSnapEnd (drag) or the click handler can paint lastmove.
+      // onSnapEnd (drag) or the click handler can paint lastmove. Audio
+      // for the move itself fires here — chess.in_check / in_checkmate
+      // see post-move state (the side TO MOVE, i.e. the opponent now).
       clearHintHighlight();
+      Sound.playForMove(moveObj, chess.in_check(), chess.in_checkmate());
       lastSuccessfulUserMove = { from: moveObj.from, to: moveObj.to };
 
       if (result.result === 'continue') {
@@ -2397,6 +2435,9 @@
       }
       // Animated update — default chessboard.js behavior, NOT onSnapEnd here.
       if (board) board.position(chess.fen());
+      // Audio for the opponent's reply. Same post-move check semantics as
+      // the user-move path: chess.in_check is now from the user's POV.
+      Sound.playForMove(moveObj, chess.in_check(), chess.in_checkmate());
       // Re-apply lastmove + check after the animation settles.
       applyLastMoveAndCheckDeferred(from, to);
       // If a 'complete' result carried an opp reply, the puzzle ended on
@@ -2411,6 +2452,11 @@
     }
 
     function handleCompletion(result) {
+      // Completion fanfare. Delayed ~250ms so it follows the final move's
+      // own sound (Move/Capture/Check) instead of colliding with it. The
+      // delay also matches roughly when the chessboard.js animation has
+      // settled on the final position, which feels right perceptually.
+      setTimeout(function () { Sound.play('confirmation'); }, 250);
       // SRS-gating: only put a puzzle in the review queue if the user
       // demonstrably needed help on it. Per project rule: wrong attempt
       // OR hint used = SRS; clean first attempt = noted as seen, not
@@ -2662,6 +2708,18 @@
       } else {
         $b.prop('hidden', true).text('');
       }
+    }
+
+    // Sync the sound-toggle button's icon + aria-pressed to Sound.isEnabled().
+    // Called once at init (after Sound.init() reads localStorage) and on every
+    // user click. Speaker icons match what most music apps use; aria-pressed
+    // gives screen readers the toggle state without a label change.
+    function refreshSoundToggle() {
+      var on = Sound.isEnabled();
+      var $b = $('#soundToggle');
+      $b.text(on ? '🔊' : '🔇');
+      $b.attr('aria-pressed', on ? 'true' : 'false');
+      $b.attr('title', on ? 'Sound on (click to mute)' : 'Sound off (click to unmute)');
     }
 
     // Click the badge → build the queue, install it as sessionState
