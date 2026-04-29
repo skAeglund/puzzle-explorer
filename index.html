@@ -798,7 +798,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">training-session</span>
+    <span id="buildVersion">training-audit</span>
     <button id="soundToggle" class="sound-toggle" type="button" aria-label="Toggle sound" title="Toggle sound effects">🔊</button>
     <span id="datasetInfo">loading dataset…</span>
     <button id="reviewBadge" class="review-pill" type="button" hidden></button>
@@ -2657,7 +2657,9 @@
       $('#hintBtn').prop('disabled', true);
       if (sessionState) {
         $('#nextPuzzleBtn').prop({ disabled: false, hidden: false }).focus();
-        var exitLabel = (sessionState.kind === 'review') ? 'Exit review' : 'Exit session';
+        var exitLabel = (sessionState.kind === 'review')   ? 'Exit review'
+                      : (sessionState.kind === 'training') ? 'Exit training'
+                      :                                      'Exit session';
         setStatus('Click Next puzzle to continue, or ' + exitLabel + ' to stop.', 'info');
         // Auto-next: schedule a programmatic Next-click after a brief delay,
         // BUT only when (a) the toggle is on, (b) the user solved without
@@ -2734,6 +2736,7 @@
       var lastPid = drillPuzzle ? drillPuzzle.id : null;
       var hadSession = !!sessionState;
       var wasReview = !!(sessionState && sessionState.kind === 'review');
+      var wasTraining = !!(sessionState && sessionState.kind === 'training');
       drillState = null;
       drillPuzzle = null;
       sessionState = null;          // exit session if active
@@ -2779,6 +2782,8 @@
             : 'Set a position and click Search, or come back when more reviews are due.',
           'info'
         );
+      } else if (wasTraining) {
+        setStatus('Pick a row, or start another training session.', 'info');
       } else if (hadSession) {
         setStatus('Adjust the range and start a new session, or pick a row.', 'info');
       } else if (lastPid) {
@@ -3160,7 +3165,9 @@
       // it's specifically here for the in-place cancels (toggle off, page
       // click, keypress) where no caller-side status follows.
       if (hadTimer && sessionState && drillState && drillState.complete) {
-        var exitLabel = (sessionState.kind === 'review') ? 'Exit review' : 'Exit session';
+        var exitLabel = (sessionState.kind === 'review')   ? 'Exit review'
+                      : (sessionState.kind === 'training') ? 'Exit training'
+                      :                                      'Exit session';
         setStatus('Click Next puzzle to continue, or ' + exitLabel + ' to stop.', 'info');
       }
     }

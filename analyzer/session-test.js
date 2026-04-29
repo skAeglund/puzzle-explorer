@@ -941,6 +941,26 @@ section('Session.trainingRound: roundNumber/roundCount filter empty rounds');
   check('empty trailing: Easy shown as Round 1/2', tail0.roundNumber === 1 && tail0.label === 'Easy');
   const tail1 = Session.trainingRound(Session.advance(Session.advance(tTail).state).state);
   check('empty trailing: Medium shown as Round 2/2', tail1.roundNumber === 2 && tail1.label === 'Medium');
+
+  // (e) only ONE round populated (two consecutive empties trailing) →
+  // user sees "Round 1/1" — the lone round at full denominator.
+  const tOnly = Session.createTraining({
+    matches: [['a', 1000], ['b', 1100]],
+    rounds: [
+      { label: 'Easy',   ratingMin: 800,  ratingMax: 1399, target: 2 },
+      { label: 'Medium', ratingMin: 1400, ratingMax: 1999, target: 2 },
+      { label: 'Hard',   ratingMin: 2000, ratingMax: null, target: 2 }
+    ],
+    isCompleted: NEVER_COMPLETED,
+    rng: mulberry32(11)
+  });
+  const only0 = Session.trainingRound(Session.advance(tOnly).state);
+  check('two trailing empties: roundCount=1', only0.roundCount === 1);
+  check('two trailing empties: Round 1/1 · Easy', only0.roundNumber === 1 && only0.label === 'Easy');
+  check('two trailing empties: totalRounds still 3 (configured)', only0.totalRounds === 3);
+  const only1 = Session.trainingRound(Session.advance(Session.advance(tOnly).state).state);
+  check('two trailing empties: stays at Round 1/1 across the round',
+    only1.roundNumber === 1 && only1.label === 'Easy' && only1.currentInRound === 2);
 }
 
 // ─── summary ─────────────────────────────────────────────────────────────
