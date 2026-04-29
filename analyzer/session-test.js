@@ -386,6 +386,161 @@ section('Session.createFromIds → progress label');
   check('after 3 advances: 3/4', p.current === 3 && p.total === 4);
 }
 
+// ━━━ retreat ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+section('Session.retreat — walks backward through the queue');
+{
+  // Build a fresh session and walk to the third puzzle.
+  let s = Session.create({
+    matches: MATCHES, isCompleted: NEVER_COMPLETED, rng: mulberry32(7)
+  });
+  s = Session.advance(s).state; // cursor 0
+  s = Session.advance(s).state; // cursor 1
+  s = Session.advance(s).state; // cursor 2 (3rd puzzle)
+  check('precondition: cursor=2', s.cursor === 2);
+  const queueAt2 = s.queue[2];
+  const queueAt1 = s.queue[1];
+  const queueAt0 = s.queue[0];
+
+  const r1 = Session.retreat(s);
+  check('first retreat: cursor=1',         r1.state.cursor === 1);
+  check('first retreat: puzzleId=queue[1]', r1.puzzleId === queueAt1);
+  check('first retreat: !atStart',          r1.atStart === false);
+  check('first retreat: complete=false',    r1.state.complete === false);
+
+  const r2 = Session.retreat(r1.state);
+  check('second retreat: cursor=0',          r2.state.cursor === 0);
+  check('second retreat: puzzleId=queue[0]', r2.puzzleId === queueAt0);
+  check('second retreat: atStart=true',      r2.atStart === true);
+
+  // Walking forward from here should resume at queue[1] (cursor was 0,
+  // advance bumps to 1 — so the forward walk re-yields queueAt1).
+  const fwd = Session.advance(r2.state);
+  check('advance after retreat: cursor=1',    fwd.state.cursor === 1);
+  check('advance after retreat: puzzleId',    fwd.puzzleId === queueAt1);
+
+  // Retain the cursor=2 baseline: original `s` is unmutated.
+  check('original state unmutated', s.cursor === 2 && s.queue[2] === queueAt2);
+}
+
+section('Session.retreat — idempotent at cursor 0');
+{
+  let s = Session.create({
+    matches: MATCHES, isCompleted: NEVER_COMPLETED, rng: mulberry32(13)
+  });
+  s = Session.advance(s).state; // cursor 0
+  const r1 = Session.retreat(s);
+  check('cursor 0 → atStart=true',    r1.atStart === true);
+  check('cursor 0 → puzzleId=null',   r1.puzzleId === null);
+  check('cursor 0 → cursor unchanged', r1.state.cursor === 0);
+
+  // Idempotent: another retreat is still a no-op.
+  const r2 = Session.retreat(r1.state);
+  check('repeat retreat: still atStart', r2.atStart === true);
+  check('repeat retreat: still null',    r2.puzzleId === null);
+  check('repeat retreat: cursor=0',      r2.state.cursor === 0);
+}
+
+section('Session.retreat — fresh state (cursor=-1)');
+{
+  // Calling retreat before the first advance — defensive case. The UI
+  // gates the button so this shouldn't happen in practice, but make sure
+  // we don't crash or jump to a nonsense cursor.
+  const s = Session.create({
+    matches: MATCHES, isCompleted: NEVER_COMPLETED, rng: mulberry32(1)
+  });
+  check('precondition: cursor=-1', s.cursor === -1);
+  const r = Session.retreat(s);
+  check('fresh: atStart=true',       r.atStart === true);
+  check('fresh: puzzleId=null',      r.puzzleId === null);
+  check('fresh: cursor unchanged',   r.state.cursor === -1);
+}
+
+section('Session.retreat — empty queue');
+{
+  const s = Session.create({ matches: [] });
+  const r = Session.retreat(s);
+  check('empty: atStart=true',  r.atStart === true);
+  check('empty: puzzleId=null', r.puzzleId === null);
+}
+
+section('Session.retreat — from complete state skips dead cursor');
+{
+  // Walk a 3-puzzle queue to exhaustion. advance() pins cursor at
+  // queue.length and sets complete=true; the visible board is still
+  // queue[length-1]. Retreat from this state should land on
+  // queue[length-2] (the puzzle BEFORE the visually-current one) in
+  // one step, NOT on queue[length-1] (re-loading the same puzzle).
+  let s = Session.createFromIds(['a', 'b', 'c']);
+  s = Session.advance(s).state; // cursor 0
+  s = Session.advance(s).state; // cursor 1
+  s = Session.advance(s).state; // cursor 2 (last puzzle visible)
+  const final = Session.advance(s); // exhaust
+  check('precondition: complete=true',     final.state.complete === true);
+  check('precondition: cursor=length',     final.state.cursor === 3);
+  check('precondition: exhausted=true',    final.exhausted === true);
+
+  const r = Session.retreat(final.state);
+  check('post-complete retreat: cursor=1',   r.state.cursor === 1);
+  check('post-complete retreat: puzzleId=b', r.puzzleId === 'b');
+  check('post-complete retreat: complete=false', r.state.complete === false);
+  check('post-complete retreat: !atStart',   r.atStart === false);
+}
+
+section('Session.retreat — from complete with single-puzzle queue');
+{
+  // Edge case: 1-puzzle session, exhausted. Retreat has no "second-to-last"
+  // to land on. Should be a no-op with atStart=true.
+  let s = Session.createFromIds(['only']);
+  s = Session.advance(s).state;     // cursor 0
+  const final = Session.advance(s); // exhaust → cursor 1, complete
+  check('precondition: complete=true', final.state.complete === true);
+
+  const r = Session.retreat(final.state);
+  check('1-puzzle complete retreat: atStart=true', r.atStart === true);
+  check('1-puzzle complete retreat: puzzleId=null', r.puzzleId === null);
+}
+
+section('Session.retreat — does not mutate input state');
+{
+  let s = Session.create({
+    matches: MATCHES, isCompleted: NEVER_COMPLETED, rng: mulberry32(11)
+  });
+  s = Session.advance(s).state;
+  s = Session.advance(s).state;
+  const before = JSON.stringify(s);
+  Session.retreat(s);
+  check('input state unmutated', JSON.stringify(s) === before);
+}
+
+section('Session.retreat — throws on missing state');
+{
+  let threw = false;
+  try { Session.retreat(); } catch (e) { threw = true; }
+  check('retreat() throws', threw);
+}
+
+section('Session.retreat — round-trip with progress');
+{
+  // After advancing N times then retreating once, progress should drop
+  // by 1. Verifies the cursor decrement plays nicely with the existing
+  // progress() display contract.
+  let s = Session.createFromIds(['a', 'b', 'c', 'd', 'e']);
+  s = Session.advance(s).state; // 1/5
+  s = Session.advance(s).state; // 2/5
+  s = Session.advance(s).state; // 3/5
+  let p = Session.progress(s);
+  check('forward: 3/5', p.current === 3 && p.total === 5);
+
+  s = Session.retreat(s).state; // 2/5
+  p = Session.progress(s);
+  check('retreat: 2/5', p.current === 2 && p.total === 5);
+
+  s = Session.retreat(s).state; // 1/5
+  p = Session.progress(s);
+  check('retreat: 1/5', p.current === 1 && p.total === 5);
+}
+
 // ─── summary ─────────────────────────────────────────────────────────────
 console.log('\n' + (fail === 0 ? '✓' : '✗') + ' ' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail === 0 ? 0 : 1);

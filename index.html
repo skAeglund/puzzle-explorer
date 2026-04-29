@@ -783,7 +783,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">drop-meta-sfx</span>
+    <span id="buildVersion">prev-puzzle</span>
     <button id="soundToggle" class="sound-toggle" type="button" aria-label="Toggle sound" title="Toggle sound effects">🔊</button>
     <span id="datasetInfo">loading dataset…</span>
     <button id="reviewBadge" class="review-pill" type="button" hidden></button>
@@ -861,6 +861,7 @@
       <div class="drill-themes" id="drillThemes" hidden></div>
       <div class="drill-opening" id="drillOpening" hidden></div>
       <div class="drill-controls">
+        <button id="prevPuzzleBtn" hidden disabled title="Go back to the previous puzzle in the session/review queue.">← Previous</button>
         <button id="hintBtn">Hint</button>
         <button id="backBtn" class="primary">Back to results</button>
         <!-- Session-only setting (hidden in single-puzzle drilling, mirroring
@@ -1192,6 +1193,7 @@
       $('#hintBtn').on('click', onHintClick);
       $('#backBtn').on('click', onBackClick);
       $('#nextPuzzleBtn').on('click', onNextPuzzleClick);
+      $('#prevPuzzleBtn').on('click', onPrevPuzzleClick);
       $('#autoNextBtn').on('click', onAutoNextToggleClick);
       $('#startSessionBtn').on('click', onStartSessionClick);
       $('#reviewBadge').on('click', onReviewBadgeClick);
@@ -1677,6 +1679,15 @@
       // exists in session mode. Hide the toggle in single-puzzle drilling
       // so it doesn't suggest a behavior that won't happen.
       $('#autoNextBtn').prop('hidden', !sessionState);
+      // Previous-puzzle button: same session-only gating as Auto-next, but
+      // additionally disabled at cursor=0 (no earlier puzzle to retreat to).
+      // Lives in .drill-controls (not the completion strip) so it's available
+      // throughout the drill — going back is navigation, not a forfeit, so
+      // we don't require the user to first solve.
+      $('#prevPuzzleBtn').prop({
+        hidden: !sessionState,
+        disabled: !sessionState || sessionState.cursor <= 0
+      });
       // Reset completion-strip + result badges for the new puzzle.
       // destroyBoard() already wipes the board DOM (so square-correct /
       // square-wrong-x classes vanish with it), but be explicit.
@@ -2829,9 +2840,62 @@
         $('#sessionProgress').prop('hidden', true);
         $('#completionStrip').prop('hidden', true);
         $('#nextPuzzleBtn').prop('hidden', true);
+        $('#prevPuzzleBtn').prop('hidden', true);
         $('#autoNextBtn').prop('hidden', true);
         // In review mode there's no result list to return to — Back
         // closes the drill panel and drops the user at search-mode home.
+        $('#backBtn').addClass('primary').text(wasReview ? 'Done' : 'Back to results');
+      }
+    }
+
+    // Previous-puzzle: rewind the session cursor and drill the prior id.
+    // Available throughout the drill (not just at completion) — going
+    // backward is navigation, not a forfeit, so we don't require the
+    // user to first solve. Allowed even from the post-completion state:
+    // Session.retreat handles the dead cursor=length position by stepping
+    // to length-2 in one call (see lib/session.js for the asymmetry).
+    // Same sessionLoading race guard as onNextPuzzleClick.
+    async function onPrevPuzzleClick() {
+      if (sessionLoading) return;
+      if (!sessionState) return;
+      // Already at the first puzzle (or empty queue) — no-op. The button
+      // is disabled in this state, but a stale click event could still
+      // arrive between renders, so check defensively.
+      var visibleCursor = sessionState.complete
+        ? sessionState.queue.length - 1
+        : sessionState.cursor;
+      if (visibleCursor <= 0) return;
+      // Drop any pending auto-next timer — Prev is an explicit user
+      // navigation, override any auto-advance that was queued.
+      cancelAutoNext();
+      $('#prevPuzzleBtn').prop('disabled', true);
+      sessionLoading = true;
+      try {
+        await retreatSessionAndDrill();
+      } finally {
+        sessionLoading = false;
+      }
+    }
+
+    async function retreatSessionAndDrill() {
+      var r = Session.retreat(sessionState);
+      sessionState = r.state;
+      // Defensive: r.puzzleId is null when retreat had nowhere to go.
+      // The onPrevPuzzleClick guard catches this above, so we shouldn't
+      // see it here, but bail gracefully if we do.
+      if (!r.puzzleId) return;
+      var ok = await startDrillByPuzzleId(r.puzzleId);
+      if (!ok) {
+        // Mirror advanceSessionAndDrill's bail-out: body fetch / parse
+        // failed for an id that came out of our own queue. Drop session
+        // state and restore single-puzzle Back styling.
+        var wasReview = (sessionState && sessionState.kind === 'review');
+        sessionState = null;
+        $('#sessionProgress').prop('hidden', true);
+        $('#completionStrip').prop('hidden', true);
+        $('#nextPuzzleBtn').prop('hidden', true);
+        $('#prevPuzzleBtn').prop('hidden', true);
+        $('#autoNextBtn').prop('hidden', true);
         $('#backBtn').addClass('primary').text(wasReview ? 'Done' : 'Back to results');
       }
     }
