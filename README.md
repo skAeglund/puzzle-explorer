@@ -101,17 +101,20 @@ python3 -m http.server 8000
 ## Credits
 
 - Puzzle dataset by [Han Schut][han] (CC0).
-- Drilling sound effects from [lila][lila] (the Lichess source repo) —
-  `Move`, `Capture`, `Error`, `Confirmation` from the standard set, `Check`
-  from the sfx set (composed by [Enigmahack][enigma]). All AGPLv3+.
+- Drilling sound effects from two sources:
+  - **lila** (the Lichess source repo): `Move`, `Capture`, `Error`,
+    `Confirmation` from the [standard sound set][lila-sound], all AGPLv3+.
+  - **chess.com** default theme: `Check`, `Castle`. Proprietary; included
+    under personal-use posture only — do not redistribute as part of a
+    derivative product.
 
-[lila]: https://github.com/lichess-org/lila/tree/master/public/sound
-[enigma]: https://github.com/Enigmahack
+[lila-sound]: https://github.com/lichess-org/lila/tree/master/public/sound
 
 ## License
 
 Code: CC0 — same as the upstream puzzle data.
 
-The bundled audio files in `sounds/` retain their upstream **AGPLv3+**
-license; reuse and redistribution must comply with that license, not CC0.
+The bundled audio in `sounds/` has mixed licensing: the lila-sourced files
+are **AGPLv3+**, the chess.com-sourced files are proprietary. Reuse and
+redistribution must comply with the respective upstream licenses, not CC0.
 
