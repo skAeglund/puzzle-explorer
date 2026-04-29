@@ -752,6 +752,63 @@
       font-variant-numeric: tabular-nums;
     }
     .training-meta.empty { color: var(--fg-dim); }
+    /* Training rating ranges editor — collapsed by default, expands on
+       click to reveal a 3-row grid of (label, min, dash, max) inputs. */
+    .training-ranges {
+      margin: 0 2px 8px;
+      font-size: 12px;
+      color: var(--fg-dim);
+    }
+    .training-ranges-summary {
+      cursor: pointer;
+      user-select: none;
+      padding: 2px 0;
+      color: var(--fg-dim);
+      list-style: revert;     /* keep the native disclosure triangle */
+    }
+    .training-ranges-summary:hover { color: var(--fg); }
+    .training-ranges[open] > .training-ranges-summary { color: var(--fg); }
+    .training-ranges-grid {
+      display: grid;
+      grid-template-columns: auto auto auto auto;
+      gap: 6px 8px;
+      align-items: center;
+      margin: 8px 0;
+      width: max-content;
+    }
+    .training-ranges-label {
+      color: var(--fg);
+      font-weight: 500;
+    }
+    .training-ranges-dash {
+      color: var(--fg-dim);
+      text-align: center;
+    }
+    .training-ranges-input {
+      width: 56px;
+      font-size: 12px;
+      padding: 3px 5px;
+      background: var(--bg);
+      color: var(--fg);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      font-variant-numeric: tabular-nums;
+      /* Suppress browser-supplied spinners — they crowd narrow inputs and
+         the slider/keyboard arrows already cover increment/decrement. */
+      -moz-appearance: textfield;
+    }
+    .training-ranges-input::-webkit-outer-spin-button,
+    .training-ranges-input::-webkit-inner-spin-button {
+      -webkit-appearance: none; margin: 0;
+    }
+    .training-ranges-input.invalid {
+      border-color: var(--error);
+    }
+    .training-ranges-reset {
+      font-size: 11px;
+      padding: 4px 10px;
+      margin-top: 4px;
+    }
     .session-progress {
       font-size: 11px;
       color: var(--fg-dim);
@@ -843,7 +900,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">training-stats</span>
+    <span id="buildVersion">training-ranges</span>
     <button id="soundToggle" class="sound-toggle" type="button" aria-label="Toggle sound" title="Toggle sound effects">🔊</button>
     <span id="datasetInfo">loading dataset…</span>
     <button id="reviewBadge" class="review-pill" type="button" hidden></button>
@@ -970,10 +1027,42 @@
       <div class="row">
         <button id="startSessionBtn" class="primary">Start session</button>
       </div>
-      <!-- Training session: 3 chained rounds across fixed difficulty
-           buckets (defaults: 15 easy + 10 medium + 5 hard). Independent
-           of the slider above — training has its own bucket bounds. -->
+      <!-- Training session: 3 chained rounds across difficulty buckets
+           (defaults: 15 easy + 10 medium + 5 hard). Independent of the
+           slider above — training has its own bucket bounds. The
+           rating bounds are user-customizable via the disclosure below
+           (collapsed by default; native <details> for zero-JS toggle). -->
       <div class="training-divider"></div>
+      <details class="training-ranges" id="trainingRanges">
+        <summary class="training-ranges-summary">Customize ranges</summary>
+        <div class="training-ranges-grid">
+          <!-- Three rows of (label, min input, dash, max input). data-round
+               + data-bound on each input let one delegated handler save
+               the right cell. Hard's max accepts blank = "no upper bound"
+               (stored as null, displayed as placeholder "—"). -->
+          <span class="training-ranges-label">Easy</span>
+          <input class="training-ranges-input"  type="number" inputmode="numeric"
+                 data-round="0" data-bound="min" min="0" max="3500" step="50">
+          <span class="training-ranges-dash">–</span>
+          <input class="training-ranges-input"  type="number" inputmode="numeric"
+                 data-round="0" data-bound="max" min="0" max="3500" step="50">
+          <span class="training-ranges-label">Medium</span>
+          <input class="training-ranges-input"  type="number" inputmode="numeric"
+                 data-round="1" data-bound="min" min="0" max="3500" step="50">
+          <span class="training-ranges-dash">–</span>
+          <input class="training-ranges-input"  type="number" inputmode="numeric"
+                 data-round="1" data-bound="max" min="0" max="3500" step="50">
+          <span class="training-ranges-label">Hard</span>
+          <input class="training-ranges-input"  type="number" inputmode="numeric"
+                 data-round="2" data-bound="min" min="0" max="3500" step="50">
+          <span class="training-ranges-dash">–</span>
+          <input class="training-ranges-input"  type="number" inputmode="numeric"
+                 data-round="2" data-bound="max" min="0" max="3500" step="50"
+                 placeholder="—" title="Leave blank for no upper bound">
+        </div>
+        <button id="trainingRangesReset" type="button" class="training-ranges-reset"
+                title="Reset to defaults: 800-1399, 1400-1999, 2000+">Reset to defaults</button>
+      </details>
       <div class="training-meta" id="trainingMeta">—</div>
       <div class="row">
         <button id="startTrainingBtn" class="primary">Start training</button>
@@ -1006,17 +1095,42 @@
     var board = null;
     var chess = null;
     var MAX_RESULTS = 100;       // cap visible matches; filters/pagination later
-    // Training-session round configuration. Three fixed buckets the user
-    // drills sequentially: easy → medium → hard. Bounds are inclusive on
-    // both ends; chosen non-overlapping so each puzzle slots into exactly
-    // one round (1399/1400 boundary, 1999/2000 boundary). Targets reflect
-    // a typical session — more easy reps to warm up, fewer hard reps so
-    // the user doesn't grind out. Tweak in code; UI customization deferred.
-    var TRAINING_ROUNDS = [
+    // Training-session round configuration. Three buckets the user
+    // drills sequentially: easy → medium → hard. Labels and targets are
+    // fixed (UI customization for those is deferred — most users don't
+    // need to tune count); rating bounds are user-adjustable via the
+    // Customize-ranges form in #sessionPanel and persisted to settings.
+    //
+    // TRAINING_ROUND_DEFAULTS is the fallback used when no custom ranges
+    // are saved (or saved ranges fail validation). Bounds are inclusive
+    // on both ends; the defaults are non-overlapping (1399/1400 and
+    // 1999/2000 boundaries) so each puzzle slots into exactly one round.
+    // ratingMax: null on the Hard round = open-ended upper.
+    var TRAINING_ROUND_DEFAULTS = [
       { label: 'Easy',   ratingMin: 800,  ratingMax: 1399, target: 15 },
       { label: 'Medium', ratingMin: 1400, ratingMax: 1999, target: 10 },
       { label: 'Hard',   ratingMin: 2000, ratingMax: null, target: 5  }
     ];
+    // getTrainingRounds() — read user-saved ranges from settings (if any),
+    // overlay them onto TRAINING_ROUND_DEFAULTS preserving labels + targets.
+    // Returns a fresh array each call so callers can mutate it without
+    // poisoning the defaults. Validation happens at load time, so anything
+    // returned here is already in-bounds and well-shaped.
+    function getTrainingRounds() {
+      var saved = loadSettings().trainingRanges;
+      var out = [];
+      for (var i = 0; i < TRAINING_ROUND_DEFAULTS.length; i++) {
+        var d = TRAINING_ROUND_DEFAULTS[i];
+        var s = (saved && saved[i]) ? saved[i] : null;
+        out.push({
+          label: d.label,
+          ratingMin: s ? s.ratingMin : d.ratingMin,
+          ratingMax: s ? s.ratingMax : d.ratingMax,
+          target: d.target
+        });
+      }
+      return out;
+    }
     // Shards are served from a static host — either a Pages site (small datasets,
     // 1GB cap) or a Cloudflare R2 bucket via its public dev URL or custom domain
     // (no quota concerns; analyzer/publish-r2.js handles the upload). Either
@@ -1300,6 +1414,14 @@
       $('#startSessionBtn').on('click', onStartSessionClick);
       $('#startTrainingBtn').on('click', onStartTrainingClick);
       $('#retryFailedBtn').on('click', onRetryFailedClick);
+      // Training-ranges editor: 6 inputs (3 rounds × min/max) + reset.
+      // Delegated 'change' to a single handler; the input's data-round /
+      // data-bound carries which cell to update. Initial values are
+      // populated from saved settings (or defaults) by initTrainingRanges.
+      // Re-renders the meta count on every successful save.
+      $('#trainingRanges').on('change', '.training-ranges-input', onTrainingRangeChange);
+      $('#trainingRangesReset').on('click', onTrainingRangesReset);
+      initTrainingRanges();
       $('#reviewBadge').on('click', onReviewBadgeClick);
       $('#detailsToggleBtn').on('click', onDetailsToggleClick);
       // Sound toggle — preload audio elements, restore persisted on/off state,
@@ -1637,8 +1759,9 @@
       var seen = Object.create(null);
       var grandTotal = 0;
       var parts = [];
-      for (var i = 0; i < TRAINING_ROUNDS.length; i++) {
-        var r = TRAINING_ROUNDS[i];
+      var rounds = getTrainingRounds();
+      for (var i = 0; i < rounds.length; i++) {
+        var r = rounds[i];
         var min = (r.ratingMin === null || r.ratingMin === undefined) ? -Infinity : +r.ratingMin;
         var max = (r.ratingMax === null || r.ratingMax === undefined) ?  Infinity : +r.ratingMax;
         var target = (typeof r.target === 'number' && r.target > 0) ? r.target : 0;
@@ -1670,6 +1793,99 @@
       $meta.text('Training: ' + parts.join(' · ') + ' (' + grandTotal + ' unsolved)')
            .removeClass('empty');
       $btn.prop('disabled', false);
+    }
+
+    // ─── training: customizable rating ranges ───────────────────────────
+    // The 3-round training mode lets the user tune each round's rating
+    // bounds via the disclosure inside #sessionPanel. Bounds persist to
+    // settings (LS); labels and target counts stay fixed (15/10/5) and
+    // are read from TRAINING_ROUND_DEFAULTS each time. getTrainingRounds()
+    // is the single read path used by both updateTrainingMetaUI's preview
+    // and onStartTrainingClick's actual queue build.
+
+    // Populate the 6 inputs from current settings (or defaults). Called
+    // once at init, and after Reset. Reads via getTrainingRounds() so
+    // the "current" values are always the merged effective values, not
+    // raw LS contents.
+    function initTrainingRanges() {
+      var rounds = getTrainingRounds();
+      $('.training-ranges-input').each(function () {
+        var $i = $(this);
+        var roundIdx = +$i.attr('data-round');
+        var bound = $i.attr('data-bound');
+        var r = rounds[roundIdx];
+        if (!r) return;
+        var v = (bound === 'min') ? r.ratingMin : r.ratingMax;
+        // Empty string for null (= no upper bound, only meaningful for
+        // Hard's max). Numeric values rendered as-is.
+        $i.val(v === null ? '' : String(v));
+        $i.removeClass('invalid');
+      });
+    }
+
+    // Change handler — fires on commit (blur, Enter, spinner click), NOT
+    // on every keystroke. Read-modify-write: pull the current effective
+    // ranges, overlay the changed cell, validate the whole array, save
+    // if valid, refresh meta. Invalid input → input gets .invalid class
+    // and prior value stays in storage.
+    function onTrainingRangeChange(e) {
+      var $i = $(e.target);
+      var roundIdx = +$i.attr('data-round');
+      var bound = $i.attr('data-bound');
+      var raw = $i.val();
+      // Empty string is valid only for the Hard round's max (round 2,
+      // bound='max'). Otherwise it's an error.
+      var parsed;
+      if (raw === '' || raw === null || raw === undefined) {
+        if (roundIdx === 2 && bound === 'max') {
+          parsed = null;
+        } else {
+          $i.addClass('invalid');
+          setStatus('Rating bounds must be numeric (only Hard\'s upper bound can be blank).', 'warn');
+          return;
+        }
+      } else {
+        var n = parseInt(raw, 10);
+        if (!isFinite(n) || n < 0 || n > 3500) {
+          $i.addClass('invalid');
+          setStatus('Rating bounds must be between 0 and 3500.', 'warn');
+          return;
+        }
+        parsed = n;
+      }
+      // Build a complete ranges array from current effective values, then
+      // overlay the changed cell. validateTrainingRanges then enforces
+      // ratingMin ≤ ratingMax for the changed round (cross-round overlap
+      // is allowed — createTraining handles it via dedup).
+      var effective = getTrainingRounds();
+      var nextRanges = [];
+      for (var i = 0; i < effective.length; i++) {
+        nextRanges.push({
+          ratingMin: effective[i].ratingMin,
+          ratingMax: effective[i].ratingMax
+        });
+      }
+      if (bound === 'min') nextRanges[roundIdx].ratingMin = parsed;
+      else                  nextRanges[roundIdx].ratingMax = parsed;
+      var validated = validateTrainingRanges(nextRanges);
+      if (!validated) {
+        $i.addClass('invalid');
+        setStatus('Rating min must be ≤ max for each round.', 'warn');
+        return;
+      }
+      $i.removeClass('invalid');
+      saveSettings({ trainingRanges: validated });
+      updateTrainingMetaUI();
+    }
+
+    // Reset to TRAINING_ROUND_DEFAULTS — clear the saved override AND
+    // re-populate the inputs visibly. setStatus gives a small confirm
+    // since the action is destructive of the user's tuning.
+    function onTrainingRangesReset() {
+      saveSettings({ trainingRanges: null });
+      initTrainingRanges();
+      updateTrainingMetaUI();
+      setStatus('Training ranges reset to defaults (800-1399, 1400-1999, 2000+).', 'info');
     }
 
     // Slider 'input' handler — clamps min ≤ max via snap-to-bound. When
@@ -3096,17 +3312,18 @@
       }
     }
 
-    // Start training: build a 3-round queue from TRAINING_ROUNDS and
-    // drill it end-to-end. Same shape as a regular session (kind:
-    // 'training' on sessionState), so advance/retreat/auto-next/the
-    // completion strip all work without further wiring. The dual-range
-    // slider above this button is ignored — training has fixed buckets.
+    // Start training: build a 3-round queue from getTrainingRounds()
+    // (defaults overlaid with any user-customized ranges) and drill it
+    // end-to-end. Same shape as a regular session (kind: 'training' on
+    // sessionState), so advance/retreat/auto-next/the completion strip
+    // all work without further wiring. The dual-range slider above this
+    // button is ignored — training has its own fixed buckets.
     async function onStartTrainingClick() {
       if (sessionLoading) return;
       if (!lastMatches || !lastMatches.length) return;
       var t = Session.createTraining({
         matches: lastMatches,
-        rounds: TRAINING_ROUNDS,
+        rounds: getTrainingRounds(),
         isCompleted: Progress.isCompleted
       });
       if (t.complete) {
@@ -3486,7 +3703,7 @@
       try { return window.localStorage || null; } catch (e) { return null; }
     }
     function loadSettings() {
-      var defaults = { autoNext: false };
+      var defaults = { autoNext: false, trainingRanges: null };
       var s = _settingsStorage();
       if (!s) return defaults;
       var raw;
@@ -3499,12 +3716,58 @@
       // the default. Forward-compat: unknown keys in stored JSON are
       // ignored (not echoed back), so an older app version reading a
       // newer write doesn't carry forward fields it doesn't understand.
-      return { autoNext: parsed.autoNext === true };
+      return {
+        autoNext: parsed.autoNext === true,
+        trainingRanges: validateTrainingRanges(parsed.trainingRanges)
+      };
     }
-    function saveSettings(obj) {
+    // Accept an array of {ratingMin, ratingMax} pairs only when it has
+    // exactly TRAINING_ROUND_DEFAULTS.length entries (currently 3) and
+    // each entry passes the per-field validator. Anything else → null,
+    // which getTrainingRounds reads as "use defaults". This is the gate
+    // that keeps a corrupt LS write from poisoning the training UI.
+    function validateTrainingRanges(arr) {
+      if (!Array.isArray(arr) || arr.length !== TRAINING_ROUND_DEFAULTS.length) return null;
+      var out = [];
+      for (var i = 0; i < arr.length; i++) {
+        var e = arr[i];
+        if (!e || typeof e !== 'object') return null;
+        var min = e.ratingMin, max = e.ratingMax;
+        // Numeric bounds must be finite, in [0, 3500]. min ≤ max when both
+        // numeric. null max is allowed ONLY on the LAST round (the
+        // open-ended Hard upper) — earlier rounds with null max would make
+        // dedup eat all later rounds, which is almost certainly user
+        // confusion rather than intent.
+        if (typeof min !== 'number' || !isFinite(min) || min < 0 || min > 3500) return null;
+        var isLast = (i === arr.length - 1);
+        if (max === null) {
+          if (!isLast) return null;
+        } else {
+          if (typeof max !== 'number' || !isFinite(max) || max < 0 || max > 3500) return null;
+          if (min > max) return null;
+        }
+        out.push({ ratingMin: Math.floor(min), ratingMax: max === null ? null : Math.floor(max) });
+      }
+      return out;
+    }
+    // Partial saveSettings — read current LS, merge in `patch`, write back.
+    // Lets each setting be saved independently without callers needing to
+    // know about the others. Unknown patch keys are ignored at load time
+    // by loadSettings's strict-typing gate, so a typo'd key survives a
+    // write but never gets read back.
+    function saveSettings(patch) {
       var s = _settingsStorage();
       if (!s) return false;
-      try { s.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(obj)); return true; }
+      var current = loadSettings();
+      var merged = {};
+      // Copy known keys from `current` first, then overlay `patch` keys.
+      // Object.assign avoided for ES5 broad-compat (matches the rest of
+      // this file's vanilla JS posture).
+      for (var k1 in current) if (Object.prototype.hasOwnProperty.call(current, k1)) merged[k1] = current[k1];
+      if (patch && typeof patch === 'object' && !Array.isArray(patch)) {
+        for (var k2 in patch) if (Object.prototype.hasOwnProperty.call(patch, k2)) merged[k2] = patch[k2];
+      }
+      try { s.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(merged)); return true; }
       catch (e) {
         setStatus('Could not save setting — browser storage is full or unavailable.', 'error');
         return false;
