@@ -711,6 +711,21 @@
       font-variant-numeric: tabular-nums;
     }
     .session-counts.empty { color: var(--fg-dim); }
+    /* Training section divider — separates the dual-slider Start-session
+       block from the fixed-bucket Start-training block inside the same
+       panel. Subtle line; reuses --border to match the page's other
+       dividers. Matching margins on both sides. */
+    .training-divider {
+      margin: 14px 0 12px;
+      border-top: 1px solid var(--border);
+    }
+    .training-meta {
+      font-size: 12px;
+      color: var(--fg);
+      margin: 4px 2px 8px;
+      font-variant-numeric: tabular-nums;
+    }
+    .training-meta.empty { color: var(--fg-dim); }
     .session-progress {
       font-size: 11px;
       color: var(--fg-dim);
@@ -783,7 +798,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">prev-puzzle</span>
+    <span id="buildVersion">training-session</span>
     <button id="soundToggle" class="sound-toggle" type="button" aria-label="Toggle sound" title="Toggle sound effects">🔊</button>
     <span id="datasetInfo">loading dataset…</span>
     <button id="reviewBadge" class="review-pill" type="button" hidden></button>
@@ -895,6 +910,14 @@
       <div class="row">
         <button id="startSessionBtn" class="primary">Start session</button>
       </div>
+      <!-- Training session: 3 chained rounds across fixed difficulty
+           buckets (defaults: 15 easy + 10 medium + 5 hard). Independent
+           of the slider above — training has its own bucket bounds. -->
+      <div class="training-divider"></div>
+      <div class="training-meta" id="trainingMeta">—</div>
+      <div class="row">
+        <button id="startTrainingBtn" class="primary">Start training</button>
+      </div>
     </div>
 
     <div class="results-meta" id="resultsMeta" hidden></div>
@@ -923,6 +946,17 @@
     var board = null;
     var chess = null;
     var MAX_RESULTS = 100;       // cap visible matches; filters/pagination later
+    // Training-session round configuration. Three fixed buckets the user
+    // drills sequentially: easy → medium → hard. Bounds are inclusive on
+    // both ends; chosen non-overlapping so each puzzle slots into exactly
+    // one round (1399/1400 boundary, 1999/2000 boundary). Targets reflect
+    // a typical session — more easy reps to warm up, fewer hard reps so
+    // the user doesn't grind out. Tweak in code; UI customization deferred.
+    var TRAINING_ROUNDS = [
+      { label: 'Easy',   ratingMin: 800,  ratingMax: 1399, target: 15 },
+      { label: 'Medium', ratingMin: 1400, ratingMax: 1999, target: 10 },
+      { label: 'Hard',   ratingMin: 2000, ratingMax: null, target: 5  }
+    ];
     // Shards are served from a static host — either a Pages site (small datasets,
     // 1GB cap) or a Cloudflare R2 bucket via its public dev URL or custom domain
     // (no quota concerns; analyzer/publish-r2.js handles the upload). Either
@@ -1196,6 +1230,7 @@
       $('#prevPuzzleBtn').on('click', onPrevPuzzleClick);
       $('#autoNextBtn').on('click', onAutoNextToggleClick);
       $('#startSessionBtn').on('click', onStartSessionClick);
+      $('#startTrainingBtn').on('click', onStartTrainingClick);
       $('#reviewBadge').on('click', onReviewBadgeClick);
       $('#detailsToggleBtn').on('click', onDetailsToggleClick);
       // Sound toggle — preload audio elements, restore persisted on/off state,
@@ -1447,6 +1482,7 @@
         $rmin.attr({ min: 0, max: 3000 }).val(0);
         $rmax.attr({ min: 0, max: 3000 }).val(3000);
         updateSessionPanelUI();
+        updateTrainingMetaUI();
         return;
       }
       var lo = Math.min.apply(null, ratings);
@@ -1463,6 +1499,7 @@
       $rmin.val(sliderMin);
       $rmax.val(sliderMax);
       updateSessionPanelUI();
+      updateTrainingMetaUI();
     }
 
     // updateSessionPanelUI re-reads slider values, recomputes the fill
@@ -1506,6 +1543,64 @@
       }
       $counts.text(msg);
       $btn.prop('disabled', unsolved === 0);
+    }
+
+    // updateTrainingMetaUI — refresh the per-round count line + Start
+    // training button enabled state. Training is independent of the
+    // dual-range slider (it has its own fixed buckets), so this is NOT
+    // called on slider drag — only on fresh search and on return-from-drill.
+    //
+    // Counts only walk what they need: for each round, scan lastMatches
+    // in order, dedupe against earlier rounds (matching createTraining's
+    // dedup behavior), early-exit once `target` ids are claimed. Order
+    // is rating-asc here vs random in createTraining; with non-overlapping
+    // round bounds (the default) the two produce identical counts. With
+    // overlapping bounds the preview may differ slightly from the actual
+    // session — acceptable for a count display.
+    function updateTrainingMetaUI() {
+      var $meta = $('#trainingMeta');
+      var $btn = $('#startTrainingBtn');
+      if (!lastMatches || !lastMatches.length) {
+        $meta.text('—').addClass('empty');
+        $btn.prop('disabled', true);
+        return;
+      }
+      var seen = Object.create(null);
+      var grandTotal = 0;
+      var parts = [];
+      for (var i = 0; i < TRAINING_ROUNDS.length; i++) {
+        var r = TRAINING_ROUNDS[i];
+        var min = (r.ratingMin === null || r.ratingMin === undefined) ? -Infinity : +r.ratingMin;
+        var max = (r.ratingMax === null || r.ratingMax === undefined) ?  Infinity : +r.ratingMax;
+        var target = (typeof r.target === 'number' && r.target > 0) ? r.target : 0;
+        var count = 0;
+        for (var j = 0; j < lastMatches.length && count < target; j++) {
+          var m = lastMatches[j];
+          if (!m || m.length < 2) continue;
+          var rat = m[1];
+          // Match Session.filterByRating — non-numeric ratings pass the
+          // range filter (we don't silently drop unrated puzzles).
+          if (typeof rat === 'number' && isFinite(rat)) {
+            if (rat < min || rat > max) continue;
+          }
+          var pid = m[0];
+          if (typeof pid !== 'string' || !pid) continue;
+          if (seen[pid]) continue;
+          if (Progress.isCompleted(pid)) continue;
+          count++;
+          seen[pid] = true;
+        }
+        grandTotal += count;
+        parts.push(count + ' ' + ((r.label || '') + '').toLowerCase());
+      }
+      if (grandTotal === 0) {
+        $meta.text('No unsolved training puzzles available at this position.').addClass('empty');
+        $btn.prop('disabled', true);
+        return;
+      }
+      $meta.text('Training: ' + parts.join(' · ') + ' (' + grandTotal + ' unsolved)')
+           .removeClass('empty');
+      $btn.prop('disabled', false);
     }
 
     // Slider 'input' handler — clamps min ≤ max via snap-to-bound. When
@@ -1663,13 +1758,33 @@
       // inside #completionStrip (toggled by handleCompletion); during
       // drilling the strip is hidden.
       if (sessionState) {
-        var prog = Session.progress(sessionState);
-        var label = (sessionState.kind === 'review') ? 'Review ' : 'Puzzle ';
+        var sessionLabel, exitLabel;
+        if (sessionState.kind === 'training') {
+          // "Round 2/3 · Medium · 3/10" — round-aware progress, replacing
+          // the flat "Puzzle X of Y" so the user always sees which bucket
+          // they're in. Empty rounds (count=0) are skipped by trainingRound,
+          // so the visible round always corresponds to a populated bucket.
+          var tr = Session.trainingRound(sessionState);
+          if (tr) {
+            sessionLabel = 'Round ' + tr.roundNumber + '/' + tr.roundCount +
+                           ' · ' + tr.label +
+                           ' · ' + tr.currentInRound + '/' + tr.totalInRound;
+          } else {
+            // Defensive fallback; shouldn't trigger on a well-formed state.
+            var pT = Session.progress(sessionState);
+            sessionLabel = 'Training ' + pT.current + ' of ' + pT.total;
+          }
+          exitLabel = 'Exit training';
+        } else {
+          var prog = Session.progress(sessionState);
+          var prefix = (sessionState.kind === 'review') ? 'Review ' : 'Puzzle ';
+          sessionLabel = prefix + prog.current + ' of ' + prog.total;
+          exitLabel = (sessionState.kind === 'review') ? 'Exit review' : 'Exit session';
+        }
         $('#sessionProgress')
           .removeClass('complete')
-          .text(label + prog.current + ' of ' + prog.total)
+          .text(sessionLabel)
           .prop('hidden', false);
-        var exitLabel = (sessionState.kind === 'review') ? 'Exit review' : 'Exit session';
         $('#backBtn').removeClass('primary').text(exitLabel);
       } else {
         $('#sessionProgress').prop('hidden', true);
@@ -2644,6 +2759,9 @@
         // Refresh slider counts (unsolved count may have decreased while
         // drilling). Don't reconfigure bounds — preserve user's range.
         updateSessionPanelUI();
+        // Same reason — a freshly-completed puzzle drops out of the
+        // training counts too. Preserves the panel's preview accuracy.
+        updateTrainingMetaUI();
       }
       rebuildSearchBoard();
       // The badge count drops as cards get graded during a review (or
@@ -2800,6 +2918,48 @@
       }
     }
 
+    // Start training: build a 3-round queue from TRAINING_ROUNDS and
+    // drill it end-to-end. Same shape as a regular session (kind:
+    // 'training' on sessionState), so advance/retreat/auto-next/the
+    // completion strip all work without further wiring. The dual-range
+    // slider above this button is ignored — training has fixed buckets.
+    async function onStartTrainingClick() {
+      if (sessionLoading) return;
+      if (!lastMatches || !lastMatches.length) return;
+      var t = Session.createTraining({
+        matches: lastMatches,
+        rounds: TRAINING_ROUNDS,
+        isCompleted: Progress.isCompleted
+      });
+      if (t.complete) {
+        // Defensive — button should be disabled in this state via
+        // updateTrainingMetaUI, but a stale click could still arrive.
+        setStatus('No unsolved puzzles available across the training rating ranges.', 'warn');
+        return;
+      }
+      sessionState = t;
+      // Per-round breakdown for the start toast — only mention rounds
+      // that actually contributed puzzles. Empty rounds (e.g. no hard
+      // puzzles at this position) are silently skipped in the message
+      // but still appear in the round-progress label as "Round X/3".
+      var parts = [];
+      for (var i = 0; i < t.rounds.length; i++) {
+        var r = t.rounds[i];
+        if (r.count > 0) {
+          parts.push(r.count + ' ' + ((r.label || '') + '').toLowerCase());
+        }
+      }
+      var totalLabel = t.total + ' puzzle' + (t.total === 1 ? '' : 's');
+      setStatus('Training started — ' + totalLabel +
+                (parts.length > 0 ? ' (' + parts.join(' · ') + ')' : ''), 'info');
+      sessionLoading = true;
+      try {
+        await advanceSessionAndDrill();
+      } finally {
+        sessionLoading = false;
+      }
+    }
+
     // Next-puzzle: advance the session cursor; either drill the next id
     // or transition to the session-complete state. Guarded against
     // double-clicks via sessionLoading (the disabled-attribute alone is
@@ -2908,11 +3068,34 @@
     // "Exit session" / "Exit review" label was for the in-progress case.
     function onSessionComplete() {
       var total = sessionState ? sessionState.total : 0;
-      var isReview = !!(sessionState && sessionState.kind === 'review');
-      var bannerLead = isReview ? '✓ Review complete — ' : '✓ Session complete — ';
-      var bannerTail = isReview
-        ? (' puzzle' + (total === 1 ? '' : 's') + ' reviewed')
-        : (' puzzle' + (total === 1 ? '' : 's') + ' cleared');
+      var kind = sessionState ? sessionState.kind : null;
+      var bannerLead, bannerTail, statusMsg;
+      if (kind === 'review') {
+        bannerLead = '✓ Review complete — ';
+        bannerTail = ' puzzle' + (total === 1 ? '' : 's') + ' reviewed';
+        statusMsg = 'All due reviews cleared. Click Done to return.';
+      } else if (kind === 'training') {
+        // Per-round breakdown in parentheses — "(15 easy · 10 medium · 5 hard)"
+        // — only including rounds that contributed at least one puzzle.
+        // Reads more naturally than just a flat total and gives the user
+        // a moment of "yeah, I got through all of that."
+        var parts = [];
+        var rounds = (sessionState && sessionState.rounds) || [];
+        for (var i = 0; i < rounds.length; i++) {
+          if (rounds[i].count > 0) {
+            parts.push(rounds[i].count + ' ' +
+                       ((rounds[i].label || ('round ' + (i + 1))) + '').toLowerCase());
+          }
+        }
+        bannerLead = '✓ Training complete — ';
+        bannerTail = ' puzzle' + (total === 1 ? '' : 's') + ' cleared'
+                   + (parts.length > 0 ? ' (' + parts.join(' · ') + ')' : '');
+        statusMsg = 'Training session done. Back to results to start another.';
+      } else {
+        bannerLead = '✓ Session complete — ';
+        bannerTail = ' puzzle' + (total === 1 ? '' : 's') + ' cleared';
+        statusMsg = 'All unsolved puzzles in range cleared. Back to results to start another session.';
+      }
       $('#sessionProgress')
         .addClass('complete')
         .text(bannerLead + total + bannerTail)
@@ -2920,10 +3103,8 @@
       $('#nextPuzzleBtn').prop({ disabled: true, hidden: true });
       $('#autoNextBtn').prop('hidden', true);
       $('#hintBtn').prop('disabled', true);
-      $('#backBtn').addClass('primary').text(isReview ? 'Done' : 'Back to results');
-      var statusMsg = isReview
-        ? 'All due reviews cleared. Click Done to return.'
-        : 'All unsolved puzzles in range cleared. Back to results to start another session.';
+      // Review mode → Done; everything else → Back to results.
+      $('#backBtn').addClass('primary').text(kind === 'review' ? 'Done' : 'Back to results');
       setStatus(statusMsg, 'ok');
     }
 

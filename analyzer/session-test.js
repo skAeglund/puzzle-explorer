@@ -541,6 +541,408 @@ section('Session.retreat — round-trip with progress');
   check('retreat: 1/5', p.current === 1 && p.total === 5);
 }
 
+// ━━━ createTraining ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+section('Session.createTraining: basic queueing');
+{
+  // 7 puzzles spanning 1000-2200 (see MATCHES). Three rounds:
+  //   Easy [1000,1399] → p1, p2 (target 5, takes both)
+  //   Medium [1400,1999] → p3, p4, p5 (target 2, takes 2)
+  //   Hard [2000+] → p6, p7 (target 5, takes both)
+  const t = Session.createTraining({
+    matches: MATCHES,
+    rounds: [
+      { label: 'Easy',   ratingMin: 1000, ratingMax: 1399, target: 5 },
+      { label: 'Medium', ratingMin: 1400, ratingMax: 1999, target: 2 },
+      { label: 'Hard',   ratingMin: 2000, ratingMax: null, target: 5 }
+    ],
+    isCompleted: NEVER_COMPLETED,
+    rng: mulberry32(1)
+  });
+  check('kind: training', t.kind === 'training');
+  check('cursor: -1', t.cursor === -1);
+  check('not complete', t.complete === false);
+  check('total = sum of round counts', t.total === 6);  // 2 + 2 + 2
+  check('queue length matches total', t.queue.length === 6);
+  check('rounds metadata count = 3', t.rounds.length === 3);
+  check('round 0 label', t.rounds[0].label === 'Easy');
+  check('round 0 count = 2 (only p1,p2 in range)', t.rounds[0].count === 2);
+  check('round 0 startIndex = 0', t.rounds[0].startIndex === 0);
+  check('round 1 startIndex = 2', t.rounds[1].startIndex === 2);
+  check('round 1 count = 2 (capped at target)', t.rounds[1].count === 2);
+  check('round 2 startIndex = 4', t.rounds[2].startIndex === 4);
+  check('round 2 target preserved', t.rounds[2].target === 5);
+  check('round 2 count = 2 (only p6,p7 in range)', t.rounds[2].count === 2);
+  check('inRangeTotal counts unique ids across rounds', t.inRangeTotal === 7);
+  // Queue order: round 0 ids first, then round 1, then round 2.
+  const r0 = t.queue.slice(0, 2);
+  const r1 = t.queue.slice(2, 4);
+  const r2 = t.queue.slice(4, 6);
+  const isIn = (set, ids) => ids.every(id => set.includes(id));
+  check('round 0 contains only p1,p2', isIn(['p1', 'p2'], r0) && r0.length === 2);
+  check('round 1 contains only medium ids', isIn(['p3', 'p4', 'p5'], r1));
+  check('round 2 contains only p6,p7', isIn(['p6', 'p7'], r2) && r2.length === 2);
+}
+
+section('Session.createTraining: empty rounds skipped (count=0)');
+{
+  // No matches in the 'Hard' bucket.
+  const t = Session.createTraining({
+    matches: [['p1', 1000], ['p2', 1500]],
+    rounds: [
+      { label: 'Easy',   ratingMin: 0,    ratingMax: 1399, target: 3 },
+      { label: 'Medium', ratingMin: 1400, ratingMax: 1999, target: 3 },
+      { label: 'Hard',   ratingMin: 2000, ratingMax: null, target: 3 }
+    ],
+    isCompleted: NEVER_COMPLETED
+  });
+  check('total = 2 (no hard puzzles)', t.total === 2);
+  check('hard round has count=0', t.rounds[2].count === 0);
+  check('hard round still in metadata', t.rounds[2].label === 'Hard');
+  // Empty round's startIndex should equal queue.length AT THE TIME the
+  // round was processed — for Hard that's after Easy(1) + Medium(1) = 2.
+  check('empty round startIndex = total before it', t.rounds[2].startIndex === 2);
+  check('not complete (other rounds populated)', t.complete === false);
+}
+
+section('Session.createTraining: all rounds empty');
+{
+  const t = Session.createTraining({
+    matches: [['p1', 500]],   // below all bucket floors
+    rounds: [
+      { label: 'Easy',   ratingMin: 800, ratingMax: 1399, target: 3 },
+      { label: 'Medium', ratingMin: 1400, ratingMax: 1999, target: 3 }
+    ],
+    isCompleted: NEVER_COMPLETED
+  });
+  check('total = 0', t.total === 0);
+  check('complete = true (immediate)', t.complete === true);
+  check('rounds metadata still populated', t.rounds.length === 2);
+}
+
+section('Session.createTraining: solved puzzles excluded');
+{
+  const solvedSet = { p1: true, p3: true, p5: true };
+  const t = Session.createTraining({
+    matches: MATCHES,
+    rounds: [
+      { label: 'Easy',   ratingMin: 1000, ratingMax: 1399, target: 5 },
+      { label: 'Medium', ratingMin: 1400, ratingMax: 1999, target: 5 },
+      { label: 'Hard',   ratingMin: 2000, ratingMax: null, target: 5 }
+    ],
+    isCompleted: function (id) { return !!solvedSet[id]; },
+    rng: mulberry32(2)
+  });
+  check('solved p1 excluded from queue', t.queue.indexOf('p1') === -1);
+  check('solved p3 excluded', t.queue.indexOf('p3') === -1);
+  check('solved p5 excluded', t.queue.indexOf('p5') === -1);
+  check('unsolved p2 included', t.queue.indexOf('p2') !== -1);
+  check('inRangeTotal counts solved+unsolved', t.inRangeTotal === 7);
+  check('total only counts unsolved', t.total === 4);
+}
+
+section('Session.createTraining: dedup across overlapping rounds');
+{
+  // Spec says rounds dedupe — earlier round wins. Use overlapping bounds
+  // to verify: p3 (rating 1400) is in BOTH "Easy" (incl. 1400) and
+  // "Medium" (also incl. 1400). It should land in Easy only.
+  const t = Session.createTraining({
+    matches: [['p1', 1000], ['p3', 1400], ['p5', 1800]],
+    rounds: [
+      { label: 'Easy',   ratingMin: 1000, ratingMax: 1400, target: 5 },
+      { label: 'Medium', ratingMin: 1400, ratingMax: 1800, target: 5 }
+    ],
+    isCompleted: NEVER_COMPLETED
+  });
+  check('p3 placed in Easy round (earlier wins)', t.rounds[0].count === 2);
+  check('p3 NOT duplicated in Medium round', t.rounds[1].count === 1);
+  check('queue length is 3, no dupes', t.total === 3);
+  // Set semantics: each id appears exactly once.
+  const seen = {};
+  let dupe = false;
+  for (let i = 0; i < t.queue.length; i++) {
+    if (seen[t.queue[i]]) dupe = true;
+    seen[t.queue[i]] = true;
+  }
+  check('no duplicate ids in queue', !dupe);
+}
+
+section('Session.createTraining: target=0 round contributes nothing');
+{
+  const t = Session.createTraining({
+    matches: MATCHES,
+    rounds: [
+      { label: 'Skip', ratingMin: 1000, ratingMax: 1400, target: 0 },
+      { label: 'Use',  ratingMin: 1400, ratingMax: 1999, target: 5 }
+    ],
+    isCompleted: NEVER_COMPLETED
+  });
+  check('target=0 → count=0', t.rounds[0].count === 0);
+  check('subsequent round still works', t.rounds[1].count > 0);
+}
+
+section('Session.createTraining: defensive against missing/invalid rounds');
+{
+  const empty = Session.createTraining({
+    matches: MATCHES,
+    rounds: [],
+    isCompleted: NEVER_COMPLETED
+  });
+  check('no rounds → empty queue', empty.total === 0);
+  check('no rounds → complete', empty.complete === true);
+
+  const noOpts = (function () {
+    try { Session.createTraining(); return false; } catch (e) { return true; }
+  })();
+  check('no opts → throws', noOpts);
+
+  // Bad round entries skipped/coerced; whole call doesn't throw.
+  const tolerant = Session.createTraining({
+    matches: MATCHES,
+    rounds: [null, undefined, {}, { label: 'Hard', ratingMin: 2000, target: 5 }],
+    isCompleted: NEVER_COMPLETED
+  });
+  check('bad round entries do not crash', tolerant.rounds.length === 4);
+  check('only the valid round contributes', tolerant.total === 2);  // p6,p7
+}
+
+section('Session.createTraining: integrates with advance/retreat');
+{
+  const t0 = Session.createTraining({
+    matches: MATCHES,
+    rounds: [
+      { label: 'Easy',   ratingMin: 1000, ratingMax: 1399, target: 5 },
+      { label: 'Medium', ratingMin: 1400, ratingMax: 1999, target: 5 },
+      { label: 'Hard',   ratingMin: 2000, ratingMax: null, target: 5 }
+    ],
+    isCompleted: NEVER_COMPLETED,
+    rng: mulberry32(3)
+  });
+  check('initial total = 7', t0.total === 7);
+  // Walk all the way through. advance/retreat treat training queue same
+  // as a 'search' queue.
+  let s = t0;
+  for (let i = 0; i < 7; i++) {
+    const r = Session.advance(s);
+    s = r.state;
+    check('advance #' + (i + 1) + ' returns puzzleId', !!r.puzzleId);
+  }
+  const tail = Session.advance(s);
+  check('post-tail advance: exhausted', tail.exhausted === true);
+  check('post-tail advance: complete=true', tail.state.complete === true);
+
+  // Retreat from complete state: should land on queue[length-2] = queue[5]
+  // (the puzzle BEFORE the last one drilled), not queue[length-1].
+  const back1 = Session.retreat(tail.state);
+  check('retreat from complete → queue[length-2]',
+    back1.puzzleId === t0.queue[5]);
+  check('retreat from complete → cursor=length-2',
+    back1.state.cursor === 5);
+
+  // Walk back to start, then one more retreat is a no-op.
+  let s2 = back1.state;
+  for (let i = 0; i < 5; i++) s2 = Session.retreat(s2).state;
+  check('after 5 more retreats, cursor=0', s2.cursor === 0);
+  const noop = Session.retreat(s2);
+  check('retreat at cursor=0: atStart', noop.atStart === true);
+  check('retreat at cursor=0: puzzleId null', noop.puzzleId === null);
+  check('retreat at cursor=0: state unchanged', noop.state === s2);
+}
+
+// ━━━ trainingRound ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+section('Session.trainingRound');
+{
+  const t = Session.createTraining({
+    matches: MATCHES,
+    rounds: [
+      { label: 'Easy',   ratingMin: 1000, ratingMax: 1399, target: 5 },
+      { label: 'Medium', ratingMin: 1400, ratingMax: 1999, target: 5 },
+      { label: 'Hard',   ratingMin: 2000, ratingMax: null, target: 5 }
+    ],
+    isCompleted: NEVER_COMPLETED,
+    rng: mulberry32(4)
+  });
+  // Round counts: easy=2, medium=3, hard=2 → total=7.
+  // startIndex: easy=0, medium=2, hard=5.
+
+  // cursor=-1 (not started yet)
+  const r0 = Session.trainingRound(t);
+  check('cursor=-1 → roundIndex 0', r0.roundIndex === 0);
+  check('cursor=-1 → label Easy', r0.label === 'Easy');
+  check('cursor=-1 → currentInRound 0', r0.currentInRound === 0);
+  check('totalInRound matches round count', r0.totalInRound === 2);
+  check('totalRounds reports all rounds', r0.totalRounds === 3);
+
+  // cursor=0 (first easy puzzle)
+  const t1 = Session.advance(t).state;
+  const r1 = Session.trainingRound(t1);
+  check('cursor=0 → Easy 1/2', r1.roundIndex === 0 && r1.currentInRound === 1 && r1.totalInRound === 2);
+
+  // cursor=1 (second easy)
+  const t2 = Session.advance(t1).state;
+  const r2 = Session.trainingRound(t2);
+  check('cursor=1 → Easy 2/2', r2.roundIndex === 0 && r2.currentInRound === 2);
+
+  // cursor=2 (first medium — round boundary)
+  const t3 = Session.advance(t2).state;
+  const r3 = Session.trainingRound(t3);
+  check('cursor=2 → Medium 1/3 (boundary)', r3.roundIndex === 1 && r3.currentInRound === 1 && r3.totalInRound === 3);
+  check('cursor=2 → label flips to Medium', r3.label === 'Medium');
+
+  // cursor=4 (last medium)
+  let t4 = Session.advance(t3).state;
+  t4 = Session.advance(t4).state;
+  const r4 = Session.trainingRound(t4);
+  check('cursor=4 → Medium 3/3', r4.roundIndex === 1 && r4.currentInRound === 3);
+
+  // cursor=5 (first hard)
+  const t5 = Session.advance(t4).state;
+  const r5 = Session.trainingRound(t5);
+  check('cursor=5 → Hard 1/2', r5.roundIndex === 2 && r5.currentInRound === 1);
+
+  // cursor=6 (last hard) then complete
+  const t6 = Session.advance(t5).state;
+  const r6 = Session.trainingRound(t6);
+  check('cursor=6 → Hard 2/2', r6.roundIndex === 2 && r6.currentInRound === 2);
+
+  const tEnd = Session.advance(t6);
+  check('exhausted advance fires', tEnd.exhausted === true);
+  const rEnd = Session.trainingRound(tEnd.state);
+  check('complete state → still reports last round', rEnd.roundIndex === 2);
+  check('complete state → currentInRound clamped to count', rEnd.currentInRound === 2);
+}
+
+section('Session.trainingRound: skips empty rounds in lookup');
+{
+  // Easy is empty (no matches < 1400 in this set), Medium and Hard populated.
+  const t = Session.createTraining({
+    matches: [['p1', 1500], ['p2', 1700], ['p3', 2100]],
+    rounds: [
+      { label: 'Easy',   ratingMin: 800,  ratingMax: 1399, target: 3 },
+      { label: 'Medium', ratingMin: 1400, ratingMax: 1999, target: 3 },
+      { label: 'Hard',   ratingMin: 2000, ratingMax: null, target: 3 }
+    ],
+    isCompleted: NEVER_COMPLETED,
+    rng: mulberry32(5)
+  });
+  // Expected: queue has 3 puzzles; rounds[0].count=0, rounds[1].count=2,
+  // rounds[2].count=1. cursor=0 should map to Medium, not Easy.
+  check('Easy round empty', t.rounds[0].count === 0);
+  check('Medium round has 2', t.rounds[1].count === 2);
+  check('Hard round has 1', t.rounds[2].count === 1);
+
+  const t1 = Session.advance(t).state;     // cursor=0
+  const r1 = Session.trainingRound(t1);
+  check('empty leading round skipped → cursor=0 maps to Medium',
+    r1.roundIndex === 1 && r1.label === 'Medium' && r1.currentInRound === 1);
+
+  const t2 = Session.advance(t1).state;    // cursor=1
+  const r2 = Session.trainingRound(t2);
+  check('cursor=1 still in Medium', r2.roundIndex === 1 && r2.currentInRound === 2);
+
+  const t3 = Session.advance(t2).state;    // cursor=2 → Hard
+  const r3 = Session.trainingRound(t3);
+  check('cursor=2 → Hard 1/1', r3.roundIndex === 2 && r3.currentInRound === 1);
+}
+
+section('Session.trainingRound: defensive on non-training states');
+{
+  check('null state → null', Session.trainingRound(null) === null);
+  check('undefined state → null', Session.trainingRound(undefined) === null);
+  // A regular search-kind state must not be misread as training.
+  const search = Session.create({
+    matches: MATCHES, ratingMin: 1000, ratingMax: 2200,
+    isCompleted: NEVER_COMPLETED
+  });
+  check('search-kind state → null', Session.trainingRound(search) === null);
+  // createFromIds returns kind: 'review' by default.
+  const review = Session.createFromIds(['a', 'b', 'c']);
+  check('review-kind state → null', Session.trainingRound(review) === null);
+}
+
+section('Session.trainingRound: roundNumber/roundCount filter empty rounds');
+{
+  // roundCount counts non-empty rounds; roundNumber is the 1-based position
+  // of the matched round among non-empty rounds. totalRounds (the configured
+  // count) stays separate so callers can compare configured vs. populated.
+
+  // (a) all 3 rounds populated → roundNumber === roundIndex+1, roundCount===3
+  const tAll = Session.createTraining({
+    matches: [['e', 1000], ['m', 1500], ['h', 2100]],
+    rounds: [
+      { label: 'Easy',   ratingMin: 800,  ratingMax: 1399, target: 1 },
+      { label: 'Medium', ratingMin: 1400, ratingMax: 1999, target: 1 },
+      { label: 'Hard',   ratingMin: 2000, ratingMax: null, target: 1 }
+    ],
+    isCompleted: NEVER_COMPLETED,
+    rng: mulberry32(7)
+  });
+  const a0 = Session.trainingRound(Session.advance(tAll).state);
+  check('all populated: roundNumber=1 at first round', a0.roundNumber === 1);
+  check('all populated: roundCount=3', a0.roundCount === 3);
+  check('all populated: totalRounds=3 unchanged', a0.totalRounds === 3);
+  const a1 = Session.trainingRound(Session.advance(Session.advance(tAll).state).state);
+  check('all populated: roundNumber=2 at second round', a1.roundNumber === 2);
+  const a2 = Session.trainingRound(
+    Session.advance(Session.advance(Session.advance(tAll).state).state).state
+  );
+  check('all populated: roundNumber=3 at third round', a2.roundNumber === 3);
+
+  // (b) leading round empty → first puzzle reports "Round 1/2", not "2/3"
+  const tLead = Session.createTraining({
+    matches: [['m', 1500], ['h', 2100]],
+    rounds: [
+      { label: 'Easy',   ratingMin: 800,  ratingMax: 1399, target: 1 },
+      { label: 'Medium', ratingMin: 1400, ratingMax: 1999, target: 1 },
+      { label: 'Hard',   ratingMin: 2000, ratingMax: null, target: 1 }
+    ],
+    isCompleted: NEVER_COMPLETED,
+    rng: mulberry32(8)
+  });
+  const lead0 = Session.trainingRound(Session.advance(tLead).state);
+  check('empty leading: roundCount=2', lead0.roundCount === 2);
+  check('empty leading: Medium shown as Round 1/2', lead0.roundNumber === 1 && lead0.label === 'Medium');
+  check('empty leading: totalRounds still 3 (configured)', lead0.totalRounds === 3);
+  const lead1 = Session.trainingRound(Session.advance(Session.advance(tLead).state).state);
+  check('empty leading: Hard shown as Round 2/2', lead1.roundNumber === 2 && lead1.label === 'Hard');
+
+  // (c) middle round empty → easy is 1/2, hard is 2/2 (Medium is skipped)
+  const tMid = Session.createTraining({
+    matches: [['e', 1000], ['h', 2100]],
+    rounds: [
+      { label: 'Easy',   ratingMin: 800,  ratingMax: 1399, target: 1 },
+      { label: 'Medium', ratingMin: 1400, ratingMax: 1999, target: 1 },
+      { label: 'Hard',   ratingMin: 2000, ratingMax: null, target: 1 }
+    ],
+    isCompleted: NEVER_COMPLETED,
+    rng: mulberry32(9)
+  });
+  const mid0 = Session.trainingRound(Session.advance(tMid).state);
+  check('empty middle: roundCount=2', mid0.roundCount === 2);
+  check('empty middle: Easy shown as Round 1/2', mid0.roundNumber === 1 && mid0.label === 'Easy');
+  const mid1 = Session.trainingRound(Session.advance(Session.advance(tMid).state).state);
+  check('empty middle: Hard shown as Round 2/2 (skips Medium)',
+    mid1.roundNumber === 2 && mid1.label === 'Hard');
+
+  // (d) trailing round empty → easy is 1/2, medium is 2/2
+  const tTail = Session.createTraining({
+    matches: [['e', 1000], ['m', 1500]],
+    rounds: [
+      { label: 'Easy',   ratingMin: 800,  ratingMax: 1399, target: 1 },
+      { label: 'Medium', ratingMin: 1400, ratingMax: 1999, target: 1 },
+      { label: 'Hard',   ratingMin: 2000, ratingMax: null, target: 1 }
+    ],
+    isCompleted: NEVER_COMPLETED,
+    rng: mulberry32(10)
+  });
+  const tail0 = Session.trainingRound(Session.advance(tTail).state);
+  check('empty trailing: roundCount=2', tail0.roundCount === 2);
+  check('empty trailing: Easy shown as Round 1/2', tail0.roundNumber === 1 && tail0.label === 'Easy');
+  const tail1 = Session.trainingRound(Session.advance(Session.advance(tTail).state).state);
+  check('empty trailing: Medium shown as Round 2/2', tail1.roundNumber === 2 && tail1.label === 'Medium');
+}
+
 // ─── summary ─────────────────────────────────────────────────────────────
 console.log('\n' + (fail === 0 ? '✓' : '✗') + ' ' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail === 0 ? 0 : 1);
