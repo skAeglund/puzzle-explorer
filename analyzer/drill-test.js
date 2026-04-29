@@ -328,6 +328,78 @@ section('Drill grading — backward-compat: no timing engaged → Easy');
     r.state.avgMoveTimeMs === null);
 }
 
+section('Drill.sanHistory — initialization + Drill.applyOpponentReply');
+{
+  // Issue #10: move-history strip. The state machine carries a SAN trail
+  // populated by the caller (drill.js doesn't have a chess.js handle, so
+  // the caller computes SAN and pipes it through). Wrong attempts are
+  // explicitly NOT recorded.
+
+  // Initial state: empty array, not shared across instances.
+  const a = Drill.start(PUZZLE_3);
+  const b = Drill.start(PUZZLE_3);
+  check('start → sanHistory is []',          Array.isArray(a.sanHistory) && a.sanHistory.length === 0);
+  check('start → sanHistory not shared',     a.sanHistory !== b.sanHistory);
+
+  // attemptUserMove with userSan appends on success path.
+  let r = Drill.attemptUserMove(a, 'e2g4', { userSan: 'Bxg4' });
+  check('success+userSan → length 1',        r.state.sanHistory.length === 1);
+  check('success+userSan → "Bxg4"',          r.state.sanHistory[0] === 'Bxg4');
+  check('input state.sanHistory unchanged',  a.sanHistory.length === 0);
+
+  // applyOpponentReply appends in sequence.
+  let s = Drill.applyOpponentReply(r.state, 'Bxg4');
+  check('opp reply → length 2',              s.sanHistory.length === 2);
+  check('opp reply order preserved',         s.sanHistory[1] === 'Bxg4');
+  check('input state untouched',             r.state.sanHistory.length === 1);
+
+  // Final user move completes the puzzle and still appends.
+  let r2 = Drill.attemptUserMove(s, 'd1g4', { userSan: 'Qxg4' });
+  check('final user move appends',           r2.state.sanHistory.length === 3);
+  check('final entry is Qxg4',               r2.state.sanHistory[2] === 'Qxg4');
+  check('full sequence Bxg4/Bxg4/Qxg4',      JSON.stringify(r2.state.sanHistory) === JSON.stringify(['Bxg4','Bxg4','Qxg4']));
+  check('puzzle complete after 3rd entry',   r2.state.complete === true);
+}
+
+section('Drill.sanHistory — wrong attempts NOT recorded');
+{
+  let s = Drill.start(PUZZLE_3);
+  // Wrong move: must NOT touch sanHistory regardless of userSan.
+  let r = Drill.attemptUserMove(s, 'a1a2', { userSan: 'Ra2' });
+  check('wrong attempt → result=wrong',      r.result === 'wrong');
+  check('wrong → sanHistory still []',       r.state.sanHistory.length === 0);
+  // Recover: a correct move from the SAME (post-wrong) state appends normally.
+  let r2 = Drill.attemptUserMove(r.state, 'e2g4', { userSan: 'Bxg4' });
+  check('post-wrong correct → length 1',     r2.state.sanHistory.length === 1);
+  check('post-wrong correct → "Bxg4"',       r2.state.sanHistory[0] === 'Bxg4');
+}
+
+section('Drill.sanHistory — backward-compat: legacy callers without userSan');
+{
+  // Existing tests above call attemptUserMove without opts.userSan, and
+  // they expect to keep passing (147 of them). This section pins the
+  // backward-compat contract explicitly.
+  let s = Drill.start(PUZZLE_3);
+  let r = Drill.attemptUserMove(s, 'e2g4');             // no opts
+  check('no opts → no crash, success',       r.result === 'continue');
+  check('no opts → sanHistory empty',        r.state.sanHistory.length === 0);
+  let r2 = Drill.attemptUserMove(r.state, 'd1g4', {});  // empty opts
+  check('empty opts → no crash, success',    r2.result === 'complete');
+  check('empty opts → sanHistory empty',     r2.state.sanHistory.length === 0);
+
+  // applyOpponentReply with no/non-string SAN is a no-op.
+  let s0 = Drill.start(PUZZLE_3);
+  check('applyOpp(undefined) → state ===',   Drill.applyOpponentReply(s0) === s0);
+  check('applyOpp(null) → state ===',        Drill.applyOpponentReply(s0, null) === s0);
+  check('applyOpp("") → state ===',          Drill.applyOpponentReply(s0, '') === s0);
+  check('applyOpp(42) → state ===',          Drill.applyOpponentReply(s0, 42) === s0);
+  // String input returns a NEW state (assign-shallow-merge contract).
+  let s1 = Drill.applyOpponentReply(s0, 'd5');
+  check('applyOpp("d5") → new state',        s1 !== s0);
+  check('applyOpp("d5") → length 1',         s1.sanHistory.length === 1);
+  check('input s0 untouched after apply',    s0.sanHistory.length === 0);
+}
+
 // ━━━ PROGRESS storage ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 function freshStorage() {

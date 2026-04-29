@@ -420,6 +420,31 @@
       text-transform: lowercase;
     }
     .details-toggle:hover { border-color: var(--accent); color: var(--fg); }
+    /* Move-history strip (issue #10) — passive SAN log of moves played
+       in the current drill. Visually a sibling to #moveList in search
+       mode, but single-line: long mating sequences scroll horizontally
+       rather than wrapping into a multi-line block above the buttons.
+       Margin-bottom matches drill-controls' spacing-from-board feel. */
+    .move-strip {
+      font-size: 12px;
+      color: var(--fg);
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      padding: 6px 10px;
+      margin-bottom: 8px;
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+      overflow-x: auto;
+      overflow-y: hidden;
+    }
+    .move-strip .move-num {
+      color: var(--fg-dim);
+      margin-right: 2px;
+    }
+    .move-strip .move-san {
+      margin-right: 8px;
+    }
     .drill-controls { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
     .lichess-link {
       font-size: 12px;
@@ -798,7 +823,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">training-audit</span>
+    <span id="buildVersion">move-history-strip</span>
     <button id="soundToggle" class="sound-toggle" type="button" aria-label="Toggle sound" title="Toggle sound effects">🔊</button>
     <span id="datasetInfo">loading dataset…</span>
     <button id="reviewBadge" class="review-pill" type="button" hidden></button>
@@ -875,6 +900,12 @@
       </div>
       <div class="drill-themes" id="drillThemes" hidden></div>
       <div class="drill-opening" id="drillOpening" hidden></div>
+      <!-- SAN trail of moves played in the current drill (issue #10).
+           Hidden when sanHistory is empty (fresh drill, no moves yet) or
+           when drillState is null. Single-line; horizontal scroll on
+           overflow. Populated from drillState.sanHistory by
+           updateMoveStripDisplay. -->
+      <div id="moveStrip" class="move-strip" hidden></div>
       <div class="drill-controls">
         <button id="prevPuzzleBtn" hidden disabled title="Go back to the previous puzzle in the session/review queue.">← Previous</button>
         <button id="hintBtn">Hint</button>
@@ -1717,6 +1748,12 @@
       $('#drillPanel').prop('hidden', false);
       $('#drillId').text(puzzle.id);
       $('#drillRating').text(puzzle.rating ? ('rating ' + puzzle.rating) : '');
+      // Move-history strip (issue #10): drillState was just freshly
+      // created, sanHistory is []. updateMoveStripDisplay reads that and
+      // hides the strip — calling it explicitly here means the strip
+      // doesn't carry over a stale state from the previous puzzle (e.g.
+      // when auto-next or Next-puzzle replaces the drill in place).
+      updateMoveStripDisplay();
       var themesText = (puzzle.themes && puzzle.themes.length) ? puzzle.themes.join(' · ') : '';
       var openingText = puzzle.opening || '';
       // Themes + opening default-hidden. Toggle button is itself only
@@ -2079,8 +2116,14 @@
 
       var uci = moveObj.from + moveObj.to + (moveObj.promotion || '');
       // Pass `now` so completion-time grading can compute avgMoveTimeMs
-      // against the solveStartedAt baseline set in enterDrillMode.
-      var result = Drill.attemptUserMove(drillState, uci, { now: new Date() });
+      // against the solveStartedAt baseline set in enterDrillMode. Pass
+      // `userSan` (issue #10) so the state machine can append it to
+      // sanHistory on the success path — drill.js doesn't have a
+      // chess.js handle, so we feed the SAN through opts.
+      var result = Drill.attemptUserMove(drillState, uci, {
+        now: new Date(),
+        userSan: moveObj.san
+      });
       drillState = result.state;
 
       if (result.result === 'wrong') {
@@ -2111,6 +2154,11 @@
       clearHintHighlight();
       Sound.playForMove(moveObj, chess.in_check(), chess.in_checkmate());
       lastSuccessfulUserMove = { from: moveObj.from, to: moveObj.to };
+      // Strip repaints right after the SAN is appended to drillState.
+      // Doing it here rather than in onSnapEnd means click-to-move (no
+      // onSnapEnd fires) and drag both update the strip on the same
+      // beat — the moment the move is accepted by the state machine.
+      updateMoveStripDisplay();
 
       if (result.result === 'continue') {
         pendingOppReply = result.opponentReply;
@@ -2532,6 +2580,56 @@
       scheduleOppReplyIfPending();
     }
 
+    // Render drillState.sanHistory into #moveStrip as "1. e4 e5  2. Nf3 …"
+    // (issue #10). Hidden when empty so a fresh drill doesn't show an empty
+    // box above the buttons. The first SAN entry is always the user's
+    // first move from puzzle.fen, and that puzzle's side-to-move dictates
+    // the move-number convention:
+    //   - white-to-move puzzle: ply 0 is white's, ply 1 is black's →
+    //     "1. e4 e5  2. ...". Standard.
+    //   - black-to-move puzzle: ply 0 is BLACK's. Conventional notation
+    //     uses an ellipsis for the omitted white move, e.g. "1... Qxg2".
+    //     We render that as "1. ... e5 2. Nf3 ..." with a literal "..."
+    //     placeholder for white's first ply.
+    // The pre-puzzle blunder animation is intentionally NOT in the strip
+    // (spec: "would give away too much context").
+    function updateMoveStripDisplay() {
+      var $el = $('#moveStrip');
+      if (!drillState || !drillState.sanHistory || drillState.sanHistory.length === 0) {
+        $el.prop('hidden', true).empty();
+        return;
+      }
+      var hist = drillState.sanHistory;
+      var blackToMove = Drill.userColor(drillState) === 'b';
+      $el.empty();
+      // For black-to-move puzzles, prepend a "1. ..." marker so the first
+      // visible ply is correctly numbered as black's reply.
+      if (blackToMove) {
+        $el.append($('<span class="move-num"></span>').text('1.'));
+        $el.append($('<span class="move-san"></span>').text('...'));
+      }
+      for (var i = 0; i < hist.length; i++) {
+        // Move-number frequency: every white ply gets a number prefix.
+        // White plies sit at even indices in white-to-move puzzles, and
+        // odd indices in black-to-move puzzles (because the offset list
+        // starts with black's ply at index 0).
+        var isWhitePly = blackToMove ? (i % 2 === 1) : (i % 2 === 0);
+        if (isWhitePly) {
+          // Move number: 1-based, advances every full move pair.
+          var moveNo = blackToMove
+            ? Math.floor((i + 1) / 2) + 1
+            : Math.floor(i / 2) + 1;
+          $el.append($('<span class="move-num"></span>').text(moveNo + '.'));
+        }
+        $el.append($('<span class="move-san"></span>').text(hist[i]));
+      }
+      $el.prop('hidden', false);
+      // Auto-scroll to the right edge so the most recent move stays
+      // visible on long sequences. Cheap; no-ops when content fits.
+      var node = $el[0];
+      if (node) node.scrollLeft = node.scrollWidth;
+    }
+
     // Schedule the queued opp reply with a 400ms 'thinking' delay. Called
     // from both onSnapEnd (drag path) and the click-to-move handler (no
     // onSnapEnd fires for board.position calls). NO `!drillState.complete`
@@ -2563,6 +2661,12 @@
         setStatus('Internal error: opponent reply illegal (' + uci + '). Solution data may be corrupt.', 'error');
         return;
       }
+      // SAN trail (issue #10): record the opp's reply in sanHistory now
+      // that chess.js has computed the SAN. drill.js's attemptUserMove
+      // has already auto-advanced past this move's UCI in solutionUci;
+      // applyOpponentReply only appends the SAN, doesn't touch the idx.
+      drillState = Drill.applyOpponentReply(drillState, moveObj.san);
+      updateMoveStripDisplay();
       // Animated update — default chessboard.js behavior, NOT onSnapEnd here.
       if (board) board.position(chess.fen());
       // Audio for the opponent's reply. Same post-move check semantics as
