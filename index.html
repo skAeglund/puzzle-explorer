@@ -762,6 +762,25 @@
     }
     .session-progress.complete { color: var(--ok); }
 
+    /* Training session stats line — shown below #sessionProgress when a
+       training session completes. Three colored count chunks separated by
+       middle dots, each tinted by the same --ok/--warn/--error palette as
+       completion-text so the user reads "good / iffy / bad" at a glance.
+       Hidden in non-training-complete contexts. */
+    .training-stats {
+      font-size: 12px;
+      margin-bottom: 10px;
+      font-variant-numeric: tabular-nums;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px 10px;
+    }
+    .training-stats .stat        { color: var(--fg-dim); }
+    .training-stats .stat.ok     { color: var(--ok); }
+    .training-stats .stat.warn   { color: var(--warn); }
+    .training-stats .stat.error  { color: var(--error); }
+    .training-stats .sep         { color: var(--fg-dim); opacity: 0.6; }
+
     /* Completion strip — appears at the TOP of the drill panel when the
        puzzle is solved (closest to the board, where the user's eye lands).
        Holds the result text on the left (color-coded by grade) and a
@@ -824,7 +843,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">strip-audit</span>
+    <span id="buildVersion">training-stats</span>
     <button id="soundToggle" class="sound-toggle" type="button" aria-label="Toggle sound" title="Toggle sound effects">🔊</button>
     <span id="datasetInfo">loading dataset…</span>
     <button id="reviewBadge" class="review-pill" type="button" hidden></button>
@@ -894,6 +913,11 @@
         <button id="nextPuzzleBtn" class="primary big-cta" disabled hidden>Next puzzle →</button>
       </div>
       <div class="session-progress" id="sessionProgress" hidden></div>
+      <!-- Training-session post-completion stats. Three colored chunks:
+           clean / hint / failed. Hidden outside the training-complete state.
+           Sits between the banner and the puzzle metadata so the user reads
+           it on the same beat as the "Training complete" message. -->
+      <div class="training-stats" id="trainingStats" hidden></div>
       <div class="drill-header">
         <span class="drill-id" id="drillId">—</span>
         <span class="drill-rating" id="drillRating">—</span>
@@ -910,6 +934,10 @@
       <div class="drill-controls">
         <button id="prevPuzzleBtn" hidden disabled title="Go back to the previous puzzle in the session/review queue.">← Previous</button>
         <button id="hintBtn">Hint</button>
+        <!-- Retry failed: only visible after a training session completes
+             AND failed_count > 0. Drilled puzzles re-graded as Again form
+             a new single-round 'Retry' training session. -->
+        <button id="retryFailedBtn" class="primary" hidden>Retry failed →</button>
         <button id="backBtn" class="primary">Back to results</button>
         <!-- Session-only setting (hidden in single-puzzle drilling, mirroring
              the Next-puzzle button's gating). Glyph + label match the
@@ -1172,6 +1200,14 @@
     // click. Cleared on "Back to results". A row click in search-mode
     // bypasses session entirely (sessionState stays null).
     var sessionState = null;
+    // Per-puzzle outcomes captured during a training session — keyed by
+    // puzzleId, value is { grade: FSRS grade, hintUsed: bool, wrongAttempts:
+    // int, rating: number|null }. Used to render the training-stats line at
+    // session-complete time, and to build the Retry queue. null outside of
+    // training mode (and reset on every Start training / Retry / Back).
+    // Re-drilling the same puzzle within a session (via Previous) overwrites
+    // its outcome — last attempt wins, matching the user's mental model.
+    var trainingOutcomes = null;
     // Race guard for the session click handlers. Session.advance runs
     // synchronously inside advanceSessionAndDrill BEFORE its await on
     // startDrillByPuzzleId, so a fast double-click would advance the
@@ -1263,6 +1299,7 @@
       $('#autoNextBtn').on('click', onAutoNextToggleClick);
       $('#startSessionBtn').on('click', onStartSessionClick);
       $('#startTrainingBtn').on('click', onStartTrainingClick);
+      $('#retryFailedBtn').on('click', onRetryFailedClick);
       $('#reviewBadge').on('click', onReviewBadgeClick);
       $('#detailsToggleBtn').on('click', onDetailsToggleClick);
       // Sound toggle — preload audio elements, restore persisted on/off state,
@@ -1847,6 +1884,12 @@
       $('#completionStrip').prop('hidden', true);
       $('#completionText').removeClass('ok warn error').text('');
       $('#nextPuzzleBtn').prop({ disabled: true, hidden: true });
+      // Training-only post-session UI: hide on every new drill. They only
+      // belong on the session-complete state, which is per-session not
+      // per-puzzle. (Going Next from session-complete into a Retry session,
+      // or Previous back into a drilled puzzle, both must clear them.)
+      $('#trainingStats').prop('hidden', true).empty();
+      $('#retryFailedBtn').prop('hidden', true);
       clearCompletionBadge();
       clearWrongX();
 
@@ -2717,6 +2760,20 @@
         refreshReviewBadge();
       }
       var grade = drillState.gradeRecorded;
+      // Training-mode outcome capture. Used at session-complete time to
+      // render the stats line and build the Retry queue. Last attempt wins
+      // — re-drilling via Previous overwrites the prior outcome, which
+      // matches "what the user saw most recently". Recorded for ALL training
+      // grades, not just failures, so the stats line can show the full
+      // breakdown (clean / hint / failed).
+      if (sessionState && sessionState.kind === 'training' && trainingOutcomes) {
+        trainingOutcomes[pid] = {
+          grade: grade,
+          hintUsed: !!drillState.hintUsed,
+          wrongAttempts: drillState.wrongAttempts | 0,
+          rating: (drillPuzzle && typeof drillPuzzle.rating === 'number') ? drillPuzzle.rating : null
+        };
+      }
       var avgMs = drillState.avgMoveTimeMs;  // null if timing wasn't engaged
       var avgStr = (typeof avgMs === 'number' && Number.isFinite(avgMs))
         ? '~' + Math.round(avgMs / 1000) + 's/move'
@@ -2845,9 +2902,20 @@
       drillState = null;
       drillPuzzle = null;
       sessionState = null;          // exit session if active
+      // Drop training-only post-session UI state. Both elements are also
+      // explicitly hidden below; clearing the in-memory map prevents the
+      // next training session from seeing stale outcomes if (somehow)
+      // renderTrainingPostCompletion runs before onStartTrainingClick resets.
+      trainingOutcomes = null;
       mode = 'search';
       $('#drillPanel').prop('hidden', true);
       $('#completionStrip').prop('hidden', true);
+      // Hide training-only post-completion UI on the way out — these
+      // elements live inside #drillPanel so they're already visually
+      // gone once the panel hides, but clearing them avoids a flash on
+      // re-entry to a non-training session.
+      $('#trainingStats').prop('hidden', true).empty();
+      $('#retryFailedBtn').prop('hidden', true).removeData('failedItems');
       $('#searchPanel').show();
       // Result badges live on the board DOM, which rebuildSearchBoard
       // replaces wholesale below — but null the state vars explicitly
@@ -3048,6 +3116,8 @@
         return;
       }
       sessionState = t;
+      // Fresh outcome map — key by pid, populated as each puzzle completes.
+      trainingOutcomes = {};
       // Per-round breakdown for the start toast — only mention rounds
       // that actually contributed puzzles. Empty rounds (e.g. no hard
       // puzzles at this position) are silently skipped in the message
@@ -3062,6 +3132,54 @@
       var totalLabel = t.total + ' puzzle' + (t.total === 1 ? '' : 's');
       setStatus('Training started — ' + totalLabel +
                 (parts.length > 0 ? ' (' + parts.join(' · ') + ')' : ''), 'info');
+      sessionLoading = true;
+      try {
+        await advanceSessionAndDrill();
+      } finally {
+        sessionLoading = false;
+      }
+    }
+
+    // Retry failed: build a new training-kind session over the puzzles the
+    // user just failed. Single 'Retry' round, sorted by rating asc (easy
+    // first) — the user is in study-mode now, gentle ramp helps. Same
+    // kind:'training' downstream so progress label, completion banner, and
+    // the Retry button itself all work for nested retries (retry → fail
+    // again → retry again).
+    //
+    // The failedItems list comes from $('#retryFailedBtn').data('failedItems'),
+    // populated by renderTrainingPostCompletion. Reading from the button
+    // (rather than re-walking trainingOutcomes here) means the action is
+    // self-contained: even if outcomes have been mutated by intervening
+    // handlers, the button still has the list it advertised.
+    async function onRetryFailedClick() {
+      if (sessionLoading) return;
+      var $btn = $('#retryFailedBtn');
+      var items = $btn.data('failedItems');
+      if (!Array.isArray(items) || items.length === 0) {
+        // Defensive — button should be hidden in this state. A stale
+        // click could still arrive between renders.
+        return;
+      }
+      var t = Session.createTrainingRetry(items);
+      if (t.complete) {
+        // All items got dropped by the factory's defensive filters. Should
+        // never happen given renderTrainingPostCompletion's input, but bail
+        // gracefully if it does.
+        setStatus('Could not build a retry queue.', 'warn');
+        return;
+      }
+      sessionState = t;
+      // Fresh outcomes for the retry — its own session, its own stats.
+      trainingOutcomes = {};
+      // Hide the post-completion UI immediately so the user doesn't see a
+      // stale "Retry N failed" button + stats while the first retry puzzle
+      // loads. enterDrillMode will rebuild the session-mode UI below it.
+      $('#trainingStats').prop('hidden', true).empty();
+      $btn.prop('hidden', true).removeData('failedItems');
+      $('#sessionProgress').removeClass('complete');
+      setStatus('Retrying ' + t.total + ' failed puzzle' +
+                (t.total === 1 ? '' : 's') + '…', 'info');
       sessionLoading = true;
       try {
         await advanceSessionAndDrill();
@@ -3107,6 +3225,14 @@
         // exit (the previous puzzle's board may still be visible).
         var wasReview = (sessionState && sessionState.kind === 'review');
         sessionState = null;
+        // Clear training-only UI on the way out (mirror onBackClick).
+        // enterDrillMode normally hides these, but if startDrillByPuzzleId
+        // failed BEFORE reaching enterDrillMode they could still be visible
+        // from a prior session-complete state (e.g. user clicked Retry,
+        // body fetch failed before any new puzzle painted).
+        trainingOutcomes = null;
+        $('#trainingStats').prop('hidden', true).empty();
+        $('#retryFailedBtn').prop('hidden', true).removeData('failedItems');
         $('#sessionProgress').prop('hidden', true);
         $('#completionStrip').prop('hidden', true);
         $('#nextPuzzleBtn').prop('hidden', true);
@@ -3161,6 +3287,9 @@
         // state and restore single-puzzle Back styling.
         var wasReview = (sessionState && sessionState.kind === 'review');
         sessionState = null;
+        trainingOutcomes = null;
+        $('#trainingStats').prop('hidden', true).empty();
+        $('#retryFailedBtn').prop('hidden', true).removeData('failedItems');
         $('#sessionProgress').prop('hidden', true);
         $('#completionStrip').prop('hidden', true);
         $('#nextPuzzleBtn').prop('hidden', true);
@@ -3215,7 +3344,76 @@
       $('#hintBtn').prop('disabled', true);
       // Review mode → Done; everything else → Back to results.
       $('#backBtn').addClass('primary').text(kind === 'review' ? 'Done' : 'Back to results');
+      // Training-only post-session UI: stats line + Retry-failed button.
+      // Both sit dormant until renderTrainingPostCompletion populates them;
+      // non-training kinds explicitly hide both (they're shared DOM elements
+      // that stay hidden across normal session and review completions).
+      if (kind === 'training') {
+        renderTrainingPostCompletion();
+      } else {
+        $('#trainingStats').prop('hidden', true).empty();
+        $('#retryFailedBtn').prop('hidden', true);
+      }
       setStatus(statusMsg, 'ok');
+    }
+
+    // Build the training-stats line and toggle the Retry-failed button.
+    // Walks trainingOutcomes, counts {clean / hint / failed}, and emits a
+    // single-line summary tinted by the same --ok/--warn/--error palette
+    // as the puzzle-completion strip. Re-shown on every session-complete
+    // in training mode (including after a Retry session).
+    //
+    // "Failed" = grade Again (any wrong attempt). "Hint" = grade Hard with
+    // hintUsed flag (the only path to Hard in our gradeForAttempt mapping).
+    // "Clean" = everything else (Easy, plus the rare null-grade puzzle if
+    // a future code path skips recording — defensive bucket).
+    //
+    // Edge case: trainingOutcomes might have FEWER entries than
+    // sessionState.total if the user didn't drill every puzzle (body-fetch
+    // failure mid-session, or a future "skip" feature). The line counts
+    // what was actually attempted; the banner already showed the queue total.
+    function renderTrainingPostCompletion() {
+      var outcomes = trainingOutcomes || {};
+      var cleanCount = 0, hintCount = 0, failedCount = 0;
+      var failedItems = [];     // [id, rating] tuples for the Retry queue
+      for (var pid in outcomes) {
+        if (!Object.prototype.hasOwnProperty.call(outcomes, pid)) continue;
+        var o = outcomes[pid];
+        if (o.grade === FSRS.GRADE.again) {
+          failedCount++;
+          failedItems.push([pid, o.rating]);
+        } else if (o.grade === FSRS.GRADE.hard && o.hintUsed) {
+          hintCount++;
+        } else {
+          cleanCount++;
+        }
+      }
+      // Build the stats line as DOM (not innerHTML) so puzzle ids never
+      // get rendered as markup. Each chunk is a colored span; chunks are
+      // separated by middle-dot text nodes.
+      var $stats = $('#trainingStats').empty();
+      var chunks = [
+        { label: '✓ ' + cleanCount + ' clean',   cls: 'ok' },
+        { label: '⚠ ' + hintCount  + ' with hints', cls: 'warn' },
+        { label: '✗ ' + failedCount + ' failed', cls: 'error' }
+      ];
+      for (var i = 0; i < chunks.length; i++) {
+        if (i > 0) $stats.append($('<span class="sep"></span>').text('·'));
+        $stats.append($('<span class="stat"></span>').addClass(chunks[i].cls).text(chunks[i].label));
+      }
+      $stats.prop('hidden', false);
+      // Retry button — visible only when at least one puzzle was failed.
+      // Stash the failed items on the button itself so the click handler
+      // can read them without re-walking outcomes (which may have been
+      // reset by the time the click fires, e.g. if Back was clicked first).
+      var $retry = $('#retryFailedBtn');
+      if (failedCount > 0) {
+        $retry.text('Retry ' + failedCount + ' failed →')
+              .data('failedItems', failedItems)
+              .prop('hidden', false);
+      } else {
+        $retry.prop('hidden', true).removeData('failedItems');
+      }
     }
 
     // ─── auto-next ──────────────────────────────────────────────────────

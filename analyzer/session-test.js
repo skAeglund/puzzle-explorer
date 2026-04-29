@@ -963,6 +963,126 @@ section('Session.trainingRound: roundNumber/roundCount filter empty rounds');
     only1.roundNumber === 1 && only1.label === 'Easy' && only1.currentInRound === 2);
 }
 
+// ━━━ createTrainingRetry ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Retry queue used after a training session completes with failures.
+// Single 'Retry' round, no shuffle, sorted by rating asc.
+
+section('Session.createTrainingRetry: basic queue');
+{
+  // Mixed rating order in → sorted asc out.
+  const t = Session.createTrainingRetry([['c', 1800], ['a', 900], ['b', 1300]]);
+  check('kind=training', t.kind === 'training');
+  check('queue length=3', t.queue.length === 3);
+  check('sorted asc by rating', t.queue.join(',') === 'a,b,c');
+  check('total=3', t.total === 3);
+  check('inRangeTotal=3', t.inRangeTotal === 3);
+  check('not complete (cursor=-1)', t.cursor === -1 && t.complete === false);
+  check('one round', Array.isArray(t.rounds) && t.rounds.length === 1);
+  check('round labeled Retry', t.rounds[0].label === 'Retry');
+  check('round count=3', t.rounds[0].count === 3);
+  check('round target=3', t.rounds[0].target === 3);
+  check('round startIndex=0', t.rounds[0].startIndex === 0);
+  check('round rating bounds null', t.rounds[0].ratingMin === null && t.rounds[0].ratingMax === null);
+}
+
+section('Session.createTrainingRetry: accepts plain string ids');
+{
+  const t = Session.createTrainingRetry(['x', 'y', 'z']);
+  // Without ratings, sort is stable on Infinity → input order preserved.
+  check('queue preserved when no ratings', t.queue.join(',') === 'x,y,z');
+  check('count=3', t.rounds[0].count === 3);
+}
+
+section('Session.createTrainingRetry: mixed string + tuple input');
+{
+  const t = Session.createTrainingRetry([['a', 1500], 'b', ['c', 1000]]);
+  // Sort: c (1000) < a (1500) < b (Infinity, no rating).
+  check('mixed sort: c < a < b', t.queue.join(',') === 'c,a,b');
+}
+
+section('Session.createTrainingRetry: deduplication');
+{
+  // Same id appearing twice — second occurrence dropped, first wins.
+  const t = Session.createTrainingRetry([['a', 1000], ['a', 2000], ['b', 1500]]);
+  check('dedup keeps 2 unique', t.queue.length === 2);
+  check('first occurrence wins (rating 1000 used for sort)', t.queue.join(',') === 'a,b');
+}
+
+section('Session.createTrainingRetry: stable sort within equal ratings');
+{
+  // Equal ratings → input order preserved (stable).
+  const t = Session.createTrainingRetry([['a', 1500], ['b', 1500], ['c', 1500]]);
+  check('stable sort preserves input order', t.queue.join(',') === 'a,b,c');
+}
+
+section('Session.createTrainingRetry: empty input');
+{
+  const t = Session.createTrainingRetry([]);
+  check('kind=training even when empty', t.kind === 'training');
+  check('complete=true on empty queue', t.complete === true);
+  check('total=0', t.total === 0);
+  check('one Retry round with count=0', t.rounds.length === 1 && t.rounds[0].count === 0);
+}
+
+section('Session.createTrainingRetry: defensive on bad input');
+{
+  // Non-array → empty state.
+  const tNull = Session.createTrainingRetry(null);
+  check('null → empty queue', tNull.queue.length === 0 && tNull.complete === true);
+  const tUndef = Session.createTrainingRetry(undefined);
+  check('undefined → empty queue', tUndef.queue.length === 0);
+  const tStr = Session.createTrainingRetry('not-an-array');
+  check('string → empty queue', tStr.queue.length === 0);
+  // Malformed entries dropped silently.
+  const tMixed = Session.createTrainingRetry([
+    null,                    // dropped
+    [],                      // empty array → dropped
+    [''],                    // empty string id → dropped
+    [123],                   // non-string id → dropped
+    ['valid', 1500],         // ok
+    'plain-id'               // ok
+  ]);
+  check('only valid entries kept', tMixed.queue.length === 2);
+  check('valid ids preserved', tMixed.queue.indexOf('valid') >= 0 && tMixed.queue.indexOf('plain-id') >= 0);
+}
+
+section('Session.createTrainingRetry: integrates with advance + trainingRound');
+{
+  const t0 = Session.createTrainingRetry([['a', 1000], ['b', 1100], ['c', 1200]]);
+  const t1 = Session.advance(t0);
+  check('advance returns first puzzle', t1.puzzleId === 'a');
+  check('cursor=0 after first advance', t1.state.cursor === 0);
+  const r1 = Session.trainingRound(t1.state);
+  check('trainingRound: Round 1/1 · Retry', r1.roundNumber === 1 && r1.roundCount === 1 && r1.label === 'Retry');
+  check('trainingRound: 1/3 in round', r1.currentInRound === 1 && r1.totalInRound === 3);
+  // Walk to completion.
+  const t2 = Session.advance(t1.state);
+  const t3 = Session.advance(t2.state);
+  const t4 = Session.advance(t3.state);
+  check('exhausted after 3 advances', t4.exhausted === true && t4.state.complete === true);
+  // From completed state, retreat. Per Session.retreat's documented contract,
+  // retreating from a completed state steps to queue[length-2] (skips the
+  // already-visible last puzzle), so user gets to puzzle 'b' in one click.
+  const back = Session.retreat(t4.state);
+  check('retreat from complete → puzzle b (skips visible last puzzle)',
+    back.puzzleId === 'b' && back.state.complete === false);
+}
+
+section('Session.createTrainingRetry: handles non-numeric / NaN ratings');
+{
+  // String rating → treated as null (sorts to end).
+  const t = Session.createTrainingRetry([
+    ['a', 'not-a-number'],
+    ['b', 1500],
+    ['c', NaN],
+    ['d', 1000]
+  ]);
+  // d (1000) < b (1500) < a (null) and c (NaN→null), stable input order for those two.
+  check('non-numeric ratings treated as null/end', t.queue[0] === 'd' && t.queue[1] === 'b');
+  check('null-rating entries kept (a before c by input order)',
+    t.queue.indexOf('a') >= 0 && t.queue.indexOf('c') >= 0);
+}
+
 // ─── summary ─────────────────────────────────────────────────────────────
 console.log('\n' + (fail === 0 ? '✓' : '✗') + ' ' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail === 0 ? 0 : 1);
