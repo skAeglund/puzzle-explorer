@@ -909,7 +909,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">move-nav</span>
+    <span id="buildVersion">slider-track</span>
     <button id="soundToggle" class="sound-toggle" type="button" aria-label="Toggle sound" title="Toggle sound effects">🔊</button>
     <span id="datasetInfo">loading dataset…</span>
     <button id="reviewBadge" class="review-pill" type="button" hidden></button>
@@ -1487,6 +1487,11 @@
       // Slider 'input' fires continuously as the user drags; 'change'
       // fires only on release. Use 'input' for live count + fill updates.
       $('#ratingMin, #ratingMax').on('input', onRatingSliderInput);
+      // Click-on-track restoration. Native <input type=range> jumps the
+      // thumb to a track click, but our `pointer-events: none` (needed
+      // for both thumbs to stay grabbable) suppresses that. Rebound here
+      // on the container — see onRatingTrackMousedown for the dance.
+      $('#ratingRange').on('mousedown', onRatingTrackMousedown);
       $('#results').on('click', 'li[data-puzzle-id]', function () {
         var pid = $(this).attr('data-puzzle-id');
         if (pid) startDrillByPuzzleId(pid);
@@ -1982,6 +1987,93 @@
         $('#ratingMax').val(rmin);
       }
       updateSessionPanelUI();
+    }
+
+    // Click-on-track behavior for the dual-range slider. The default
+    // <input type=range> behavior of "click track to jump" is killed by
+    // our `pointer-events: none` on the inputs (necessary so both thumbs
+    // remain grabbable when stacked). We restore it here: a mousedown on
+    // any non-thumb part of the slider container moves the CLOSEST thumb
+    // to the click position, then enters a synthetic drag (document-level
+    // mousemove/mouseup) so the user can keep refining without releasing.
+    //
+    // Thumb-mousedowns (e.target is the input element, since the thumb
+    // pseudo re-targets pointer events to its host input) fall through —
+    // the native drag still owns them.
+    function onRatingTrackMousedown(e) {
+      // Native thumb drag: target is the input itself. Let it through.
+      if (e.target && e.target.tagName === 'INPUT') return;
+      // Left button only. e.button is undefined for synthesized iOS
+      // events; `!== 0` would block those, so guard explicitly on the
+      // truthy "is a non-left-button mousedown" case.
+      if (e.button !== undefined && e.button !== 0) return;
+
+      var container = e.currentTarget;
+      var $rmin = $(container).find('#ratingMin');
+      var $rmax = $(container).find('#ratingMax');
+      if (!$rmin.length || !$rmax.length) return;
+
+      var rect = container.getBoundingClientRect();
+      var attrMin = +$rmin.attr('min');
+      var attrMax = +$rmin.attr('max');
+      var step = +$rmin.attr('step') || 1;
+
+      // Map clientX → snapped value within [attrMin, attrMax].
+      function valueAt(clientX) {
+        var w = rect.width;
+        if (!(w > 0)) return attrMin;
+        var pct = Math.max(0, Math.min(1, (clientX - rect.left) / w));
+        var raw = attrMin + pct * (attrMax - attrMin);
+        var snapped = Math.round(raw / step) * step;
+        // Stay inside the absolute bounds even after rounding.
+        return Math.max(attrMin, Math.min(attrMax, snapped));
+      }
+
+      var v0 = valueAt(e.clientX);
+      var rmin = +$rmin.val();
+      var rmax = +$rmax.val();
+      // Closest-thumb resolution: by absolute distance to the click value.
+      // Tie (clicking exactly on the midpoint between the thumbs): prefer
+      // the side that the click is "approaching from" — clicks above the
+      // midpoint of the full range pull the upper thumb, clicks below
+      // pull the lower. This matches user intuition when both thumbs sit
+      // close together at one extreme.
+      var dMin = Math.abs(v0 - rmin);
+      var dMax = Math.abs(v0 - rmax);
+      var $active;
+      if (dMin < dMax) $active = $rmin;
+      else if (dMax < dMin) $active = $rmax;
+      else $active = (v0 > (attrMin + attrMax) / 2) ? $rmax : $rmin;
+
+      // Apply the initial value and let the existing input handler do
+      // its clamp + UI repaint dance. trigger('input') sets e.target to
+      // the input so onRatingSliderInput's e.target.id check works.
+      if (+$active.val() !== v0) {
+        $active.val(v0);
+        $active.trigger('input');
+      }
+      // We're claiming this gesture for the drag — prevent the browser's
+      // default focus/selection behavior on the surrounding markup.
+      e.preventDefault();
+
+      function onMove(ev) {
+        // The container can move in the layout if other panels resize, but
+        // for a typical drag the cached rect is fine. Recomputing on every
+        // move would be defensive and cheap; do that to avoid surprise
+        // behavior if e.g. a sibling panel collapses mid-drag.
+        rect = container.getBoundingClientRect();
+        var v = valueAt(ev.clientX);
+        if (+$active.val() !== v) {
+          $active.val(v);
+          $active.trigger('input');
+        }
+      }
+      function onUp() {
+        document.removeEventListener('mousemove', onMove, true);
+        document.removeEventListener('mouseup',   onUp,   true);
+      }
+      document.addEventListener('mousemove', onMove, true);
+      document.addEventListener('mouseup',   onUp,   true);
     }
 
     // ─── drill mode ─────────────────────────────────────────────────────
