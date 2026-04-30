@@ -167,6 +167,21 @@
       0%, 100% { opacity: 1; }
       50%      { opacity: 0.35; }
     }
+    /* Reserve enough width to fit the longest *rotating* status label
+       ("Syncing…" / "Loading…" / "Not synced" — all ≤10 chars in mono).
+       Without this, the pill grows ~2ch on every poll as "Synced" → "Syncing…",
+       and on viewport widths where the pill is right at the row-1 boundary
+       in the wrap-flex header, that growth pushes the pill to a new row,
+       adding ~22px of header height and visibly shifting the board down
+       and back up on each poll. The configured "Synced as <username>"
+       state and sticky error states ("Username mismatch", "Sync failed")
+       can naturally exceed this min-width — they widen the pill once and
+       stay there, no flicker. */
+    #syncLabel {
+      display: inline-block;
+      min-width: 10ch;
+      text-align: left;
+    }
 
     /* The expandable settings panel below the header. Uses the same
        surface tokens as .panel but compact (less padding) since it's
@@ -1293,7 +1308,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">training-improvements</span>
+    <span id="buildVersion">sync-pill-stable-width</span>
     <button id="soundToggle" class="sound-toggle" type="button" aria-label="Toggle sound" title="Toggle sound effects">🔊</button>
     <!-- Stats drawer toggle (issue #9). Same lightweight aesthetic as the
          sound toggle — header real estate is tight, so it's icon-only. The
