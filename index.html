@@ -909,7 +909,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">slider-track</span>
+    <span id="buildVersion">audit-fixes</span>
     <button id="soundToggle" class="sound-toggle" type="button" aria-label="Toggle sound" title="Toggle sound effects">🔊</button>
     <span id="datasetInfo">loading dataset…</span>
     <button id="reviewBadge" class="review-pill" type="button" hidden></button>
@@ -2033,17 +2033,20 @@
       var rmin = +$rmin.val();
       var rmax = +$rmax.val();
       // Closest-thumb resolution: by absolute distance to the click value.
-      // Tie (clicking exactly on the midpoint between the thumbs): prefer
-      // the side that the click is "approaching from" — clicks above the
-      // midpoint of the full range pull the upper thumb, clicks below
-      // pull the lower. This matches user intuition when both thumbs sit
-      // close together at one extreme.
       var dMin = Math.abs(v0 - rmin);
       var dMax = Math.abs(v0 - rmax);
       var $active;
       if (dMin < dMax) $active = $rmin;
       else if (dMax < dMin) $active = $rmax;
-      else $active = (v0 > (attrMin + attrMax) / 2) ? $rmax : $rmin;
+      // Tie: when both thumbs collide at one extreme (rmin === rmax), the
+      // user clicking AT a different value wants to drag the range toward
+      // the click — i.e. expand. Picking by the THUMB-PAIR midpoint
+      // (rmin+rmax)/2, not the full-range midpoint, gets this right:
+      // collide at 100, click 200 → midpoint 100, v0>100 → $rmax (expand
+      // up); collide at 100, click 50 → v0<100 → $rmin (expand down).
+      // For the rmin<rmax click-exactly-at-midpoint case (the OTHER tie
+      // scenario), either thumb works; this picks $rmin on equality.
+      else $active = (v0 > (rmin + rmax) / 2) ? $rmax : $rmin;
 
       // Apply the initial value and let the existing input handler do
       // its clamp + UI repaint dance. trigger('input') sets e.target to
@@ -3165,7 +3168,11 @@
         var pmFrom = (typeof pm === 'string' && pm.length >= 4) ? pm.slice(0, 2) : null;
         var pmTo   = (typeof pm === 'string' && pm.length >= 4) ? pm.slice(2, 4) : null;
         var c0 = new Chess();
-        c0.load(drillPuzzle.fen);
+        // Match the n>0 branch's defensive load check. enterDrillMode has
+        // already validated this FEN, so this should never fail in
+        // practice — but failing loud (return null) beats handing back a
+        // chess instance in an undefined state.
+        if (!c0.load(drillPuzzle.fen)) return null;
         return { fen: drillPuzzle.fen, from: pmFrom, to: pmTo, chess: c0 };
       }
       var c = new Chess();
@@ -4705,6 +4712,13 @@
       // either side move freely.
       if (mode === 'drill') {
         if (!drillState || drillState.complete) return;
+        // Review nav: same gate as onDragStart. Without this the user can
+        // still paint .square-selected + dots on a click during review;
+        // a follow-up click on a destination silently no-ops in
+        // attemptMove. Two-click "did nothing" is more confusing than
+        // refusing the initial selection. Mirrors onDragStart's review
+        // guard exactly.
+        if (isDrillReviewing()) return;
         if (chess.turn() !== Drill.userColor(drillState)) return;
       }
 
