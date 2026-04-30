@@ -446,6 +446,15 @@
     .move-strip .move-san {
       margin-right: 8px;
     }
+    /* Clickable SANs for review nav. The "1. ..." black-to-move
+       placeholder span isn't clickable (no data-ply), so we scope the
+       interactive styles to elements that DO carry data-ply. Hover
+       echoes the current-ply tint at lower intensity so users see the
+       affordance without the whole strip lighting up on a ply hop. */
+    .move-strip .move-san[data-ply] { cursor: pointer; border-radius: 2px; padding: 0 2px; }
+    .move-strip .move-san[data-ply]:hover { background: var(--surface-2); }
+    .move-strip .move-san.is-current { background: var(--accent); color: var(--bg); }
+    .move-strip .move-san.is-current:hover { background: var(--accent-hover); color: var(--bg); }
     .drill-controls { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
     .lichess-link {
       font-size: 12px;
@@ -900,7 +909,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">try-again</span>
+    <span id="buildVersion">move-nav</span>
     <button id="soundToggle" class="sound-toggle" type="button" aria-label="Toggle sound" title="Toggle sound effects">🔊</button>
     <span id="datasetInfo">loading dataset…</span>
     <button id="reviewBadge" class="review-pill" type="button" hidden></button>
@@ -1291,6 +1300,21 @@
     // Back, on body-fetch bailouts, and at the start of every enterDrillMode
     // call so navigation paths (Prev/Next/row-click) always start fresh.
     var isPracticing = false;
+    // Move-strip review navigation. While drilling, the user can rewind
+    // through past plies via arrow keys / Home / End / clicking on a SAN
+    // in the strip. drillViewIdx encodes which ply is being viewed:
+    //   null     → "live" (the current drill position; chess.fen()
+    //              tracks it). The strip's last SAN is highlighted as
+    //              the current ply. Auto-tracks sanHistory growth.
+    //   integer  → reviewing past ply N, where N ∈ [0, sanHistory.length].
+    //              N=0 is the puzzle's starting position (drillPuzzle.fen,
+    //              with the previousMove blunder shown as last-move
+    //              highlight when available). N≥1 is the position after
+    //              sanHistory[N-1] has been played.
+    // While reviewing (drillViewIdx !== null), drag/click moves and the
+    // hint button are no-ops — moves only resume from the live state.
+    // Reset to null in enterDrillMode and onBackClick.
+    var drillViewIdx = null;
     // Click-to-move state. selectedSquare tracks the user's currently-selected
     // own piece. deselectionPending implements MistakeLab's mousedown/mouseup
     // dance: clicking the already-selected square doesn't deselect immediately
@@ -1432,6 +1456,13 @@
       $('#tryAgainBtn').on('click', onTryAgainClick);
       $('#prevPuzzleBtn').on('click', onPrevPuzzleClick);
       $('#autoNextBtn').on('click', onAutoNextToggleClick);
+      // Move-strip click delegation: clicking a SAN with data-ply rewinds
+      // the displayed view to that ply. Delegated because the strip is
+      // re-rendered every move (updateMoveStripDisplay rebuilds children
+      // from drillState.sanHistory). The "1. ..." black-to-move marker
+      // span has no data-ply, so the [data-ply] selector excludes it
+      // naturally.
+      $('#moveStrip').on('click', '.move-san[data-ply]', onMoveStripClick);
       $('#startSessionBtn').on('click', onStartSessionClick);
       $('#startTrainingBtn').on('click', onStartTrainingClick);
       $('#retryFailedBtn').on('click', onRetryFailedClick);
@@ -1495,6 +1526,9 @@
       window.addEventListener('mouseup', onBoardMouseUp);
       // Escape clears any active selection AND any drawn annotations
       // (Lichess convention) — works in both search and drill modes.
+      // Arrow keys / Home / End drive the move-strip review nav while
+      // drilling (and never while focus is on a text-input — typing in
+      // the FEN textarea would otherwise lose its native cursor moves).
       $(document).on('keydown', function (e) {
         if (e.key === 'Escape') {
           if (selectedSquare) {
@@ -1502,6 +1536,29 @@
             deselectionPending = false;
           }
           if (hasAnyAnnotations()) clearAnnotations();
+          return;
+        }
+        // Skip nav when modifiers are held (Ctrl+Left etc. is OS history,
+        // not our move-strip), or when focus is inside an input/textarea
+        // (e.g. mid-edit of the FEN textarea — arrow keys must move the
+        // text cursor there).
+        if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+        var t = e.target;
+        if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+        if (mode !== 'drill' || !drillState) return;
+        // Promotion picker open: ignore nav. The picker is modal-ish (a
+        // backdrop intercepts board clicks) and the user is mid-decision —
+        // nav'ing the board behind it would scramble the visual context.
+        if (pendingPromotion) return;
+        // Strip is hidden until at least one move has been played; before
+        // that there's nothing to navigate, so silently no-op.
+        if (!drillState.sanHistory || drillState.sanHistory.length === 0) return;
+        switch (e.key) {
+          case 'ArrowLeft':  e.preventDefault(); drillNavBack();    break;
+          case 'ArrowRight': e.preventDefault(); drillNavForward(); break;
+          case 'Home':       e.preventDefault(); drillNavStart();   break;
+          case 'End':        e.preventDefault(); drillNavLive();    break;
+          default: /* nothing */
         }
       });
 
@@ -1995,6 +2052,9 @@
       pendingOppReply = null;
       pendingCompletionResult = null;
       lastSuccessfulUserMove = null;
+      // Review nav resets to "live" — every fresh drill starts the user at
+      // the position they're solving from, never mid-history.
+      drillViewIdx = null;
       if (oppReplyTimeout) { clearTimeout(oppReplyTimeout); oppReplyTimeout = null; }
       if (introTimeout) { clearTimeout(introTimeout); introTimeout = null; }
       // Auto-next pending? Drop it. enterDrillMode is called when starting
@@ -2330,6 +2390,14 @@
       // Drill mode (existing behavior): user's color only, while it's
       // their turn, and only before completion.
       if (!drillState || drillState.complete) return false;
+      // Review nav: while looking at a past ply, the board shows a
+      // historical position but the live `chess` instance is at the END
+      // of the played sequence. Allowing a drag here would either feed
+      // chess.js a move from the wrong source position (data drift) or
+      // need bespoke "snap to live first" logic. Simpler to disallow —
+      // user nav-jumps via End / right-arrow / clicking the last SAN to
+      // resume play.
+      if (isDrillReviewing()) return false;
       // Only the side-to-move's pieces are draggable.
       if (chess.turn() !== piece[0]) return false;
       // Block grabs while it's the opponent's turn (during the 400ms
@@ -2379,6 +2447,9 @@
     function attemptMove(source, target) {
       if (mode === 'search') return attemptSearchMove(source, target);
       if (!drillState || drillState.complete) return { ok: false };
+      // Review nav: same gate as onDragStart. Click-to-move funnels
+      // through here too, so this single guard covers both input paths.
+      if (isDrillReviewing()) return { ok: false };
       if (source === target) return { ok: false };
       // Don't process anything new while a picker is already open. Stale
       // chessboard.js callbacks during the picker resolve as no-ops.
@@ -2913,9 +2984,15 @@
       }
       var hist = drillState.sanHistory;
       var blackToMove = Drill.userColor(drillState) === 'b';
+      // Resolve the active ply for highlighting. drillViewIdx === null →
+      // live, which is the LAST SAN in the strip. Integer N → ply N (0 =
+      // pre-first-move = no SAN highlighted; N≥1 highlights sanHistory[N-1]).
+      var activePly = (drillViewIdx === null) ? hist.length : drillViewIdx;
       $el.empty();
       // For black-to-move puzzles, prepend a "1. ..." marker so the first
-      // visible ply is correctly numbered as black's reply.
+      // visible ply is correctly numbered as black's reply. The "..."
+      // placeholder is NOT clickable — it represents an unplayed move,
+      // not a viewable past ply.
       if (blackToMove) {
         $el.append($('<span class="move-num"></span>').text('1.'));
         $el.append($('<span class="move-san"></span>').text('...'));
@@ -2933,13 +3010,182 @@
             : Math.floor(i / 2) + 1;
           $el.append($('<span class="move-num"></span>').text(moveNo + '.'));
         }
-        $el.append($('<span class="move-san"></span>').text(hist[i]));
+        // data-ply = the destination ply when this SAN is clicked (the
+        // position after sanHistory[i] is played, i.e. i+1). is-current
+        // marks the ply currently shown on the board so the user can
+        // see where they are while reviewing.
+        var $san = $('<span class="move-san"></span>')
+          .text(hist[i])
+          .attr('data-ply', i + 1);
+        if (i + 1 === activePly) $san.addClass('is-current');
+        $el.append($san);
       }
       $el.prop('hidden', false);
-      // Auto-scroll to the right edge so the most recent move stays
-      // visible on long sequences. Cheap; no-ops when content fits.
+      // Auto-scroll to keep the active ply visible. Live drilling pins
+      // to the right edge (most recent move). Review mode scrolls the
+      // active SAN into view — usually a no-op when the strip fits, but
+      // matters on long sequences where the active SAN sits offscreen.
       var node = $el[0];
-      if (node) node.scrollLeft = node.scrollWidth;
+      if (!node) return;
+      if (drillViewIdx === null) {
+        node.scrollLeft = node.scrollWidth;
+      } else {
+        var $active = $el.find('.move-san.is-current')[0];
+        if ($active && typeof $active.scrollIntoView === 'function') {
+          // 'nearest' avoids the page-jump some browsers do with 'center'
+          // when the strip itself is the scroll container.
+          try { $active.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }
+          catch (e) { node.scrollLeft = node.scrollWidth; }
+        }
+      }
+    }
+
+    // ─── move-strip review navigation ───────────────────────────────────
+    // Reviewing a past ply means: show that ply's position on the board
+    // without touching the live `chess` instance or drillState. Caller
+    // surfaces are arrow keys, Home/End, and clicking on a SAN in the
+    // strip. The strip's is-current marker tracks drillViewIdx; the live
+    // `chess` instance always sits at sanHistory.length (post-last-move).
+
+    function isDrillReviewing() {
+      return drillViewIdx !== null;
+    }
+
+    // Compute the board state for a given ply index. Replays the SAN log
+    // on a fresh chess.js instance — we don't keep one around because the
+    // live `chess` global must stay at the live position so commitDrillMove
+    // can keep working without divergence. Replay cost is trivial: drill
+    // sequences are typically 4–10 plies. Returns:
+    //   { fen, from, to, chess }
+    // For idx===0, from/to come from drillPuzzle.previousMove (the blunder
+    // the intro animated) when available — same UX as enterDrillMode's
+    // playBlunderIntro tail. Without previousMove (legacy puzzles), from/to
+    // are null and the caller paints no last-move highlight.
+    // Returns null if drill state is missing (defensive — shouldn't happen
+    // when called from the drill handlers below, but the caller is expected
+    // to handle null gracefully).
+    function computeDrillSnapshot(idx) {
+      if (!drillState || !drillPuzzle) return null;
+      var hist = drillState.sanHistory;
+      var n = Math.max(0, Math.min(idx | 0, hist.length));
+      if (n === 0) {
+        var pm = drillPuzzle.previousMove;
+        var pmFrom = (typeof pm === 'string' && pm.length >= 4) ? pm.slice(0, 2) : null;
+        var pmTo   = (typeof pm === 'string' && pm.length >= 4) ? pm.slice(2, 4) : null;
+        var c0 = new Chess();
+        c0.load(drillPuzzle.fen);
+        return { fen: drillPuzzle.fen, from: pmFrom, to: pmTo, chess: c0 };
+      }
+      var c = new Chess();
+      if (!c.load(drillPuzzle.fen)) return null;
+      var lastMoveObj = null;
+      for (var i = 0; i < n; i++) {
+        var san = hist[i];
+        var m;
+        try { m = c.move(san); } catch (e) { m = null; }
+        if (!m) {
+          // Replay broke — should be impossible since sanHistory is built
+          // from chess.move success paths. If it does happen, fall back to
+          // whatever we got so far rather than throwing.
+          break;
+        }
+        lastMoveObj = m;
+      }
+      return {
+        fen: c.fen(),
+        from: lastMoveObj ? lastMoveObj.from : null,
+        to:   lastMoveObj ? lastMoveObj.to   : null,
+        chess: c
+      };
+    }
+
+    // Jump the displayed view to ply `target`. target ∈ [0, sanHistory.length].
+    // target === sanHistory.length resolves to live (drillViewIdx = null)
+    // so subsequent sanHistory growth keeps the user pinned at live. Lower
+    // targets enter review mode. No-op when the resolved view matches
+    // what's currently shown.
+    //
+    // Side effects when entering / re-pointing review:
+    //   - Cancel any selection / wrong-X / hint highlight (those are about
+    //     the LIVE position; carrying them over confuses the displayed past).
+    //   - Animate the board to the snapshot FEN.
+    //   - Paint last-move + check on the snapshot's chess instance.
+    // When returning to live: same teardown of transient marks; restore
+    // board to chess.fen() and paint live's last-move from sanHistory.
+    function jumpToDrillPly(target) {
+      if (!drillState || !drillPuzzle) return;
+      var hist = drillState.sanHistory;
+      var clamped = Math.max(0, Math.min(target | 0, hist.length));
+      var nextView = (clamped === hist.length) ? null : clamped;
+      // No-op — the resolved view already matches what's on screen.
+      if (nextView === drillViewIdx) return;
+
+      // Transient marks tied to the live position — clear regardless of
+      // direction. The user is changing what they're looking at; stale
+      // selection / wrong-X / hint highlight from a previous moment would
+      // mislead.
+      if (selectedSquare) clearSelection();
+      deselectionPending = false;
+      clearWrongX();
+      clearHintHighlight();
+
+      drillViewIdx = nextView;
+      var snap;
+      if (nextView === null) {
+        // Returning to live. The live chess instance is the source of
+        // truth. Last-move from/to comes from the most recent SAN replay
+        // (cheap; same code path as the review branch).
+        snap = computeDrillSnapshot(hist.length);
+        if (!snap) return;
+      } else {
+        snap = computeDrillSnapshot(nextView);
+        if (!snap) return;
+      }
+      // Animated board sync. board.position defaults to animate=true; we
+      // want the visual continuity for nav. The snapshot's check status
+      // is repainted at +250ms via showCheckDeferred to survive the DOM
+      // rebuild (same pattern as everywhere else animated).
+      if (board) board.position(snap.fen);
+      if (snap.from && snap.to) {
+        showLastMoveDeferred(snap.from, snap.to);
+      } else {
+        clearLastMove();
+      }
+      showCheckDeferred(snap.chess);
+      // Annotations are anchored to specific squares of whatever position
+      // they were drawn against; nav changes the displayed position so
+      // they'd float over the wrong pieces. Match the existing convention
+      // (clearAnnotations on every animated update) by clearing here too.
+      if (hasAnyAnnotations()) clearAnnotations();
+      // Repaint the strip so is-current tracks the new view.
+      updateMoveStripDisplay();
+    }
+
+    // Convenience wrappers used by both the keyboard and click handlers.
+    function drillNavBack()    { if (drillState) jumpToDrillPly(currentDrillPly() - 1); }
+    function drillNavForward() { if (drillState) jumpToDrillPly(currentDrillPly() + 1); }
+    function drillNavStart()   { if (drillState) jumpToDrillPly(0); }
+    function drillNavLive()    { if (drillState) jumpToDrillPly(drillState.sanHistory.length); }
+
+    // Resolve the integer ply index currently being shown. live === null
+    // → sanHistory.length (the position chess.fen() corresponds to).
+    function currentDrillPly() {
+      if (!drillState) return 0;
+      return drillViewIdx === null ? drillState.sanHistory.length : drillViewIdx;
+    }
+
+    // Click on a SAN in the move strip → jump to that ply. data-ply is
+    // 1-based and represents the destination state (position after this
+    // SAN was played). Bound via delegation on #moveStrip so re-renders
+    // don't need to re-bind. Defensive parseInt — should always succeed
+    // given the [data-ply] selector, but we no-op gracefully on NaN.
+    function onMoveStripClick(e) {
+      // Same picker guard as the keydown nav: a click while the picker
+      // is open would change the board behind it. Silent no-op.
+      if (pendingPromotion) return;
+      var ply = parseInt($(this).attr('data-ply'), 10);
+      if (!Number.isFinite(ply)) return;
+      jumpToDrillPly(ply);
     }
 
     // Schedule the queued opp reply with a 400ms 'thinking' delay. Called
@@ -2979,13 +3225,22 @@
       // applyOpponentReply only appends the SAN, doesn't touch the idx.
       drillState = Drill.applyOpponentReply(drillState, moveObj.san);
       updateMoveStripDisplay();
-      // Animated update — default chessboard.js behavior, NOT onSnapEnd here.
-      if (board) board.position(chess.fen());
       // Audio for the opponent's reply. Same post-move check semantics as
       // the user-move path: chess.in_check is now from the user's POV.
+      // Always plays — even mid-review, the opp's move is real and the
+      // sound cue is informative.
       Sound.playForMove(moveObj, chess.in_check(), chess.in_checkmate());
-      // Re-apply lastmove + check after the animation settles.
-      applyLastMoveAndCheckDeferred(from, to);
+      // Visual board update only when the user is at LIVE. If they nav'd
+      // back during the 400ms thinking delay, animating to the live FEN
+      // would yank them out of the review they're studying — and painting
+      // the opp's lastmove squares on top of the past position they're
+      // viewing would highlight the wrong squares. Live state advances
+      // silently in the background; the user resumes the live view at
+      // their pace via End / right-arrow / clicking the latest SAN.
+      if (drillViewIdx === null) {
+        if (board) board.position(chess.fen());
+        applyLastMoveAndCheckDeferred(from, to);
+      }
       // If a 'complete' result carried an opp reply, the puzzle ended on
       // the opp's move — show completion UI now that the animation has run.
       if (pendingCompletionResult) {
@@ -3146,6 +3401,13 @@
     // ─── hint + back buttons ────────────────────────────────────────────
     function onHintClick() {
       if (!drillState || drillState.complete) return;
+      // Hint reveals the from-square of the LIVE next-move; painting it
+      // while the user is staring at a past position would either point
+      // to the wrong square or paint over a square that has a different
+      // piece in the past. Silent no-op — the button stays interactive
+      // so jumping back to live + clicking still works on the same
+      // session without a re-enable dance.
+      if (isDrillReviewing()) return;
       var r = Drill.requestHint(drillState);
       drillState = r.state;
       if (r.hintInfo && r.hintInfo.fromSquare) {
@@ -3185,6 +3447,9 @@
       cancelAutoNext();
       pendingOppReply = null;
       pendingCompletionResult = null;
+      // Drop any review-nav viewpoint — the next drill (re-entry) sets
+      // its own.
+      drillViewIdx = null;
       var lastPid = drillPuzzle ? drillPuzzle.id : null;
       var hadSession = !!sessionState;
       var wasReview = !!(sessionState && sessionState.kind === 'review');
@@ -4080,12 +4345,34 @@
     }
     function clearLastMove() {
       $('#board .square-lastmove').removeClass('square-lastmove');
+      // A pending +250ms repaint from a prior showLastMoveDeferred call
+      // would re-add the OLD from/to classes on top of the now-empty
+      // state. Cancel it so a clear is actually final.
+      if (pendingShowLastMoveTimer !== null) {
+        clearTimeout(pendingShowLastMoveTimer);
+        pendingShowLastMoveTimer = null;
+      }
     }
     // Re-apply at +250ms because chessboard.js's animated position(fen)
     // rebuilds DOM at animation completion, wiping our classes.
+    //
+    // Single in-flight timer ID per helper. A new call cancels any pending
+    // repaint from a prior call before queuing its own — without this,
+    // rapid back-to-back animated updates (most commonly arrow-key nav of
+    // the move strip) would let the EARLIER timer fire and re-paint the
+    // OLD from/to on top of the NEW position. The "single timer" pattern
+    // is robust against the showLastMove → clearLastMove internal call
+    // (a token-based scheme would collide with that).
+    var pendingShowLastMoveTimer = null;
     function showLastMoveDeferred(from, to) {
+      if (pendingShowLastMoveTimer !== null) {
+        clearTimeout(pendingShowLastMoveTimer);
+      }
       showLastMove(from, to);
-      setTimeout(function () { showLastMove(from, to); }, 250);
+      pendingShowLastMoveTimer = setTimeout(function () {
+        pendingShowLastMoveTimer = null;
+        showLastMove(from, to);
+      }, 250);
     }
 
     // ── Check / checkmate aura on the king's square ──
@@ -4116,10 +4403,21 @@
     function clearCheck() {
       $('#board .square-check, #board .square-checkmate')
         .removeClass('square-check square-checkmate');
+      if (pendingShowCheckTimer !== null) {
+        clearTimeout(pendingShowCheckTimer);
+        pendingShowCheckTimer = null;
+      }
     }
+    var pendingShowCheckTimer = null;
     function showCheckDeferred(c) {
+      if (pendingShowCheckTimer !== null) {
+        clearTimeout(pendingShowCheckTimer);
+      }
       showCheck(c);
-      setTimeout(function () { showCheck(c); }, 250);
+      pendingShowCheckTimer = setTimeout(function () {
+        pendingShowCheckTimer = null;
+        showCheck(c);
+      }, 250);
     }
     // Convenience: paint lastmove + check together with the same animation
     // settling delay. Used after every animated board update. Also clears
