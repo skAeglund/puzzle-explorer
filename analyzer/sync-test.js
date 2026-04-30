@@ -187,7 +187,118 @@ section('merge: forward-compat fields on remote preserved');
   check('remote forward-compat field preserved', m.positions.a.futureField === 42);
 }
 
-// ━━━ USERNAME / CREDENTIALS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+section('merge: streak meta — newer lastReviewDay wins (issue #9)');
+{
+  const local = {
+    positions: {},
+    meta: { lastReviewDay: '2025-06-15', currentStreak: 5, longestStreak: 7 }
+  };
+  const remote = {
+    positions: {},
+    meta: { lastReviewDay: '2025-06-12', currentStreak: 3, longestStreak: 4 }
+  };
+  const m = Sync.merge(local, remote);
+  check('local meta wins (newer lastReviewDay)', m.meta.lastReviewDay === '2025-06-15');
+  check('local currentStreak preserved',          m.meta.currentStreak === 5);
+  check('local longestStreak preserved',          m.meta.longestStreak === 7);
+}
+
+section('merge: streak meta — older local loses to newer remote');
+{
+  const local = {
+    positions: {},
+    meta: { lastReviewDay: '2025-06-10', currentStreak: 2, longestStreak: 9 }
+  };
+  const remote = {
+    positions: {},
+    meta: { lastReviewDay: '2025-06-15', currentStreak: 1, longestStreak: 5 }
+  };
+  const m = Sync.merge(local, remote);
+  check('remote meta wins (newer lastReviewDay)', m.meta.lastReviewDay === '2025-06-15');
+  check('remote currentStreak retained',           m.meta.currentStreak === 1);
+  // longestStreak is max-merged across sides — the personal-best record
+  // survives even when the side with the more recent activity has a
+  // smaller longest. So local's 9 wins over remote's 5 here.
+  check('longestStreak max-merged (preserves history)', m.meta.longestStreak === 9);
+}
+
+section('merge: streak meta — equal lastReviewDay → tiebreak on longestStreak');
+{
+  const local = {
+    positions: {},
+    meta: { lastReviewDay: '2025-06-15', currentStreak: 1, longestStreak: 12 }
+  };
+  const remote = {
+    positions: {},
+    meta: { lastReviewDay: '2025-06-15', currentStreak: 4, longestStreak: 8 }
+  };
+  const m = Sync.merge(local, remote);
+  check('local wins (longer longestStreak on same-day tie)', m.meta.longestStreak === 12);
+  check('local currentStreak retained on tie-win',           m.meta.currentStreak === 1);
+}
+
+section('merge: streak meta — longestStreak max-merged when local-newer has smaller longest');
+{
+  // Mirror of "older local loses" but with sides flipped: local has the
+  // newer lastReviewDay AND the smaller longestStreak. The merged result
+  // should keep local's lastReviewDay/currentStreak (recent-activity wins
+  // for time-sensitive fields) but adopt remote's longer historical max.
+  const local = {
+    positions: {},
+    meta: { lastReviewDay: '2025-06-15', currentStreak: 1, longestStreak: 4 }
+  };
+  const remote = {
+    positions: {},
+    meta: { lastReviewDay: '2025-06-10', currentStreak: 2, longestStreak: 30 }
+  };
+  const m = Sync.merge(local, remote);
+  check('local meta wins time-fields',                  m.meta.lastReviewDay === '2025-06-15');
+  check('local currentStreak preserved',                m.meta.currentStreak === 1);
+  check('but longestStreak adopts remote\'s bigger 30', m.meta.longestStreak === 30);
+}
+
+section('merge: streak meta — only local has meta → local meta carried');
+{
+  const local = {
+    positions: {},
+    meta: { lastReviewDay: '2025-06-15', currentStreak: 3, longestStreak: 3 }
+  };
+  const remote = { positions: {} };  // no meta — older client
+  const m = Sync.merge(local, remote);
+  check('local meta survives when remote has none', m.meta && m.meta.lastReviewDay === '2025-06-15');
+  check('not aliased to local.meta',                m.meta !== local.meta);
+}
+
+section('merge: streak meta — only remote has meta → remote meta preserved');
+{
+  const local  = { positions: {} };
+  const remote = {
+    positions: {},
+    meta: { lastReviewDay: '2025-06-15', currentStreak: 3, longestStreak: 3 }
+  };
+  const m = Sync.merge(local, remote);
+  check('remote meta survives when local has none', m.meta && m.meta.lastReviewDay === '2025-06-15');
+}
+
+section('merge: streak meta — both absent → no meta on result');
+{
+  const m = Sync.merge({ positions: {} }, { positions: {} });
+  check('no meta on either side → no meta on merged', m.meta === undefined);
+}
+
+section('merge: streak meta — bad shape (array) ignored on local');
+{
+  const local  = { positions: {}, meta: ['nonsense'] };
+  const remote = {
+    positions: {},
+    meta: { lastReviewDay: '2025-06-15', currentStreak: 3, longestStreak: 3 }
+  };
+  const m = Sync.merge(local, remote);
+  // Bad-shape local meta is treated as "no meta" → remote wins.
+  check('remote meta wins over array-shaped local meta', m.meta && m.meta.lastReviewDay === '2025-06-15');
+}
+
+// ━━━ USERNAME / CREDENTIALS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 section('Sync.setUsername normalizes + persists');
 {

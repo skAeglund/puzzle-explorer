@@ -56,6 +56,7 @@ section('Drill.start');
   check('hintUsed=false',         s.hintUsed === false);
   check('complete=false',         s.complete === false);
   check('gradeRecorded=null',     s.gradeRecorded === null);
+  check('solutionRevealed=false', s.solutionRevealed === false);
   check('userColor=w from FEN',   Drill.userColor(s) === 'w');
   check('userColor=b for PUZZLE_1', Drill.userColor(Drill.start(PUZZLE_1)) === 'b');
 
@@ -177,6 +178,84 @@ section('Drill.requestHint');
   s = Drill.start(PUZZLE_3);
   r = Drill.requestHint(s);
   check('hint does NOT trigger record', r.state.gradeRecorded === null);
+}
+
+section('Drill.revealSolution');
+{
+  // From clean state — locks Again, returns full remaining moves.
+  let s = Drill.start(PUZZLE_3);
+  let r = Drill.revealSolution(s);
+  check('locks gradeRecorded=Again',     r.state.gradeRecorded === FSRS.GRADE.again);
+  check('toRecord=Again on first call',  r.toRecord === FSRS.GRADE.again);
+  check('solutionRevealed=true',         r.state.solutionRevealed === true);
+  check('remainingMoves = full slice',   JSON.stringify(r.remainingMoves) === JSON.stringify(['e2g4','h3g4','d1g4']));
+  check('not yet complete',              r.state.complete === false);
+  // Idempotent: second call doesn't double-record.
+  let r2 = Drill.revealSolution(r.state);
+  check('second call: toRecord=null',    r2.toRecord === null);
+  check('second call: still revealed',   r2.state.solutionRevealed === true);
+
+  // From wrong-attempt state — Again was already locked by the wrong path,
+  // so revealSolution doesn't double-record.
+  let sw = Drill.start(PUZZLE_3);
+  let wr = Drill.attemptUserMove(sw, 'a1a2');  // illegal-as-solution
+  check('after wrong: gradeRecorded=Again',   wr.state.gradeRecorded === FSRS.GRADE.again);
+  let rev = Drill.revealSolution(wr.state);
+  check('reveal-after-wrong: toRecord=null',  rev.toRecord === null);
+  check('reveal-after-wrong: still locked',   rev.state.gradeRecorded === FSRS.GRADE.again);
+  check('reveal-after-wrong: revealed=true',  rev.state.solutionRevealed === true);
+  check('reveal-after-wrong: wrongAttempts preserved', rev.state.wrongAttempts === 1);
+
+  // From hint-only state — hint doesn't lock the grade, so revealSolution
+  // is the FIRST locker. Returns toRecord=Again.
+  let sh = Drill.start(PUZZLE_3);
+  sh = Drill.requestHint(sh).state;
+  check('hint did not lock',                  sh.gradeRecorded === null);
+  let rh = Drill.revealSolution(sh);
+  check('reveal-after-hint: toRecord=Again',  rh.toRecord === FSRS.GRADE.again);
+  check('reveal-after-hint: hintUsed preserved', rh.state.hintUsed === true);
+
+  // Mid-puzzle: one correct user move played → currentMoveIdx=2. Reveal
+  // returns the slice from idx 2 (just the final user move 'd1g4').
+  let sm = Drill.start(PUZZLE_3);
+  sm = Drill.attemptUserMove(sm, 'e2g4').state;
+  check('after correct move: currentMoveIdx=2', sm.currentMoveIdx === 2);
+  let rm = Drill.revealSolution(sm);
+  check('mid-puzzle: remainingMoves slice',     JSON.stringify(rm.remainingMoves) === JSON.stringify(['d1g4']));
+  check('mid-puzzle: locks Again',              rm.toRecord === FSRS.GRADE.again);
+
+  // Already-complete state — no-op.
+  let sc = Drill.start(PUZZLE_1);  // 1-move puzzle
+  sc = Drill.attemptUserMove(sc, 'c6g2').state;
+  check('1-move puzzle complete',               sc.complete === true);
+  let rc = Drill.revealSolution(sc);
+  check('reveal on complete: toRecord=null',    rc.toRecord === null);
+  check('reveal on complete: empty remaining',  rc.remainingMoves.length === 0);
+  check('reveal on complete: solutionRevealed unchanged',
+        rc.state.solutionRevealed === sc.solutionRevealed);
+}
+
+section('Drill.revealSolution → autoplay-equivalent feeds remainingMoves through attemptUserMove');
+{
+  // Caller (UI) is expected to drive remainingMoves back into attemptUserMove.
+  // Verify that the final attemptUserMove's grade-locking is a no-op
+  // (gradeRecorded stays Again) and the puzzle reaches complete=true.
+  let s = Drill.start(PUZZLE_3);
+  let r = Drill.revealSolution(s);
+  s = r.state;
+  // remainingMoves = ['e2g4','h3g4','d1g4']. UI feeds the user-side moves
+  // (idx 0 and 2) into attemptUserMove; attemptUserMove auto-advances past
+  // the opp move at idx 1.
+  let m1 = Drill.attemptUserMove(s, 'e2g4', { userSan: 'Bxg4' });
+  check('first reveal-step: continue',          m1.result === 'continue');
+  check('opponentReply returned',               m1.opponentReply === 'h3g4');
+  check('grade still Again after 1st step',     m1.state.gradeRecorded === FSRS.GRADE.again);
+  let m2 = Drill.attemptUserMove(m1.state, 'd1g4', { userSan: 'Qxg4' });
+  check('second reveal-step: complete',         m2.result === 'complete');
+  check('grade STILL Again on completion',      m2.state.gradeRecorded === FSRS.GRADE.again);
+  check('toRecord=null on completion (locked)', m2.toRecord === null);
+  check('solutionRevealed survives autoplay',   m2.state.solutionRevealed === true);
+  check('puzzle marked complete',               m2.state.complete === true);
 }
 
 section('Drill.attemptUserMove — completion grades by branch');
@@ -458,6 +537,224 @@ section('Progress.stats');
   Progress.importData(data);
   const s2 = Progress.stats();
   check('backdated card → due=1', s2.due === 1);
+}
+
+section('Progress.stats: state distribution (issue #9)');
+{
+  freshStorage();
+  // Three cards in different FSRS states. After grade=again from new the
+  // card moves to learning; after grade=easy it goes straight to review.
+  // After grade=again from review it goes to relearning.
+  Progress.recordReview('newCard',  FSRS.GRADE.easy);   // → review
+  Progress.recordReview('learnCard', FSRS.GRADE.again); // → learning
+  Progress.recordReview('relearn',  FSRS.GRADE.easy);   // → review
+  Progress.recordReview('relearn',  FSRS.GRADE.again);  // → relearning
+  const s = Progress.stats();
+  check('states.review = 1',     s.states.review === 1);
+  check('states.learning = 1',   s.states.learning === 1);
+  check('states.relearning = 1', s.states.relearning === 1);
+  check('states.new = 0',        s.states.new === 0);
+}
+
+section('Progress.stats: markSeen-only entries bucket as "new"');
+{
+  freshStorage();
+  Progress.markSeen('clean');           // no .srs at all
+  Progress.recordReview('reviewed', FSRS.GRADE.easy);
+  const s = Progress.stats();
+  check('markSeen → states.new += 1', s.states.new === 1);
+  check('recordReview → states.review += 1', s.states.review === 1);
+  check('total = 2', s.total === 2);
+}
+
+section('Progress.stats: lapse rate (issue #9)');
+{
+  freshStorage();
+  // No reviews yet → lapseRate is null (no division-by-zero surprise).
+  const s0 = Progress.stats();
+  check('no reviews → lapseRate=null', s0.lapseRate === null);
+  check('totalReps=0', s0.totalReps === 0);
+  check('totalLapses=0', s0.totalLapses === 0);
+
+  // Two cards reviewed; one of them eventually fails. FSRS counts reps on
+  // non-Again moves (including the first review of a new card) and lapses
+  // on every Again move that lands on an already-graduated card.
+  Progress.recordReview('p1', FSRS.GRADE.easy);   // p1: new→review,    reps=1
+  Progress.recordReview('p2', FSRS.GRADE.easy);   // p2: new→review,    reps=1
+  Progress.recordReview('p2', FSRS.GRADE.easy);   // p2: review+easy,   reps=2
+  Progress.recordReview('p2', FSRS.GRADE.again);  // p2: review+again,  lapses=1 (reps unchanged)
+  const s = Progress.stats();
+  check('totalReps=3',   s.totalReps === 3);
+  check('totalLapses=1', s.totalLapses === 1);
+  check('lapseRate≈0.333', Math.abs(s.lapseRate - 1/3) < 1e-9);
+}
+
+section('Progress.stats: recentActivity bucketed last 7 days');
+{
+  freshStorage();
+  // Manufacture entries with specific lastSeen timestamps spread across
+  // the past 10 days (some inside the 7-day window, some outside).
+  const now = new Date('2025-06-15T12:00:00Z');
+  const dayMs = 86400000;
+  const data = { positions: {} };
+  // Inside window (last 7 days = 2025-06-09 .. 2025-06-15):
+  //   p1 lastSeen today (2025-06-15)
+  //   p2 lastSeen today
+  //   p3 lastSeen 6 days ago (2025-06-09 — first day of window)
+  //   p4 lastSeen 3 days ago (2025-06-12)
+  // Outside window:
+  //   p5 lastSeen 8 days ago (2025-06-07)
+  data.positions.p1 = { completed: true, lastSeen: new Date(now - 0 * dayMs).toISOString() };
+  data.positions.p2 = { completed: true, lastSeen: new Date(now - 0 * dayMs).toISOString() };
+  data.positions.p3 = { completed: true, lastSeen: new Date(now - 6 * dayMs).toISOString() };
+  data.positions.p4 = { completed: true, lastSeen: new Date(now - 3 * dayMs).toISOString() };
+  data.positions.p5 = { completed: true, lastSeen: new Date(now - 8 * dayMs).toISOString() };
+  Progress.importData(data);
+
+  const s = Progress.stats(now);
+  check('recentActivity length 7',          s.recentActivity.length === 7);
+  // Order: oldest first, ending today. Index 6 = today, index 0 = today-6.
+  // localDateString uses LOCAL time; the test fixture's UTC dates may shift
+  // ±1 day depending on the test runner's TZ. So compare against
+  // FSRS.localDateString(now-N*dayMs) for each slot.
+  for (let i = 0; i < 7; i++) {
+    const expectedDate = FSRS.localDateString(new Date(now - (6 - i) * dayMs));
+    check('recentActivity[' + i + '].date = ' + expectedDate,
+          s.recentActivity[i].date === expectedDate);
+  }
+  // Counts: today should be 2 (p1+p2), today-3 should be 1 (p4), today-6
+  // should be 1 (p3), other slots 0.
+  const todayCount = s.recentActivity[6].count;
+  const day3Count  = s.recentActivity[3].count;
+  const day6Count  = s.recentActivity[0].count;
+  check('today bucket count = 2', todayCount === 2);
+  check('3-days-ago bucket count = 1', day3Count === 1);
+  check('6-days-ago bucket count = 1', day6Count === 1);
+  // Out-of-window entry shouldn't appear anywhere.
+  let totalIn7 = 0;
+  for (let i = 0; i < 7; i++) totalIn7 += s.recentActivity[i].count;
+  check('out-of-window entry not bucketed', totalIn7 === 4);
+}
+
+section('Progress.stats: streak fields default to zero on fresh storage');
+{
+  freshStorage();
+  const s = Progress.stats();
+  check('currentStreak=0',  s.currentStreak === 0);
+  check('longestStreak=0',  s.longestStreak === 0);
+  check('lastReviewDay=null', s.lastReviewDay === null);
+}
+
+section('Progress.recordReview streak: same-day review does NOT bump');
+{
+  freshStorage();
+  const day1 = new Date('2025-06-15T08:00:00');
+  const day1later = new Date('2025-06-15T18:00:00');
+  Progress.recordReview('a', FSRS.GRADE.easy, day1);
+  Progress.recordReview('b', FSRS.GRADE.easy, day1later);
+  const s = Progress.stats(day1later);
+  check('same-day pair → currentStreak=1', s.currentStreak === 1);
+  check('longestStreak=1', s.longestStreak === 1);
+  check('lastReviewDay set', s.lastReviewDay === FSRS.localDateString(day1));
+}
+
+section('Progress.recordReview streak: consecutive-day reviews increment');
+{
+  freshStorage();
+  const day1 = new Date('2025-06-13T12:00:00');
+  const day2 = new Date('2025-06-14T12:00:00');
+  const day3 = new Date('2025-06-15T12:00:00');
+  Progress.recordReview('a', FSRS.GRADE.easy, day1);
+  Progress.recordReview('b', FSRS.GRADE.easy, day2);
+  Progress.recordReview('c', FSRS.GRADE.easy, day3);
+  const s = Progress.stats(day3);
+  check('3 consecutive days → currentStreak=3', s.currentStreak === 3);
+  check('longestStreak=3', s.longestStreak === 3);
+}
+
+section('Progress.recordReview streak: gap resets currentStreak to 1');
+{
+  freshStorage();
+  const day1 = new Date('2025-06-10T12:00:00');
+  const day2 = new Date('2025-06-11T12:00:00');
+  const day3 = new Date('2025-06-15T12:00:00');  // 4-day gap from day2
+  Progress.recordReview('a', FSRS.GRADE.easy, day1);
+  Progress.recordReview('b', FSRS.GRADE.easy, day2);
+  Progress.recordReview('c', FSRS.GRADE.easy, day3);
+  const s = Progress.stats(day3);
+  check('post-gap currentStreak=1', s.currentStreak === 1);
+  // Previous max (day1 → day2 was a streak of 2) should survive in longest.
+  check('longestStreak preserved at 2', s.longestStreak === 2);
+}
+
+section('Progress.stats: streak displays 0 when broken (gap > 1 day from today)');
+{
+  freshStorage();
+  const day1 = new Date('2025-06-10T12:00:00');
+  const day2 = new Date('2025-06-11T12:00:00');
+  Progress.recordReview('a', FSRS.GRADE.easy, day1);
+  Progress.recordReview('b', FSRS.GRADE.easy, day2);
+  // "Now" is 5 days after day2 — streak is broken from the user's POV.
+  const fiveLater = new Date('2025-06-16T12:00:00');
+  const s = Progress.stats(fiveLater);
+  check('display currentStreak=0 (broken)', s.currentStreak === 0);
+  check('longestStreak still 2',            s.longestStreak === 2);
+  check('lastReviewDay preserved',          s.lastReviewDay === FSRS.localDateString(day2));
+}
+
+section('Progress.stats: streak still alive when today === lastReviewDay+1');
+{
+  freshStorage();
+  const day1 = new Date('2025-06-13T12:00:00');
+  const day2 = new Date('2025-06-14T12:00:00');
+  const day3 = new Date('2025-06-15T08:00:00');  // morning of day after day2 — streak alive
+  Progress.recordReview('a', FSRS.GRADE.easy, day1);
+  Progress.recordReview('b', FSRS.GRADE.easy, day2);
+  // No review on day3 yet — but streak should display as 2 (still extendable).
+  const s = Progress.stats(day3);
+  check('currentStreak=2 (alive on day-after)', s.currentStreak === 2);
+}
+
+section('Progress.recordReview streak: backward-compat with pre-meta data');
+{
+  freshStorage();
+  // Simulate old data: positions only, no meta.
+  Progress.importData({ positions: { p1: { completed: true, lastSeen: '2025-06-14T12:00:00.000Z' } } });
+  const before = Progress.exportData();
+  check('imported data has no meta', !before.meta);
+  // Trigger a review — meta should appear.
+  Progress.recordReview('p2', FSRS.GRADE.easy, new Date('2025-06-15T12:00:00'));
+  const after = Progress.exportData();
+  check('meta initialized after first recordReview', !!after.meta);
+  check('lastReviewDay set', after.meta.lastReviewDay === FSRS.localDateString(new Date('2025-06-15T12:00:00')));
+  check('currentStreak=1 (no prior streak data)', after.meta.currentStreak === 1);
+  check('longestStreak=1', after.meta.longestStreak === 1);
+}
+
+section('Progress.markSeen: does NOT bump streak (recordReview-only per spec)');
+{
+  freshStorage();
+  Progress.markSeen('p1', new Date('2025-06-15T12:00:00'));
+  const s = Progress.stats(new Date('2025-06-15T12:00:00'));
+  check('markSeen alone → currentStreak=0', s.currentStreak === 0);
+  check('lastReviewDay still null',         s.lastReviewDay === null);
+  check('longestStreak=0',                  s.longestStreak === 0);
+}
+
+section('Progress.recordReview streak: clock-backwards (delta < 0) treated as gap');
+{
+  freshStorage();
+  const dayLate  = new Date('2025-06-15T12:00:00');
+  const dayEarly = new Date('2025-06-14T12:00:00');  // earlier than the recorded
+  Progress.recordReview('a', FSRS.GRADE.easy, dayLate);
+  // Now record with an earlier date — clock got moved back, OR a sync arrived
+  // with stale data. dayDelta(2025-06-15, 2025-06-14) = -1, neither 0 nor 1.
+  Progress.recordReview('b', FSRS.GRADE.easy, dayEarly);
+  const data = Progress.exportData();
+  // Streak resets to 1 on the new (earlier) day — honest "you reviewed today,
+  // your old streak is gone." Better than silently keeping a confusing count.
+  check('currentStreak reset to 1', data.meta.currentStreak === 1);
+  check('lastReviewDay = the earlier day', data.meta.lastReviewDay === FSRS.localDateString(dayEarly));
 }
 
 section('Progress.markSeen — completed without SRS scheduling');

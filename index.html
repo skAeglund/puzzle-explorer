@@ -250,6 +250,227 @@
     .sync-msg.error { color: var(--error); border-color: var(--error); }
     .sync-msg.info  { color: var(--info);  border-color: var(--info); }
 
+    /* ─── Stats drawer (issue #9) ─────────────────────────────────────────
+       Same lightweight aesthetic as the sound-toggle pill — icon-only.
+       The drawer it opens is fixed-position (slides from the right edge
+       on desktop, full-screen on mobile via the @media block at the end
+       of this section). */
+    .stats-toggle {
+      background: transparent;
+      border: none;
+      cursor: pointer;
+      font-size: 14px;
+      line-height: 1;
+      padding: 2px 6px;
+      color: var(--fg-dim);
+      border-radius: 3px;
+      transition: color 0.1s, background 0.1s;
+    }
+    .stats-toggle:hover { color: var(--fg); background: var(--border); }
+    .stats-toggle:focus-visible {
+      outline: 2px solid var(--accent-hover);
+      outline-offset: 2px;
+    }
+    .stats-drawer-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.55);
+      z-index: 20;
+      animation: statsBackdropFadeIn 0.15s ease-out;
+    }
+    @keyframes statsBackdropFadeIn {
+      from { opacity: 0; }
+      to   { opacity: 1; }
+    }
+    .stats-drawer {
+      position: fixed;
+      top: 0;
+      right: 0;
+      bottom: 0;
+      width: min(440px, 92vw);
+      background: var(--surface);
+      border-left: 1px solid var(--border);
+      box-shadow: -4px 0 20px rgba(0, 0, 0, 0.4);
+      z-index: 21;
+      display: flex;
+      flex-direction: column;
+      animation: statsDrawerSlideIn 0.18s ease-out;
+      overflow: hidden;
+    }
+    @keyframes statsDrawerSlideIn {
+      from { transform: translateX(100%); }
+      to   { transform: translateX(0); }
+    }
+    .stats-drawer-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 18px 10px;
+      border-bottom: 1px solid var(--border);
+    }
+    .stats-drawer-header h2 {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 500;
+      letter-spacing: 0.05em;
+      color: var(--fg);
+    }
+    .stats-drawer-close {
+      background: transparent;
+      border: none;
+      cursor: pointer;
+      color: var(--fg-dim);
+      font-size: 18px;
+      line-height: 1;
+      padding: 4px 8px;
+      border-radius: 3px;
+      transition: color 0.1s, background 0.1s;
+    }
+    .stats-drawer-close:hover { color: var(--fg); background: var(--border); }
+    .stats-drawer-close:focus-visible {
+      outline: 2px solid var(--accent-hover);
+      outline-offset: 2px;
+    }
+    .stats-drawer-body {
+      flex: 1 1 auto;
+      overflow-y: auto;
+      padding: 16px 18px 24px;
+    }
+    /* Headline grid — 4 columns on wide drawers, 2x2 on narrow phones. */
+    .stats-headline {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 10px;
+      margin-bottom: 22px;
+    }
+    .stats-stat {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 10px 8px;
+      text-align: center;
+    }
+    .stats-stat-value {
+      font-family: var(--mono);
+      font-size: 22px;
+      font-weight: 500;
+      color: var(--accent);
+      line-height: 1.1;
+    }
+    .stats-stat-label {
+      font-size: 10px;
+      letter-spacing: 0.06em;
+      color: var(--fg-dim);
+      text-transform: uppercase;
+      margin-top: 4px;
+    }
+    .stats-section {
+      margin-bottom: 22px;
+    }
+    .stats-section h3 {
+      margin: 0 0 8px;
+      font-size: 11px;
+      font-weight: 500;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--fg-dim);
+    }
+    /* State distribution bar. Fixed height; rects fill horizontally by
+       width-percent. Empty state (zero positions) shows just the muted
+       background fill with a "no data yet" legend message. */
+    .stats-state-bar {
+      display: block;
+      width: 100%;
+      height: 22px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .stats-state-bar rect {
+      stroke: none;
+    }
+    .stats-legend {
+      list-style: none;
+      padding: 0;
+      margin: 8px 0 0;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px 14px;
+      font-size: 11px;
+      font-family: var(--mono);
+      color: var(--fg-dim);
+    }
+    .stats-legend li {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .stats-legend .swatch {
+      display: inline-block;
+      width: 9px;
+      height: 9px;
+      border-radius: 2px;
+      flex: 0 0 auto;
+    }
+    .stats-legend .swatch.new        { background: var(--fg-dim); }
+    .stats-legend .swatch.learning   { background: var(--info); }
+    .stats-legend .swatch.review     { background: var(--ok); }
+    .stats-legend .swatch.relearning { background: var(--warn); }
+    .stats-legend .empty {
+      font-style: italic;
+      color: var(--fg-dim);
+    }
+    /* Recent-activity bars. Heights set inline by JS. Each day-column has
+       a transparent click target wrapping the bar so tooltips on hover
+       cover the full column, not just the painted rect. */
+    .stats-activity {
+      display: block;
+      width: 100%;
+      height: auto;
+    }
+    .stats-activity .day-bar {
+      fill: var(--accent);
+    }
+    .stats-activity .day-bar.empty {
+      fill: var(--border);
+    }
+    .stats-activity .day-label {
+      font-family: var(--mono);
+      font-size: 9px;
+      fill: var(--fg-dim);
+      text-anchor: middle;
+    }
+    .stats-activity .day-count {
+      font-family: var(--mono);
+      font-size: 9px;
+      fill: var(--fg-dim);
+      text-anchor: middle;
+    }
+    .stats-lapse-value {
+      font-family: var(--mono);
+      font-size: 22px;
+      font-weight: 500;
+      color: var(--accent);
+      line-height: 1.1;
+    }
+    .stats-lapse-detail {
+      font-size: 11px;
+      color: var(--fg-dim);
+      margin-top: 4px;
+    }
+    /* Mobile takeover. On narrow viewports, the drawer fills the screen
+       so the user has the same readable layout as a desktop side-drawer
+       without horizontal cramping. */
+    @media (max-width: 540px) {
+      .stats-drawer {
+        width: 100vw;
+        border-left: none;
+      }
+      .stats-headline {
+        grid-template-columns: repeat(2, 1fr);
+      }
+    }
     /* Board wrapper — establishes a positioned context for the
        annotation SVG to overlay. Width matches the previous standalone
        #board so the board+SVG share the same bounding box. */
@@ -911,11 +1132,16 @@
     .training-ranges[open] > .training-ranges-summary { color: var(--fg); }
     .training-ranges-grid {
       display: grid;
-      grid-template-columns: auto auto auto auto;
+      grid-template-columns: auto auto auto auto auto auto;
       gap: 6px 8px;
       align-items: center;
       margin: 8px 0;
       width: max-content;
+    }
+    .training-ranges-times {
+      color: var(--fg-dim);
+      text-align: center;
+      padding: 0 4px;
     }
     .training-ranges-label {
       color: var(--fg);
@@ -949,6 +1175,32 @@
       font-size: 11px;
       padding: 4px 10px;
       margin-top: 4px;
+    }
+    /* Resume-training pill (issue #1). Two-button row: face = primary
+       Resume action, × = subtle Discard. Sits above #sessionPanel as a
+       top-level child of <main> so it's visible at startup BEFORE any
+       search has run — a saved snapshot doesn't depend on the current
+       search results. Subtle accent-tinted border draws attention without
+       feeling alarming. */
+    .training-resume {
+      display: flex;
+      gap: 6px;
+      align-items: stretch;
+      margin-bottom: 12px;
+      padding: 8px;
+      background: var(--surface);
+      border: 1px solid var(--accent);
+      border-radius: 4px;
+    }
+    .training-resume #trainingResumeBtn {
+      flex: 1 1 auto;
+      text-align: left;
+    }
+    .training-resume-discard {
+      flex: 0 0 auto;
+      padding: 7px 10px;
+      font-size: 14px;
+      line-height: 1;
     }
     .session-progress {
       font-size: 11px;
@@ -1041,8 +1293,12 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">default-username-anders</span>
+    <span id="buildVersion">training-improvements</span>
     <button id="soundToggle" class="sound-toggle" type="button" aria-label="Toggle sound" title="Toggle sound effects">🔊</button>
+    <!-- Stats drawer toggle (issue #9). Same lightweight aesthetic as the
+         sound toggle — header real estate is tight, so it's icon-only. The
+         drawer it opens is fixed-position so it doesn't reflow the page. -->
+    <button id="statsBtn" class="stats-toggle" type="button" aria-label="View stats" title="Progress stats">📊</button>
     <!-- Cross-device sync pill — sits inline with the sound toggle on the
          top row, jumps below on narrow viewports thanks to the header's
          flex-wrap. Click toggles #syncPanel. The dot inside reflects sync
@@ -1080,6 +1336,75 @@
       <div id="syncMsg" class="sync-msg" hidden></div>
     </div>
   </section>
+
+  <!-- ─── Stats drawer (issue #9) ──────────────────────────────────────────
+       Backdrop sits behind the drawer at z-index:10; clicking it (or
+       pressing Esc) closes both. Drawer is a fixed-position panel that
+       slides from the right edge on desktop and goes full-screen on
+       mobile via media query. All subgraphics are inline SVG — no chart
+       library, no extra CDN load. -->
+  <div id="statsDrawerBackdrop" class="stats-drawer-backdrop" hidden></div>
+  <aside id="statsDrawer" class="stats-drawer" hidden aria-label="Progress stats" role="dialog" aria-modal="true">
+    <header class="stats-drawer-header">
+      <h2>Stats</h2>
+      <button id="statsDrawerCloseBtn" class="stats-drawer-close" type="button" aria-label="Close stats">✕</button>
+    </header>
+    <div class="stats-drawer-body">
+
+      <!-- Headline numbers — one row of 4 stats. Total seen counts every
+           position in the user's progress data, completed counts those
+           with .completed=true, due is FSRS isDue today, current streak
+           is from the meta (display value: 0 if broken). -->
+      <div class="stats-headline">
+        <div class="stats-stat">
+          <div class="stats-stat-value" id="statsTotalValue">0</div>
+          <div class="stats-stat-label">Total seen</div>
+        </div>
+        <div class="stats-stat">
+          <div class="stats-stat-value" id="statsCompletedValue">0</div>
+          <div class="stats-stat-label">Completed</div>
+        </div>
+        <div class="stats-stat">
+          <div class="stats-stat-value" id="statsDueValue">0</div>
+          <div class="stats-stat-label">Due now</div>
+        </div>
+        <div class="stats-stat">
+          <div class="stats-stat-value" id="statsStreakValue">0</div>
+          <div class="stats-stat-label" id="statsStreakLabel">Day streak</div>
+        </div>
+      </div>
+
+      <!-- State distribution. Single horizontal SVG bar with one rect per
+           FSRS state. preserveAspectRatio="none" lets it fill the
+           container width while keeping the 4-unit height. Tooltips via
+           native <title> children inside each rect. Legend below the bar
+           lists count per state. -->
+      <section class="stats-section">
+        <h3>State distribution</h3>
+        <svg id="statsStateBar" class="stats-state-bar" viewBox="0 0 100 4" preserveAspectRatio="none" aria-hidden="true"></svg>
+        <ul id="statsStateLegend" class="stats-legend"></ul>
+      </section>
+
+      <!-- Recent activity — last 7 days, count of reviews per day. Bars,
+           not a line, because counts are discrete and the dataset is
+           tiny (7 points). Day labels under each bar abbreviated to the
+           weekday letter so the row stays narrow. -->
+      <section class="stats-section">
+        <h3>Last 7 days</h3>
+        <svg id="statsActivity" class="stats-activity" viewBox="0 0 200 64" aria-hidden="true"></svg>
+      </section>
+
+      <!-- Lapse rate. Headline percentage + detail line ("X lapses across
+           Y reps"). Hidden when totalReps=0 so a pristine account doesn't
+           show "—%" misleadingly. -->
+      <section class="stats-section" id="statsLapseSection">
+        <h3>Lapse rate</h3>
+        <div id="statsLapseValue" class="stats-lapse-value">—</div>
+        <div id="statsLapseDetail" class="stats-lapse-detail"></div>
+      </section>
+
+    </div>
+  </aside>
 
   <main>
     <!-- The board + annotation SVG share a positioned container so the
@@ -1172,10 +1497,29 @@
       <div class="drill-controls">
         <button id="prevPuzzleBtn" hidden disabled title="Go back to the previous puzzle in the session/review queue.">← Previous</button>
         <button id="hintBtn">Hint</button>
+        <!-- Show-solution escalation (issue #11). Disabled by default;
+             enabled after a hint is taken or after at least one wrong
+             attempt. Click → confirm → grade locked at Again, remaining
+             solution auto-plays. -->
+        <button id="showSolutionBtn" disabled title="Available after a hint or a wrong attempt. Locks the grade at Again and plays out the remaining solution.">Show solution</button>
+        <!-- End-early (issue #4): visible only during an active training
+             session. Mid-session "I'm done now, show me my stats." Confirm
+             dialog gives one chance to back out, then jumps to the standard
+             post-completion screen with whatever outcomes exist. The
+             abandon-everything path stays on the relabeled #backBtn ("Exit
+             training"). -->
+        <button id="endTrainingBtn" hidden title="End the training session here. Your progress so far is preserved and shown.">End here</button>
         <!-- Retry failed: only visible after a training session completes
              AND failed_count > 0. Drilled puzzles re-graded as Again form
              a new single-round 'Retry' training session. -->
         <button id="retryFailedBtn" class="primary" hidden>Retry failed →</button>
+        <!-- Same-again (issue #3): visible after a training session
+             completes (with or without failures). Re-runs createTraining
+             with the current rounds spec and live Progress.isCompleted,
+             so puzzles solved in the just-finished session won't reappear.
+             Default styling (not .primary) so it doesn't compete with
+             Retry-failed and Back-to-results for primary-CTA emphasis. -->
+        <button id="sameAgainBtn" hidden title="Start another training with the same rating ranges and counts.">Drill another set</button>
         <button id="backBtn" class="primary">Back to results</button>
         <!-- Session-only setting (hidden in single-puzzle drilling, mirroring
              the Next-puzzle button's gating). Glyph + label match the
@@ -1188,6 +1532,20 @@
     </div>
 
     <div id="status" data-kind="info">Set a position and click Search.</div>
+
+    <!-- Resume training (issue #1): top-level so it's visible at startup
+         BEFORE the user runs a search — sessionPanel is hidden until
+         search results arrive, but a saved snapshot from a prior session
+         doesn't depend on the current search. Click face → restore +
+         drill at the saved cursor. Click × → drop the saved state and
+         hide the pill. refreshTrainingResumePill toggles visibility on
+         init and after Discard / fresh Start. -->
+    <div id="trainingResumePill" class="training-resume" hidden>
+      <button id="trainingResumeBtn" class="primary" type="button"
+              title="Resume your in-progress training session. Saves expire after 24 hours.">Resume training (<span id="trainingResumeProgress">—</span>)</button>
+      <button id="trainingResumeDiscard" type="button" class="training-resume-discard"
+              title="Discard the saved session and start fresh.">×</button>
+    </div>
 
     <div id="sessionPanel" class="panel" hidden>
       <label>Rating range</label>
@@ -1217,22 +1575,31 @@
       <details class="training-ranges" id="trainingRanges">
         <summary class="training-ranges-summary">Customize ranges</summary>
         <div class="training-ranges-grid">
-          <!-- Three rows of (label, min input, dash, max input). data-round
-               + data-bound on each input let one delegated handler save
-               the right cell. Hard's max accepts blank = "no upper bound"
-               (stored as null, displayed as placeholder "—"). -->
+          <!-- Three rows of (label, min input, dash, max input, ×, count input).
+               data-round + data-bound on each input let one delegated handler
+               save the right cell. Hard's max accepts blank = "no upper bound"
+               (stored as null, displayed as placeholder "—"). Count = how
+               many puzzles to drill in this round; integer 1..50. -->
           <span class="training-ranges-label">Easy</span>
           <input class="training-ranges-input"  type="number" inputmode="numeric"
                  data-round="0" data-bound="min" min="0" max="3500" step="50">
           <span class="training-ranges-dash">–</span>
           <input class="training-ranges-input"  type="number" inputmode="numeric"
                  data-round="0" data-bound="max" min="0" max="3500" step="50">
+          <span class="training-ranges-times" title="Number of puzzles in this round">×</span>
+          <input class="training-ranges-input"  type="number" inputmode="numeric"
+                 data-round="0" data-bound="count" min="1" max="50" step="1"
+                 title="Number of puzzles to drill in this round (1–50)">
           <span class="training-ranges-label">Medium</span>
           <input class="training-ranges-input"  type="number" inputmode="numeric"
                  data-round="1" data-bound="min" min="0" max="3500" step="50">
           <span class="training-ranges-dash">–</span>
           <input class="training-ranges-input"  type="number" inputmode="numeric"
                  data-round="1" data-bound="max" min="0" max="3500" step="50">
+          <span class="training-ranges-times" title="Number of puzzles in this round">×</span>
+          <input class="training-ranges-input"  type="number" inputmode="numeric"
+                 data-round="1" data-bound="count" min="1" max="50" step="1"
+                 title="Number of puzzles to drill in this round (1–50)">
           <span class="training-ranges-label">Hard</span>
           <input class="training-ranges-input"  type="number" inputmode="numeric"
                  data-round="2" data-bound="min" min="0" max="3500" step="50">
@@ -1240,9 +1607,13 @@
           <input class="training-ranges-input"  type="number" inputmode="numeric"
                  data-round="2" data-bound="max" min="0" max="3500" step="50"
                  placeholder="—" title="Leave blank for no upper bound">
+          <span class="training-ranges-times" title="Number of puzzles in this round">×</span>
+          <input class="training-ranges-input"  type="number" inputmode="numeric"
+                 data-round="2" data-bound="count" min="1" max="50" step="1"
+                 title="Number of puzzles to drill in this round (1–50)">
         </div>
         <button id="trainingRangesReset" type="button" class="training-ranges-reset"
-                title="Reset to defaults: 800-1399, 1400-1999, 2000+">Reset to defaults</button>
+                title="Reset to defaults: 800-1399×15, 1400-1999×10, 2000+×5">Reset to defaults</button>
       </details>
       <div class="training-meta" id="trainingMeta">—</div>
       <div class="row">
@@ -1280,10 +1651,9 @@
     var chess = null;
     var MAX_RESULTS = 100;       // cap visible matches; filters/pagination later
     // Training-session round configuration. Three buckets the user
-    // drills sequentially: easy → medium → hard. Labels and targets are
-    // fixed (UI customization for those is deferred — most users don't
-    // need to tune count); rating bounds are user-adjustable via the
-    // Customize-ranges form in #sessionPanel and persisted to settings.
+    // drills sequentially: easy → medium → hard. Labels are fixed; rating
+    // bounds AND target counts are user-adjustable via the Customize-
+    // ranges form in #sessionPanel and persisted to settings.
     //
     // TRAINING_ROUND_DEFAULTS is the fallback used when no custom ranges
     // are saved (or saved ranges fail validation). Bounds are inclusive
@@ -1296,21 +1666,28 @@
       { label: 'Hard',   ratingMin: 2000, ratingMax: null, target: 5  }
     ];
     // getTrainingRounds() — read user-saved ranges from settings (if any),
-    // overlay them onto TRAINING_ROUND_DEFAULTS preserving labels + targets.
-    // Returns a fresh array each call so callers can mutate it without
-    // poisoning the defaults. Validation happens at load time, so anything
-    // returned here is already in-bounds and well-shaped.
+    // overlay them onto TRAINING_ROUND_DEFAULTS preserving labels (always
+    // from defaults) and substituting saved ratingMin/ratingMax/target
+    // when present. Returns a fresh array each call so callers can mutate
+    // it without poisoning the defaults. Validation happens at load time,
+    // so anything returned here is already in-bounds and well-shaped.
     function getTrainingRounds() {
       var saved = loadSettings().trainingRanges;
       var out = [];
       for (var i = 0; i < TRAINING_ROUND_DEFAULTS.length; i++) {
         var d = TRAINING_ROUND_DEFAULTS[i];
         var s = (saved && saved[i]) ? saved[i] : null;
+        // Saved target overrides the default when present and well-formed.
+        // Missing target on legacy saved data falls back to the default —
+        // pre-#5 settings only carried ratingMin/ratingMax.
+        var target = (s && typeof s.target === 'number' && isFinite(s.target) && s.target > 0)
+          ? Math.floor(s.target)
+          : d.target;
         out.push({
           label: d.label,
           ratingMin: s ? s.ratingMin : d.ratingMin,
           ratingMax: s ? s.ratingMax : d.ratingMax,
-          target: d.target
+          target: target
         });
       }
       return out;
@@ -1503,6 +1880,18 @@
     // move, defer completion UI until after the animation.
     var pendingCompletionResult = null;
 
+    // ── Show-solution autoplay state (issue #11) ──
+    // After the user clicks Show solution, the remaining moves are played
+    // out automatically at a fixed cadence. solutionAutoplayQueue holds the
+    // remaining UCI moves (alternating user/opp); solutionAutoplayTimeout
+    // is the chained setTimeout id for the next move; solutionAutoplayActive
+    // gates user input (drag + click + hint) so a stray move during autoplay
+    // can't desync chess.js or the drill state machine. All three reset on
+    // enterDrillMode + onBackClick.
+    var solutionAutoplayQueue = [];
+    var solutionAutoplayTimeout = null;
+    var solutionAutoplayActive = false;
+
     // ── Right-click annotation state (issue #3) ──
     // Right-click drag A→B paints a persistent arrow; right-click on a
     // single square (mousedown + mouseup, no drag) toggles a circle.
@@ -1621,6 +2010,7 @@
       // Drill UI handlers. Result-row click is delegated since rows are
       // re-rendered on each search.
       $('#hintBtn').on('click', onHintClick);
+      $('#showSolutionBtn').on('click', onShowSolutionClick);
       $('#backBtn').on('click', onBackClick);
       $('#nextPuzzleBtn').on('click', onNextPuzzleClick);
       $('#tryAgainBtn').on('click', onTryAgainClick);
@@ -1635,7 +2025,11 @@
       $('#moveStrip').on('click', '.move-san[data-ply]', onMoveStripClick);
       $('#startSessionBtn').on('click', onStartSessionClick);
       $('#startTrainingBtn').on('click', onStartTrainingClick);
+      $('#trainingResumeBtn').on('click', onTrainingResumeClick);
+      $('#trainingResumeDiscard').on('click', onTrainingResumeDiscardClick);
       $('#retryFailedBtn').on('click', onRetryFailedClick);
+      $('#sameAgainBtn').on('click', onSameAgainClick);
+      $('#endTrainingBtn').on('click', onEndTrainingClick);
       // Training-ranges editor: 6 inputs (3 rounds × min/max) + reset.
       // Delegated 'change' to a single handler; the input's data-round /
       // data-bound carries which cell to update. Initial values are
@@ -1645,6 +2039,13 @@
       $('#trainingRangesReset').on('click', onTrainingRangesReset);
       initTrainingRanges();
       $('#reviewBadge').on('click', onReviewBadgeClick);
+      // Stats drawer (issue #9). The button toggles open; backdrop click
+      // and the drawer's own close button close. Esc-to-close lives on a
+      // namespaced document keydown bound only while the drawer is open
+      // (see openStatsDrawer / closeStatsDrawer).
+      $('#statsBtn').on('click', openStatsDrawer);
+      $('#statsDrawerCloseBtn').on('click', closeStatsDrawer);
+      $('#statsDrawerBackdrop').on('click', closeStatsDrawer);
       $('#detailsToggleBtn').on('click', onDetailsToggleClick);
       // Sound toggle — preload audio elements, restore persisted on/off state,
       // then sync the button label to whatever Sound.isEnabled() ended up as.
@@ -1749,6 +2150,13 @@
       // result rendering) is wired up first. setupSync may fire an async
       // loadFromGist, but startup doesn't block on it.
       setupSync();
+      // Resume-training pill (issue #1). Read after setupSync so any
+      // sync-driven Progress changes are already settled — the resume
+      // logic doesn't depend on Progress, but startup ordering should be
+      // consistent. The pill itself is best-effort — if the snapshot is
+      // stale, missing, or malformed, the function silently leaves the
+      // pill hidden.
+      refreshTrainingResumePill();
     }
 
     function applyFen() {
@@ -2072,7 +2480,11 @@
         var bound = $i.attr('data-bound');
         var r = rounds[roundIdx];
         if (!r) return;
-        var v = (bound === 'min') ? r.ratingMin : r.ratingMax;
+        var v;
+        if (bound === 'min')        v = r.ratingMin;
+        else if (bound === 'max')   v = r.ratingMax;
+        else if (bound === 'count') v = r.target;
+        else return;
         // Empty string for null (= no upper bound, only meaningful for
         // Hard's max). Numeric values rendered as-is.
         $i.val(v === null ? '' : String(v));
@@ -2090,10 +2502,26 @@
       var roundIdx = +$i.attr('data-round');
       var bound = $i.attr('data-bound');
       var raw = $i.val();
-      // Empty string is valid only for the Hard round's max (round 2,
-      // bound='max'). Otherwise it's an error.
+      // Per-bound parsing. Rating bounds (min/max): 0..3500, with Hard's
+      // max-blank meaning "no upper bound". Count: 1..50, integer, never
+      // blank.
       var parsed;
-      if (raw === '' || raw === null || raw === undefined) {
+      if (bound === 'count') {
+        if (raw === '' || raw === null || raw === undefined) {
+          $i.addClass('invalid');
+          setStatus('Round count must be 1–50.', 'warn');
+          return;
+        }
+        var nC = parseInt(raw, 10);
+        if (!isFinite(nC) || nC < 1 || nC > 50) {
+          $i.addClass('invalid');
+          setStatus('Round count must be 1–50.', 'warn');
+          return;
+        }
+        parsed = nC;
+      } else if (raw === '' || raw === null || raw === undefined) {
+        // Empty string is valid only for the Hard round's max (round 2,
+        // bound='max'). Otherwise it's an error.
         if (roundIdx === 2 && bound === 'max') {
           parsed = null;
         } else {
@@ -2119,11 +2547,13 @@
       for (var i = 0; i < effective.length; i++) {
         nextRanges.push({
           ratingMin: effective[i].ratingMin,
-          ratingMax: effective[i].ratingMax
+          ratingMax: effective[i].ratingMax,
+          target: effective[i].target
         });
       }
-      if (bound === 'min') nextRanges[roundIdx].ratingMin = parsed;
-      else                  nextRanges[roundIdx].ratingMax = parsed;
+      if (bound === 'min')        nextRanges[roundIdx].ratingMin = parsed;
+      else if (bound === 'max')   nextRanges[roundIdx].ratingMax = parsed;
+      else if (bound === 'count') nextRanges[roundIdx].target    = parsed;
       var validated = validateTrainingRanges(nextRanges);
       if (!validated) {
         $i.addClass('invalid');
@@ -2142,7 +2572,7 @@
       saveSettings({ trainingRanges: null });
       initTrainingRanges();
       updateTrainingMetaUI();
-      setStatus('Training ranges reset to defaults (800-1399, 1400-1999, 2000+).', 'info');
+      setStatus('Training ranges reset to defaults (800-1399×15, 1400-1999×10, 2000+×5).', 'info');
     }
 
     // Slider 'input' handler — clamps min ≤ max via snap-to-bound. When
@@ -2326,6 +2756,13 @@
       drillViewIdx = null;
       if (oppReplyTimeout) { clearTimeout(oppReplyTimeout); oppReplyTimeout = null; }
       if (introTimeout) { clearTimeout(introTimeout); introTimeout = null; }
+      // Show-solution autoplay (issue #11): cancel any pending chain and
+      // re-arm the gate as inactive. enterDrillMode runs on every fresh
+      // puzzle (manual nav, auto-next, retry-failed) so a stale autoplay
+      // from a prior puzzle would otherwise tick into the new one.
+      if (solutionAutoplayTimeout) { clearTimeout(solutionAutoplayTimeout); solutionAutoplayTimeout = null; }
+      solutionAutoplayQueue = [];
+      solutionAutoplayActive = false;
       // Auto-next pending? Drop it. enterDrillMode is called when starting
       // a new puzzle (manual or auto-advance) — either path means a fresh
       // drill is taking over and any leftover timer would fire mid-puzzle.
@@ -2349,6 +2786,13 @@
       $('#sessionPanel').prop('hidden', true);
       $('#resultsMeta').prop('hidden', true);
       $('#results').hide();
+      // Resume pill (issue #1) is a top-level child of <main>, NOT inside
+      // sessionPanel — so hiding sessionPanel above doesn't take it down
+      // with it. Hide explicitly on every drill entry so the pill never
+      // sits visible behind the drill panel offering to clobber the
+      // current session. refreshTrainingResumePill on Back / Discard /
+      // fresh Start re-evaluates whether to show it again.
+      $('#trainingResumePill').prop('hidden', true);
       $('#drillPanel').prop('hidden', false);
       $('#drillId').text(puzzle.id);
       $('#drillRating').text(puzzle.rating ? ('rating ' + puzzle.rating) : '');
@@ -2392,6 +2836,9 @@
       // honest about what Lichess supports.
       $('#analyzeLink').attr('href', buildLichessAnalysisUrl(puzzle));
       $('#hintBtn').prop('disabled', false).text('Hint');
+      // Show solution: gated until hint or wrong attempt (issue #11). Reset
+      // every drill so a previous puzzle's enabled state doesn't leak.
+      $('#showSolutionBtn').prop('disabled', true);
 
       // Session-mode UI: progress label up top, Back demoted to "Exit
       // session". Single-puzzle drill (no sessionState): Back stays
@@ -2431,6 +2878,14 @@
         $('#sessionProgress').prop('hidden', true);
         $('#backBtn').addClass('primary').text('Back to results');
       }
+      // End-here (issue #4): training-only, mid-session-only. Active when
+      // at least one outcome is recorded — ending with zero progress is
+      // indistinguishable from Exit-training, so the button stays hidden
+      // until the user has something to preserve.
+      var canEndEarly = !!(sessionState && sessionState.kind === 'training'
+                           && trainingOutcomes
+                           && Object.keys(trainingOutcomes).length > 0);
+      $('#endTrainingBtn').prop('hidden', !canEndEarly);
       // Auto-next is session-only — the Next-puzzle button it triggers only
       // exists in session mode. Hide the toggle in single-puzzle drilling
       // so it doesn't suggest a behavior that won't happen.
@@ -2461,6 +2916,16 @@
       // or Previous back into a drilled puzzle, both must clear them.)
       $('#trainingStats').prop('hidden', true).empty();
       $('#retryFailedBtn').prop('hidden', true);
+      $('#sameAgainBtn').prop('hidden', true);
+      // Issue #2 (mid-session stats): inside a training session, replay
+      // the running clean/hint/failed strip from the outcomes accumulated
+      // so far. renderTrainingStatsStrip self-hides when outcomes is
+      // empty — first-puzzle entry of a fresh training shows nothing.
+      // The Retry button stays hidden mid-session; only the post-session
+      // path turns it on.
+      if (sessionState && sessionState.kind === 'training') {
+        renderTrainingStatsStrip();
+      }
       clearCompletionBadge();
       clearWrongX();
 
@@ -2667,6 +3132,11 @@
       // user nav-jumps via End / right-arrow / clicking the last SAN to
       // resume play.
       if (isDrillReviewing()) return false;
+      // Show-solution autoplay in flight (issue #11): user input is
+      // suspended for the duration. The 600ms gaps between autoplayed
+      // moves are momentarily the user's "turn" by chess.turn(), so the
+      // existing turn-based guard below isn't enough on its own.
+      if (solutionAutoplayActive) return false;
       // Only the side-to-move's pieces are draggable.
       if (chess.turn() !== piece[0]) return false;
       // Block grabs while it's the opponent's turn (during the 400ms
@@ -2719,6 +3189,8 @@
       // Review nav: same gate as onDragStart. Click-to-move funnels
       // through here too, so this single guard covers both input paths.
       if (isDrillReviewing()) return { ok: false };
+      // Same gate as onDragStart for the autoplay-in-flight case (issue #11).
+      if (solutionAutoplayActive) return { ok: false };
       if (source === target) return { ok: false };
       // Don't process anything new while a picker is already open. Stale
       // chessboard.js callbacks during the picker resolve as no-ops.
@@ -2796,6 +3268,12 @@
         chess.undo();              // revert the wrong move on chess.js
         flashWrong(target);        // transient red wash (650ms fade)
         paintWrongX(target);       // persistent X badge until next attempt
+        // Show-solution becomes available after the first wrong attempt
+        // (issue #11). Idempotent — re-enabling on subsequent wrongs is a
+        // no-op. Practice mode doesn't gate this for the same reason it
+        // doesn't gate Hint: the user is studying, and the SRS write is
+        // already practice-gated downstream in revealSolution's caller.
+        $('#showSolutionBtn').prop('disabled', false);
         setStatus('Not the move — try again.', 'warn');
         return { ok: true, wrong: true };
       }
@@ -3574,6 +4052,17 @@
           wrongAttempts: drillState.wrongAttempts | 0,
           rating: (drillPuzzle && typeof drillPuzzle.rating === 'number') ? drillPuzzle.rating : null
         };
+        // Issue #2 (mid-session stats): refresh the running strip now
+        // that the just-completed puzzle's outcome is recorded. The user
+        // sees the count tick up before clicking Next. Idempotent with
+        // the renderTrainingStatsStrip in enterDrillMode and the bigger
+        // renderTrainingPostCompletion at session-complete.
+        renderTrainingStatsStrip();
+        // Persist for resume (issue #1) — outcome is the most important
+        // bit of session state to save (cursor alone could rebuild the
+        // queue position, but outcomes are the only thing the user CAN'T
+        // recover from a re-drill).
+        saveTrainingResume();
       }
       var avgMs = drillState.avgMoveTimeMs;  // null if timing wasn't engaged
       var avgStr = (typeof avgMs === 'number' && Number.isFinite(avgMs))
@@ -3631,6 +4120,7 @@
         .text(msg);
       $('#completionStrip').prop('hidden', false);
       $('#hintBtn').prop('disabled', true);
+      $('#showSolutionBtn').prop('disabled', true);
       // Try-again button: visible after every completion. Phrasing depends
       // on the result — failed runs get "Try again" (redemption framing),
       // any successful solve (clean or with-hint) gets "Solve again"
@@ -3692,6 +4182,191 @@
       // One-hint policy per project doc — don't escalate to level 2 (full
       // arrow). A second hint = solution.
       $('#hintBtn').prop('disabled', true);
+      // Show-solution becomes available once a hint has been used (issue #11).
+      // Same-frame as the Hint disable — the user trades the Hint affordance
+      // for the Show-solution affordance.
+      $('#showSolutionBtn').prop('disabled', false);
+    }
+
+    // ─── show-solution (issue #11) ──────────────────────────────────────
+    // User clicks Show solution → confirm → grade locks at Again (or stays
+    // locked if a wrong attempt already locked it) → remaining UCI moves
+    // auto-play at a fixed cadence. The user-side moves go back through
+    // commitDrillMove-equivalents so chess.js, drillState, sanHistory,
+    // sounds, lastmove highlights, and the move-history strip all advance
+    // exactly as they would on real play. The grade stays Again because
+    // attemptUserMove's completion-time lockGrade is a no-op when the
+    // grade is already locked.
+    //
+    // Cadence: 600ms between adjacent moves (user→opp and opp→user). The
+    // existing 400ms scheduleOppReplyIfPending path is bypassed; this loop
+    // owns the timing end-to-end so the rhythm doesn't depend on which
+    // mover is next.
+    function onShowSolutionClick() {
+      if (!drillState || drillState.complete || mode !== 'drill') return;
+      // Same review-nav guard as onHintClick: the autoplay would animate
+      // moves over the user's historical viewpoint, which is confusing.
+      // The user can press End / right-arrow to jump to live and try again.
+      if (isDrillReviewing()) return;
+      // Already running? Don't stack chains. The button is disabled while
+      // active, but a programmatic re-entry (e.g. keybind) shouldn't double-fire.
+      if (solutionAutoplayActive) return;
+      // Confirm the grade lock. Native confirm() is fine for MVP per the
+      // issue spec — gives the user one chance to back out of an irreversible
+      // FSRS write.
+      if (!window.confirm('Show solution? Your grade will be locked at Again.')) return;
+
+      var r = Drill.revealSolution(drillState);
+      drillState = r.state;
+      // Persist the lock if revealSolution was the FIRST locker. Returns
+      // toRecord=null when the grade was already locked (e.g. by a prior
+      // wrong attempt) — no double-record. Practice mode: skip the SRS
+      // write, same gate as the wrong-path Progress write upstream.
+      if (r.toRecord !== null && !isPracticing) {
+        Progress.recordReview(drillState.puzzleId, r.toRecord);
+        recordProgressMutation();
+        refreshReviewBadge();
+      }
+      // Disable both controls — Hint is now meaningless (we're playing the
+      // full solution), and Show-solution shouldn't re-fire mid-autoplay.
+      $('#hintBtn').prop('disabled', true);
+      $('#showSolutionBtn').prop('disabled', true);
+      // Cancel any in-flight opp-reply chain. Belt + braces — the only way
+      // pendingOppReply survives to here is if the user clicked Show solution
+      // during the 400ms thinking-delay window, which can happen if they
+      // played the wrong move sequence on a multi-step puzzle. Kill the
+      // existing timer so its setTimeout doesn't race the autoplay loop.
+      if (oppReplyTimeout) { clearTimeout(oppReplyTimeout); oppReplyTimeout = null; }
+      pendingOppReply = null;
+      // Wipe transient highlights that would be confusing during autoplay
+      // (the wrong-X badge from a recent miss, the hint pulse from a
+      // recent hint). Lastmove from the player's last correct move can
+      // stay — the autoplay's first move will repaint it.
+      clearWrongX();
+      clearHintHighlight();
+
+      solutionAutoplayQueue = r.remainingMoves.slice();
+      solutionAutoplayActive = true;
+      setStatus('Showing solution…', 'info');
+      // Brief lead-in pause so the click→action transition is perceptible.
+      // After this, the chain self-paces at 600ms.
+      solutionAutoplayTimeout = setTimeout(playNextRevealedMove, 350);
+    }
+
+    // One step of the autoplay chain. Pulls the next UCI off the queue,
+    // applies it (user-branch via commitDrillMove-mirror, opp-branch via
+    // playOppReply-mirror), and schedules itself again. Terminates by
+    // calling handleCompletion when the queue empties.
+    function playNextRevealedMove() {
+      solutionAutoplayTimeout = null;
+      if (mode !== 'drill' || !drillState) {
+        solutionAutoplayActive = false;
+        solutionAutoplayQueue = [];
+        return;
+      }
+      if (solutionAutoplayQueue.length === 0) {
+        // Should have been handled by the per-move completion check below;
+        // belt-and-braces in case of unexpected re-entry.
+        solutionAutoplayActive = false;
+        return;
+      }
+
+      var uci = solutionAutoplayQueue.shift();
+      var from = uci.slice(0, 2);
+      var to   = uci.slice(2, 4);
+      var promotion = uci[4] || undefined;
+
+      // currentMoveIdx always points at the next *user* move (attemptUserMove
+      // auto-advances past the opp reply on success). So a UCI matching
+      // solutionUci[currentMoveIdx] is a user move; otherwise it's the
+      // opponent's reply that the previous user-move call returned.
+      var expectedAtIdx = drillState.solutionUci[drillState.currentMoveIdx];
+      var isUserMove = (uci === expectedAtIdx);
+
+      if (isUserMove) {
+        // Mirror the success path of commitDrillMove. We can't *call*
+        // commitDrillMove because its wrong/illegal handling and
+        // scheduleOppReplyIfPending behavior don't match autoplay (we
+        // own the cadence here). So we duplicate the success arm.
+        var moveObj;
+        try {
+          moveObj = chess.move({ from: from, to: to, promotion: promotion || 'q' });
+        } catch (e) { moveObj = null; }
+        if (!moveObj) {
+          setStatus('Internal error: solution move illegal (' + uci + ').', 'error');
+          solutionAutoplayActive = false;
+          return;
+        }
+        var result = Drill.attemptUserMove(drillState, uci, {
+          now: new Date(), userSan: moveObj.san
+        });
+        drillState = result.state;
+        Sound.playForMove(moveObj, chess.in_check(), chess.in_checkmate());
+        // We do NOT set lastSuccessfulUserMove here. It exists for the drag
+        // path so onSnapEnd can repaint the highlight after chessboard.js's
+        // animation rebuilds DOM. Programmatic board.position() calls don't
+        // fire onSnapEnd (see comment at the playOppReply scheduling block),
+        // so there's no consumer; leaving it set would just leak across
+        // puzzles. We paint directly via applyLastMoveAndCheckDeferred below.
+        // Animate only when the user is at the live viewpoint. If they
+        // navigated back via the move-strip during the 600ms wait, the
+        // state still advances but the board stays on whatever past ply
+        // they're studying — same pattern playOppReply uses for the same
+        // reason. End / right-arrow / SAN-click brings them back.
+        if (drillViewIdx === null) {
+          if (board) board.position(chess.fen());
+          applyLastMoveAndCheckDeferred(moveObj.from, moveObj.to);
+        }
+        updateMoveStripDisplay();
+
+        // Final user move with no trailing opp reply → done.
+        if (result.result === 'complete' && !result.opponentReply) {
+          solutionAutoplayActive = false;
+          handleCompletion(result);
+          return;
+        }
+        // Otherwise queue continues (next entry will be the opp reply
+        // we already advanced past in drill state, but still need to
+        // play visually and append SAN).
+      } else {
+        // Opp move. Mirror playOppReply.
+        var oppObj;
+        try {
+          oppObj = chess.move({ from: from, to: to, promotion: promotion });
+        } catch (e) { oppObj = null; }
+        if (!oppObj) {
+          setStatus('Internal error: opponent reply illegal during reveal (' + uci + ').', 'error');
+          solutionAutoplayActive = false;
+          return;
+        }
+        drillState = Drill.applyOpponentReply(drillState, oppObj.san);
+        Sound.playForMove(oppObj, chess.in_check(), chess.in_checkmate());
+        if (drillViewIdx === null) {
+          if (board) board.position(chess.fen());
+          applyLastMoveAndCheckDeferred(oppObj.from, oppObj.to);
+        }
+        updateMoveStripDisplay();
+
+        // Even-length puzzle: opp had the last move and the queue is now
+        // empty. drillState.complete was already set true by the previous
+        // attemptUserMove (which returned 'complete' WITH an opponentReply).
+        // Synthesize a result-shaped argument; toRecord stays null because
+        // the grade has been locked at Again since revealSolution.
+        if (solutionAutoplayQueue.length === 0 && drillState.complete) {
+          solutionAutoplayActive = false;
+          handleCompletion({ toRecord: null });
+          return;
+        }
+      }
+
+      // Schedule the next move. 600ms between adjacent moves.
+      if (solutionAutoplayQueue.length > 0) {
+        solutionAutoplayTimeout = setTimeout(playNextRevealedMove, 600);
+      } else {
+        // Queue empty but no completion fired (shouldn't happen with
+        // well-formed solutionUci) — clear the active flag defensively.
+        solutionAutoplayActive = false;
+      }
     }
 
     // Details-toggle: flips showDetails for the rest of the page-load.
@@ -3717,6 +4392,16 @@
         clearTimeout(introTimeout);
         introTimeout = null;
       }
+      // Show-solution autoplay (issue #11): cancel any pending chain.
+      // Same shape as the oppReplyTimeout cancel above; mirrored here so
+      // a Back during the 600ms pause kills the chain cleanly instead of
+      // ticking into a non-drill mode and racing the next puzzle.
+      if (solutionAutoplayTimeout) {
+        clearTimeout(solutionAutoplayTimeout);
+        solutionAutoplayTimeout = null;
+      }
+      solutionAutoplayQueue = [];
+      solutionAutoplayActive = false;
       // Auto-next pending? Cancel — Back is the explicit "stop" signal.
       // Caller's setStatus below overwrites cancelAutoNext's restore.
       cancelAutoNext();
@@ -3752,7 +4437,17 @@
       // re-entry to a non-training session.
       $('#trainingStats').prop('hidden', true).empty();
       $('#retryFailedBtn').prop('hidden', true).removeData('failedItems');
+      $('#sameAgainBtn').prop('hidden', true);
+      $('#endTrainingBtn').prop('hidden', true);
       $('#searchPanel').show();
+      // Resume snapshot (issue #1): clear ONLY when exiting a training
+      // session. Exiting a single-puzzle drill must preserve any saved
+      // snapshot from a prior training run — otherwise a casual click-
+      // and-back on a result row would silently wipe the user's
+      // yesterday-snapshot. refreshTrainingResumePill always runs so
+      // the search view's pill reflects current truth either way.
+      if (wasTraining) clearTrainingResume();
+      refreshTrainingResumePill();
       // Result badges live on the board DOM, which rebuildSearchBoard
       // replaces wholesale below — but null the state vars explicitly
       // so a leftover ::after class doesn't survive a half-rebuilt DOM.
@@ -3856,6 +4551,174 @@
       }
     }
 
+    // ─── Stats drawer (issue #9) ─────────────────────────────────────────
+    // Pulls everything from a single Progress.stats() call (one pass over
+    // positions; meta is a constant-time read). Renders headline numbers,
+    // a state distribution bar, a 7-day activity bar chart, and lapse
+    // rate. All graphics are inline SVG built from string concatenation —
+    // no chart library, no jQuery DOM helpers beyond the obvious .text /
+    // .html assignments.
+    function renderStats() {
+      var s;
+      try { s = Progress.stats(); }
+      catch (e) { s = null; }
+      if (!s) {
+        // Defensive: storage in a weird state. Show zeros and bail out
+        // before attempting any SVG math — division-by-zero would NaN
+        // out the bar widths and produce invalid attribute values.
+        $('#statsTotalValue').text('0');
+        $('#statsCompletedValue').text('0');
+        $('#statsDueValue').text('0');
+        $('#statsStreakValue').text('0');
+        $('#statsStateBar').html('');
+        $('#statsStateLegend').html('<li class="empty">No data yet — drill a few puzzles to populate.</li>');
+        $('#statsActivity').html('');
+        $('#statsLapseSection').prop('hidden', true);
+        return;
+      }
+      // Headline.
+      $('#statsTotalValue').text(s.total);
+      $('#statsCompletedValue').text(s.completed);
+      $('#statsDueValue').text(s.due);
+      $('#statsStreakValue').text(s.currentStreak);
+      // Streak label adapts to longestStreak — give the user a frame of
+      // reference once they've built up history.
+      var streakLabel = (s.longestStreak > s.currentStreak)
+        ? 'Day streak (best ' + s.longestStreak + ')'
+        : 'Day streak';
+      $('#statsStreakLabel').text(streakLabel);
+
+      // State distribution. Build SVG rects with per-segment widths in
+      // percentage units (viewBox is 100 wide). Segments order: new →
+      // learning → review → relearning, matching FSRS_STATE numeric order.
+      // Empty state: render only the muted background, legend says so.
+      var states = s.states;
+      var stateTotal = states.new + states.learning + states.review + states.relearning;
+      var $bar = $('#statsStateBar');
+      $bar.empty();
+      var $legend = $('#statsStateLegend');
+      $legend.empty();
+      if (stateTotal === 0) {
+        $legend.append('<li class="empty">No data yet — drill a few puzzles to populate.</li>');
+      } else {
+        var segments = [
+          { key: 'new',        cls: 'new',        label: 'New',        count: states.new },
+          { key: 'learning',   cls: 'learning',   label: 'Learning',   count: states.learning },
+          { key: 'review',     cls: 'review',     label: 'Review',     count: states.review },
+          { key: 'relearning', cls: 'relearning', label: 'Relearning', count: states.relearning }
+        ];
+        var colorByCls = { new: 'var(--fg-dim)', learning: 'var(--info)', review: 'var(--ok)', relearning: 'var(--warn)' };
+        var x = 0;
+        var rectHtml = '';
+        for (var i = 0; i < segments.length; i++) {
+          var seg = segments[i];
+          if (seg.count === 0) continue;
+          var w = (seg.count / stateTotal) * 100;
+          rectHtml += '<rect x="' + x + '" y="0" width="' + w + '" height="4" fill="' + colorByCls[seg.cls] + '">'
+                   +    '<title>' + seg.label + ': ' + seg.count + '</title>'
+                   +  '</rect>';
+          x += w;
+        }
+        // jQuery's .html sets innerHTML; SVG-namespaced parsing happens
+        // because the parent IS already SVG (the <svg> element is in the
+        // SVG namespace). Avoids the document.createElementNS dance.
+        $bar.html(rectHtml);
+        // Legend mirrors segment order, including zero-count states so
+        // the user sees the full FSRS lifecycle.
+        var legendHtml = '';
+        for (var j = 0; j < segments.length; j++) {
+          var sg = segments[j];
+          legendHtml += '<li><span class="swatch ' + sg.cls + '"></span>'
+                     + sg.label + ' ' + sg.count + '</li>';
+        }
+        $legend.html(legendHtml);
+      }
+
+      // Recent activity bars. Layout: 7 columns at x = 14 + i*26, bar
+      // bottom at y=44 (leaving 12px for label + 8px padding to viewBox
+      // bottom 64). Bar height scales with max count in the window — if
+      // the user has a single mega-day of 50 reviews, smaller days
+      // shouldn't be invisible. Floor at 1px so any non-zero day shows.
+      var act = s.recentActivity || [];
+      var maxCount = 0;
+      for (var k = 0; k < act.length; k++) {
+        if (act[k].count > maxCount) maxCount = act[k].count;
+      }
+      var $act = $('#statsActivity');
+      var actHtml = '';
+      var BAR_BOTTOM = 44, BAR_MAX_HEIGHT = 36, COL_W = 26, COL_X0 = 14;
+      var dayLetters = ['S','M','T','W','T','F','S'];  // weekday-letter row
+      for (var di = 0; di < act.length; di++) {
+        var d = act[di];
+        var cx = COL_X0 + di * COL_W;
+        var bw = 16;
+        var bx = cx - bw / 2;
+        var bh = (maxCount > 0 && d.count > 0)
+          ? Math.max(1, (d.count / maxCount) * BAR_MAX_HEIGHT)
+          : 0;
+        var by = BAR_BOTTOM - bh;
+        var emptyCls = (d.count === 0) ? ' empty' : '';
+        // Tooltip surfaces the date so the user knows what bar maps to
+        // what calendar day. Even on mobile (no hover), the date is in
+        // the strip if they tap-and-hold.
+        actHtml += '<rect class="day-bar' + emptyCls + '" x="' + bx + '" y="' + by + '" width="' + bw + '" height="' + bh + '">'
+                +    '<title>' + d.date + ': ' + d.count + (d.count === 1 ? ' review' : ' reviews') + '</title>'
+                +  '</rect>';
+        // Day-letter label. d.date is YYYY-MM-DD; getDay needs Date —
+        // parse as UTC midnight to avoid TZ off-by-one (consistent with
+        // the bucketing in Progress.stats).
+        var parts = d.date.split('-');
+        var date = new Date(Date.UTC(+parts[0], +parts[1] - 1, +parts[2]));
+        var letter = dayLetters[date.getUTCDay()];
+        actHtml += '<text class="day-label" x="' + cx + '" y="58">' + letter + '</text>';
+        // Count number above the bar — only when non-zero, to avoid a
+        // row of "0" eating visual weight.
+        if (d.count > 0) {
+          actHtml += '<text class="day-count" x="' + cx + '" y="' + (by - 3) + '">' + d.count + '</text>';
+        }
+      }
+      $act.html(actHtml);
+
+      // Lapse rate. Hidden when no reps have been recorded — a fresh
+      // account doesn't get a misleading "—%" headline.
+      if (s.lapseRate === null) {
+        $('#statsLapseSection').prop('hidden', true);
+      } else {
+        $('#statsLapseSection').prop('hidden', false);
+        var pct = Math.round(s.lapseRate * 1000) / 10;  // 1 decimal place
+        $('#statsLapseValue').text(pct + '%');
+        $('#statsLapseDetail').text(s.totalLapses + ' lapse' + (s.totalLapses === 1 ? '' : 's')
+                                  + ' across ' + s.totalReps + ' rep' + (s.totalReps === 1 ? '' : 's'));
+      }
+    }
+
+    function openStatsDrawer() {
+      renderStats();
+      $('#statsDrawerBackdrop').prop('hidden', false);
+      $('#statsDrawer').prop('hidden', false);
+      // Focus the close button so Tab navigates within the drawer first
+      // and Enter/Space on it closes — keyboard-only flow stays usable.
+      // Defer one tick so the unhide settles before .focus() blurs anything.
+      setTimeout(function () { $('#statsDrawerCloseBtn').focus(); }, 0);
+      $(document).on('keydown.statsdrawer', onStatsKeydown);
+    }
+
+    function closeStatsDrawer() {
+      $('#statsDrawer').prop('hidden', true);
+      $('#statsDrawerBackdrop').prop('hidden', true);
+      $(document).off('.statsdrawer');
+      // Return focus to the trigger so keyboard users don't lose their
+      // place in the tab order.
+      $('#statsBtn').focus();
+    }
+
+    function onStatsKeydown(e) {
+      if (e.key === 'Escape' || e.keyCode === 27) {
+        e.preventDefault();
+        closeStatsDrawer();
+      }
+    }
+
     // Sync the sound-toggle button's icon + aria-pressed to Sound.isEnabled().
     // Called once at init (after Sound.init() reads localStorage) and on every
     // user click. Speaker icons match what most music apps use; aria-pressed
@@ -3941,6 +4804,13 @@
     async function onStartTrainingClick() {
       if (sessionLoading) return;
       if (!lastMatches || !lastMatches.length) return;
+      // Starting fresh ⇒ drop any pre-existing resume snapshot. The new
+      // session's first advance will save its own; until then the pill
+      // (if it was showing) should not promise a resumable state that
+      // we're about to overwrite. Refresh the pill so the search panel
+      // reflects the current truth.
+      clearTrainingResume();
+      refreshTrainingResumePill();
       var t = Session.createTraining({
         matches: lastMatches,
         rounds: getTrainingRounds(),
@@ -4089,8 +4959,11 @@
         trainingOutcomes = null;
         autoNextInFlight = false;
         isPracticing = false;
+        clearTrainingResume();   // saved id is unrecoverable; don't tempt re-resume
         $('#trainingStats').prop('hidden', true).empty();
         $('#retryFailedBtn').prop('hidden', true).removeData('failedItems');
+        $('#sameAgainBtn').prop('hidden', true);
+        $('#endTrainingBtn').prop('hidden', true);
         $('#sessionProgress').prop('hidden', true);
         $('#completionStrip').prop('hidden', true);
         $('#tryAgainBtn').prop('hidden', true);
@@ -4100,7 +4973,12 @@
         // In review mode there's no result list to return to — Back
         // closes the drill panel and drops the user at search-mode home.
         $('#backBtn').addClass('primary').text(wasReview ? 'Done' : 'Back to results');
+        return;
       }
+      // Persist for resume (issue #1). saveTrainingResume self-routes:
+      // non-training and complete states no-op-then-clear. Called after
+      // the await so we only save once the drill is actually showing.
+      saveTrainingResume();
     }
 
     // Previous-puzzle: rewind the session cursor and drill the prior id.
@@ -4149,8 +5027,11 @@
         trainingOutcomes = null;
         autoNextInFlight = false;
         isPracticing = false;
+        clearTrainingResume();
         $('#trainingStats').prop('hidden', true).empty();
         $('#retryFailedBtn').prop('hidden', true).removeData('failedItems');
+        $('#sameAgainBtn').prop('hidden', true);
+        $('#endTrainingBtn').prop('hidden', true);
         $('#sessionProgress').prop('hidden', true);
         $('#completionStrip').prop('hidden', true);
         $('#tryAgainBtn').prop('hidden', true);
@@ -4158,7 +5039,10 @@
         $('#prevPuzzleBtn').prop('hidden', true);
         $('#autoNextBtn').prop('hidden', true);
         $('#backBtn').addClass('primary').text(wasReview ? 'Done' : 'Back to results');
+        return;
       }
+      // Persist the new cursor for resume (issue #1).
+      saveTrainingResume();
     }
 
     // Session exhausted: show the completion message, repurpose the
@@ -4206,35 +5090,39 @@
       $('#hintBtn').prop('disabled', true);
       // Review mode → Done; everything else → Back to results.
       $('#backBtn').addClass('primary').text(kind === 'review' ? 'Done' : 'Back to results');
-      // Training-only post-session UI: stats line + Retry-failed button.
-      // Both sit dormant until renderTrainingPostCompletion populates them;
-      // non-training kinds explicitly hide both (they're shared DOM elements
-      // that stay hidden across normal session and review completions).
+      // Training-only post-session UI: stats line + Retry-failed + Same-again.
+      // All three sit dormant until renderTrainingPostCompletion populates
+      // them; non-training kinds explicitly hide all three (they're shared
+      // DOM elements that stay hidden across normal session and review
+      // completions). End-here always hides at session-complete (training
+      // or otherwise) — its meaning is "abort the in-flight session," and
+      // there's no in-flight session anymore.
       if (kind === 'training') {
         renderTrainingPostCompletion();
       } else {
         $('#trainingStats').prop('hidden', true).empty();
         $('#retryFailedBtn').prop('hidden', true);
+        $('#sameAgainBtn').prop('hidden', true);
       }
+      $('#endTrainingBtn').prop('hidden', true);
+      // Resume snapshot (issue #1): the session is done. saveTrainingResume's
+      // own routing also no-ops on complete states, but explicit clear here
+      // covers the case where onSessionComplete fires from natural exhaustion
+      // (no preceding save call) — the prior mid-session snapshot would
+      // otherwise outlive the session it points to.
+      clearTrainingResume();
       setStatus(statusMsg, 'ok');
     }
 
-    // Build the training-stats line and toggle the Retry-failed button.
-    // Walks trainingOutcomes, counts {clean / hint / failed}, and emits a
-    // single-line summary tinted by the same --ok/--warn/--error palette
-    // as the puzzle-completion strip. Re-shown on every session-complete
-    // in training mode (including after a Retry session).
+    // Walk trainingOutcomes once and count by grade bucket. Pure — no
+    // DOM. Used by both the live strip (mid-session) and the post-session
+    // render (which also needs the failedItems list for the Retry queue).
     //
     // "Failed" = grade Again (any wrong attempt). "Hint" = grade Hard with
     // hintUsed flag (the only path to Hard in our gradeForAttempt mapping).
     // "Clean" = everything else (Easy, plus the rare null-grade puzzle if
     // a future code path skips recording — defensive bucket).
-    //
-    // Edge case: trainingOutcomes might have FEWER entries than
-    // sessionState.total if the user didn't drill every puzzle (body-fetch
-    // failure mid-session, or a future "skip" feature). The line counts
-    // what was actually attempted; the banner already showed the queue total.
-    function renderTrainingPostCompletion() {
+    function _countTrainingOutcomes() {
       var outcomes = trainingOutcomes || {};
       var cleanCount = 0, hintCount = 0, failedCount = 0;
       var failedItems = [];     // [id, rating] tuples for the Retry queue
@@ -4250,32 +5138,135 @@
           cleanCount++;
         }
       }
+      return { cleanCount: cleanCount, hintCount: hintCount, failedCount: failedCount, failedItems: failedItems };
+    }
+
+    // Render the clean / hint / failed strip into #trainingStats. Hides
+    // the strip when there are no outcomes yet (a freshly-started training
+    // shows nothing until the first puzzle is completed). Caller may pass
+    // a precomputed counts object to avoid a double walk; otherwise the
+    // function does its own count.
+    function renderTrainingStatsStrip(counts) {
+      var c = counts || _countTrainingOutcomes();
+      var $stats = $('#trainingStats').empty();
+      if ((c.cleanCount + c.hintCount + c.failedCount) === 0) {
+        $stats.prop('hidden', true);
+        return c;
+      }
       // Build the stats line as DOM (not innerHTML) so puzzle ids never
       // get rendered as markup. Each chunk is a colored span; chunks are
       // separated by middle-dot text nodes.
-      var $stats = $('#trainingStats').empty();
       var chunks = [
-        { label: '✓ ' + cleanCount + ' clean',   cls: 'ok' },
-        { label: '⚠ ' + hintCount  + ' with hints', cls: 'warn' },
-        { label: '✗ ' + failedCount + ' failed', cls: 'error' }
+        { label: '✓ ' + c.cleanCount + ' clean',    cls: 'ok' },
+        { label: '⚠ ' + c.hintCount  + ' with hints', cls: 'warn' },
+        { label: '✗ ' + c.failedCount + ' failed',  cls: 'error' }
       ];
       for (var i = 0; i < chunks.length; i++) {
         if (i > 0) $stats.append($('<span class="sep"></span>').text('·'));
         $stats.append($('<span class="stat"></span>').addClass(chunks[i].cls).text(chunks[i].label));
       }
       $stats.prop('hidden', false);
+      return c;
+    }
+
+    // Build the training-stats line and toggle the Retry-failed button.
+    // Walks trainingOutcomes, counts {clean / hint / failed}, and emits a
+    // single-line summary tinted by the same --ok/--warn/--error palette
+    // as the puzzle-completion strip. Re-shown on every session-complete
+    // in training mode (including after a Retry session).
+    //
+    // Edge case: trainingOutcomes might have FEWER entries than
+    // sessionState.total if the user didn't drill every puzzle (body-fetch
+    // failure mid-session, or a future "skip" feature). The line counts
+    // what was actually attempted; the banner already showed the queue total.
+    function renderTrainingPostCompletion() {
+      var c = renderTrainingStatsStrip();
       // Retry button — visible only when at least one puzzle was failed.
       // Stash the failed items on the button itself so the click handler
       // can read them without re-walking outcomes (which may have been
       // reset by the time the click fires, e.g. if Back was clicked first).
       var $retry = $('#retryFailedBtn');
-      if (failedCount > 0) {
-        $retry.text('Retry ' + failedCount + ' failed →')
-              .data('failedItems', failedItems)
+      if (c.failedCount > 0) {
+        $retry.text('Retry ' + c.failedCount + ' failed →')
+              .data('failedItems', c.failedItems)
               .prop('hidden', false);
       } else {
         $retry.prop('hidden', true).removeData('failedItems');
       }
+      // Same-again (issue #3): always show at session-complete in training
+      // mode. It's a session-level action, not a failure-conditional one,
+      // so it's visible regardless of the outcome breakdown. Disable it
+      // if there are no positions to draw from (lastMatches drained, e.g.
+      // every available puzzle in the training ranges has been solved).
+      var hasPool = !!(lastMatches && lastMatches.length);
+      $('#sameAgainBtn').prop({ hidden: false, disabled: !hasPool });
+    }
+
+    // Issue #3 — Drill another set. Re-runs onStartTrainingClick with the
+    // same rounds spec (read fresh from getTrainingRounds, so any edits
+    // the user made between sessions take effect), against the live
+    // Progress.isCompleted (puzzles solved in the just-finished session
+    // are filtered out automatically). All the sessionState lifecycle is
+    // owned by onStartTrainingClick — sameAgain is a thin wrapper.
+    async function onSameAgainClick() {
+      if (sessionLoading) return;
+      // Drop pending auto-next from the just-completed puzzle. Mirrors the
+      // discipline in onPrevPuzzleClick / onRetryFailedClick.
+      cancelAutoNext();
+      await onStartTrainingClick();
+    }
+
+    // Issue #4 — End-here (end-early). Skip directly from a mid-flight
+    // training session to the post-completion screen, preserving outcomes
+    // so the user sees their stats and can still Retry-failed / Same-again.
+    // Distinct from Exit-training (#backBtn re-labeled) which abandons.
+    //
+    // Implementation: the lib's Session.endEarly mutates state into a
+    // complete shape with round counts and total reflecting actual
+    // attempts. The UI then ends the in-flight drill (cancel pending
+    // timers, hide nav controls) and renders onSessionComplete as if
+    // the user had drilled the truncated queue end-to-end.
+    function onEndTrainingClick() {
+      if (sessionLoading) return;
+      if (!sessionState || sessionState.kind !== 'training' || sessionState.complete) return;
+      if (!trainingOutcomes || Object.keys(trainingOutcomes).length === 0) return;
+      if (!window.confirm('End training now? Your progress so far will be shown — but you won\'t be able to continue this session.')) return;
+
+      // Cancel any in-flight machinery from the current puzzle (mirrors
+      // onBackClick's teardown without the search-mode return). After
+      // endEarly we're in a "complete" state that doesn't expect drill
+      // timers to fire.
+      if (oppReplyTimeout) { clearTimeout(oppReplyTimeout); oppReplyTimeout = null; }
+      if (introTimeout)    { clearTimeout(introTimeout);    introTimeout = null; }
+      if (solutionAutoplayTimeout) { clearTimeout(solutionAutoplayTimeout); solutionAutoplayTimeout = null; }
+      solutionAutoplayQueue = [];
+      solutionAutoplayActive = false;
+      cancelAutoNext();
+      pendingOppReply = null;
+      pendingCompletionResult = null;
+      drillViewIdx = null;
+
+      // Collapse session into the "complete" shape with attempted counts.
+      sessionState = Session.endEarly(sessionState, trainingOutcomes);
+
+      // Reset drill UI to the completion-screen baseline. The board stays
+      // showing whichever puzzle the user was on (it's behind the banner)
+      // — that's fine; clicking Back / Same-again / Retry will navigate
+      // away, and the visible puzzle gives a "this is where I stopped"
+      // anchor.
+      drillState = null;
+      drillPuzzle = null;
+      $('#completionStrip').prop('hidden', true);
+      $('#tryAgainBtn').prop('hidden', true);
+      $('#nextPuzzleBtn').prop({ disabled: true, hidden: true });
+      $('#prevPuzzleBtn').prop('hidden', true);
+      $('#hintBtn').prop('disabled', true);
+      $('#showSolutionBtn').prop('disabled', true);
+      $('#endTrainingBtn').prop('hidden', true);
+      clearWrongX();
+      clearHintHighlight();
+
+      onSessionComplete();
     }
 
     // ─── auto-next ──────────────────────────────────────────────────────
@@ -4374,11 +5365,18 @@
         trainingRanges: validateTrainingRanges(parsed.trainingRanges)
       };
     }
-    // Accept an array of {ratingMin, ratingMax} pairs only when it has
-    // exactly TRAINING_ROUND_DEFAULTS.length entries (currently 3) and
+    // Accept an array of {ratingMin, ratingMax, target?} rows only when it
+    // has exactly TRAINING_ROUND_DEFAULTS.length entries (currently 3) and
     // each entry passes the per-field validator. Anything else → null,
     // which getTrainingRounds reads as "use defaults". This is the gate
     // that keeps a corrupt LS write from poisoning the training UI.
+    //
+    // `target` (issue #5 follow-up) is OPTIONAL on input — pre-#5 saves
+    // had no target field. Output preserves whatever target was on input
+    // (number or null/missing); getTrainingRounds substitutes the default
+    // when missing. New writes from onTrainingRangeChange always include
+    // target, so legacy missing-target shape only persists until the next
+    // edit.
     function validateTrainingRanges(arr) {
       if (!Array.isArray(arr) || arr.length !== TRAINING_ROUND_DEFAULTS.length) return null;
       var out = [];
@@ -4399,7 +5397,20 @@
           if (typeof max !== 'number' || !isFinite(max) || max < 0 || max > 3500) return null;
           if (min > max) return null;
         }
-        out.push({ ratingMin: Math.floor(min), ratingMax: max === null ? null : Math.floor(max) });
+        // Target: integer in [1, 50] when present. null/undefined is OK
+        // (means "use default"). Anything else fails the whole array.
+        var target = e.target;
+        var normalizedTarget;
+        if (target === null || target === undefined) {
+          normalizedTarget = null;
+        } else if (typeof target === 'number' && isFinite(target) && target >= 1 && target <= 50) {
+          normalizedTarget = Math.floor(target);
+        } else {
+          return null;
+        }
+        var row = { ratingMin: Math.floor(min), ratingMax: max === null ? null : Math.floor(max) };
+        if (normalizedTarget !== null) row.target = normalizedTarget;
+        out.push(row);
       }
       return out;
     }
@@ -4425,6 +5436,198 @@
         setStatus('Could not save setting — browser storage is full or unavailable.', 'error');
         return false;
       }
+    }
+
+    // ─── training resume (issue #1) ─────────────────────────────────────
+    // Persist the in-flight training session so a page reload doesn't
+    // throw away the user's progress. Writes happen on every state-
+    // mutating event (advance, retreat, per-puzzle outcome). Reads happen
+    // once at startup; if a non-stale snapshot is present, the resume
+    // pill in the search panel offers to restore it.
+    //
+    // Schema (v=1):
+    //   {
+    //     v: 1,
+    //     savedAt: ISO timestamp,
+    //     sessionState: {... full Session shape ...},
+    //     trainingOutcomes: {<pid>: {grade, hintUsed, wrongAttempts, rating}}
+    //   }
+    //
+    // Staleness: anything older than 24h is silently dropped at read.
+    // Discipline: non-training sessions and complete sessions are NOT
+    // saved — saveTrainingResume itself routes those cases to
+    // clearTrainingResume so a leftover key never resurrects after the
+    // user has effectively moved on. Same shape as the FSRS storage —
+    // localStorage, JSON-encoded, defensive on every parse.
+    var TRAINING_RESUME_KEY = 'puzzle_explorer_training_resume';
+    var TRAINING_RESUME_SCHEMA = 1;
+    var TRAINING_RESUME_MAX_AGE_MS = 24 * 60 * 60 * 1000;   // 24 hours
+
+    function _resumeStorage() {
+      try { return window.localStorage || null; } catch (e) { return null; }
+    }
+
+    // Save the live sessionState + trainingOutcomes. Called from anywhere
+    // that mutates either. Routes complete / non-training sessions to
+    // clearTrainingResume so the snapshot doesn't outlive its usefulness
+    // (e.g. user finishes training, clicks Back — saved state would tempt
+    // them to re-resume into a stale post-completion screen).
+    function saveTrainingResume() {
+      if (!sessionState || sessionState.kind !== 'training' || sessionState.complete) {
+        clearTrainingResume();
+        return;
+      }
+      var s = _resumeStorage();
+      if (!s) return;
+      var snapshot = {
+        v: TRAINING_RESUME_SCHEMA,
+        savedAt: new Date().toISOString(),
+        sessionState: sessionState,
+        trainingOutcomes: trainingOutcomes || {}
+      };
+      try { s.setItem(TRAINING_RESUME_KEY, JSON.stringify(snapshot)); }
+      catch (e) { /* quota / private mode — silently no-op, resume is best-effort */ }
+    }
+
+    // Drop the saved snapshot. Called on Exit-training, fail-bail paths,
+    // session-complete (natural or end-early), and Discard-from-pill.
+    function clearTrainingResume() {
+      var s = _resumeStorage();
+      if (!s) return;
+      try { s.removeItem(TRAINING_RESUME_KEY); } catch (e) {}
+    }
+
+    // Read the saved snapshot. Returns { sessionState, trainingOutcomes,
+    // savedAt } when a non-stale, well-shaped record is present; null
+    // otherwise. Stale snapshots (older than TRAINING_RESUME_MAX_AGE_MS,
+    // currently 24h) are discarded as a side effect — the user shouldn't
+    // be offered to resume a session they probably forgot about.
+    //
+    // Validation is shape-level only (kind, queue, cursor types). The
+    // session lib treats malformed states defensively, but pre-filtering
+    // here means the resume pill never appears for unrecoverable data.
+    function loadTrainingResume() {
+      var s = _resumeStorage();
+      if (!s) return null;
+      var raw;
+      try { raw = s.getItem(TRAINING_RESUME_KEY); } catch (e) { return null; }
+      if (!raw) return null;
+      var parsed;
+      try { parsed = JSON.parse(raw); } catch (e) {
+        // Corrupt JSON — nuke it so we don't keep tripping over it.
+        clearTrainingResume();
+        return null;
+      }
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+      if (parsed.v !== TRAINING_RESUME_SCHEMA) {
+        // Future schema bumps land here. For now, anything not v=1 is
+        // dropped — we don't carry forward partial state across versions.
+        clearTrainingResume();
+        return null;
+      }
+      var savedAtMs = Date.parse(parsed.savedAt);
+      if (!isFinite(savedAtMs)) { clearTrainingResume(); return null; }
+      if ((Date.now() - savedAtMs) > TRAINING_RESUME_MAX_AGE_MS) {
+        clearTrainingResume();
+        return null;
+      }
+      var ss = parsed.sessionState;
+      if (!ss || typeof ss !== 'object' || Array.isArray(ss)) return null;
+      if (ss.kind !== 'training') return null;
+      if (!Array.isArray(ss.queue) || ss.queue.length === 0) return null;
+      if (typeof ss.cursor !== 'number' || !isFinite(ss.cursor)) return null;
+      // A complete-state snapshot shouldn't have been written, but if it
+      // somehow is here, don't offer to resume — clearTrainingResume on
+      // every save catches the new path; old localStorage from before
+      // this guard might still hold a complete state.
+      if (ss.complete) { clearTrainingResume(); return null; }
+      var to = parsed.trainingOutcomes;
+      if (to == null) to = {};
+      if (typeof to !== 'object' || Array.isArray(to)) return null;
+      return { sessionState: ss, trainingOutcomes: to, savedAt: parsed.savedAt };
+    }
+
+    // Refresh the resume-pill visibility. Called once at init, and again
+    // after Discard / fresh Start so the pill state tracks reality.
+    function refreshTrainingResumePill() {
+      var saved = loadTrainingResume();
+      if (!saved) {
+        $('#trainingResumePill').prop('hidden', true);
+        return;
+      }
+      // Progress label inside the resume button.
+      var attempted = (saved.trainingOutcomes && typeof saved.trainingOutcomes === 'object')
+        ? Object.keys(saved.trainingOutcomes).length
+        : 0;
+      var total = saved.sessionState.queue.length;
+      $('#trainingResumeProgress').text(attempted + '/' + total + ' done');
+      $('#trainingResumePill').prop('hidden', false);
+    }
+
+    // Click handler for the Resume button. Restores in-memory state and
+    // drills the puzzle at the saved cursor. If the cursor points outside
+    // the queue (defensive — mid-flight cursor SHOULD always be in [0, len)
+    // since we don't save complete states), bail with an error toast.
+    async function onTrainingResumeClick() {
+      if (sessionLoading) return;
+      var saved = loadTrainingResume();
+      if (!saved) {
+        // Pill should have been hidden in this case. Refresh to recover.
+        refreshTrainingResumePill();
+        return;
+      }
+      var ss = saved.sessionState;
+      // Defensive: cursor === -1 (saved before any advance — no current
+      // save path produces this, but a future or pathological one might).
+      // Normalize to 0 BEFORE the assignment so sessionState.cursor stays
+      // in sync with the queue position we're about to drill — otherwise
+      // the next Session.advance would move -1 → 0 and re-drill the same
+      // puzzle we just resumed into.
+      if (typeof ss.cursor === 'number' && ss.cursor < 0) ss.cursor = 0;
+      var cursor = ss.cursor;
+      if (cursor >= ss.queue.length) {
+        setStatus('Saved training session is in an unexpected state and can\'t be resumed.', 'error');
+        clearTrainingResume();
+        refreshTrainingResumePill();
+        return;
+      }
+      var pid = ss.queue[cursor];
+      if (typeof pid !== 'string' || !pid) {
+        setStatus('Saved training session has malformed queue entry.', 'error');
+        clearTrainingResume();
+        refreshTrainingResumePill();
+        return;
+      }
+      // Restore in-memory state. NB: we set cursor BEFORE drilling so
+      // that enterDrillMode reads the right round/progress label.
+      sessionState = ss;
+      trainingOutcomes = saved.trainingOutcomes || {};
+      // Hide the pill immediately so a slow body-fetch doesn't leave the
+      // user confused about whether the click registered.
+      $('#trainingResumePill').prop('hidden', true);
+      sessionLoading = true;
+      try {
+        var ok = await startDrillByPuzzleId(pid);
+        if (!ok) {
+          // Body fetch failed for an id from our own saved queue — could
+          // be a stale id whose shard moved or got pruned. Drop saved
+          // state so the user doesn't re-trigger the same failure.
+          sessionState = null;
+          trainingOutcomes = null;
+          clearTrainingResume();
+          refreshTrainingResumePill();
+          setStatus('Could not resume training — the saved puzzle is no longer available.', 'error');
+        }
+      } finally {
+        sessionLoading = false;
+      }
+    }
+
+    // Discard handler — drop the saved state, hide the pill.
+    function onTrainingResumeDiscardClick() {
+      clearTrainingResume();
+      refreshTrainingResumePill();
+      setStatus('Discarded saved training session.', 'info');
     }
 
     // ─── cross-device sync (lib/sync.js) ────────────────────────────────

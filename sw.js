@@ -21,7 +21,7 @@
  * the user picks it up on the next page reload. This avoids the "active
  * SW changes mid-fetch" hazard.
  */
-const VERSION = 'pwa-v2';
+const VERSION = 'pwa-v3';
 const APP_SHELL_CACHE = `app-shell-${VERSION}`;
 const RUNTIME_CACHE   = `runtime-${VERSION}`;
 

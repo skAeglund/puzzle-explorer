@@ -749,6 +749,153 @@ section('Session.createTraining: integrates with advance/retreat');
   check('retreat at cursor=0: state unchanged', noop.state === s2);
 }
 
+section('Session.createTraining: within-round rating sort (warm-up)');
+{
+  // Single round with 7 puzzles spanning 1000-2200, target=5. The sample
+  // is random (depends on seed) but should always come out ascending.
+  const t = Session.createTraining({
+    matches: MATCHES,
+    rounds: [
+      { label: 'Mixed', ratingMin: 1000, ratingMax: 2300, target: 5 }
+    ],
+    isCompleted: NEVER_COMPLETED,
+    rng: mulberry32(7)
+  });
+  // Look up rating per id from MATCHES to avoid hard-coding the sample.
+  const ratingOf = {};
+  MATCHES.forEach(m => { ratingOf[m[0]] = m[1]; });
+  const ratings = t.queue.map(id => ratingOf[id]);
+  let asc = true;
+  for (let i = 1; i < ratings.length; i++) if (ratings[i] < ratings[i - 1]) asc = false;
+  check('round 0 ratings ascending', asc, JSON.stringify(ratings));
+  check('round 0 size = target', t.queue.length === 5);
+}
+
+section('Session.createTraining: warm-up is sample-then-sort, not sort-then-sample');
+{
+  // If we sorted-then-sampled, target=3 from a 7-pool would ALWAYS yield
+  // {p1, p2, p3} regardless of seed. Different seeds should yield different
+  // *sets* of ids (with a 7-element heuristic, collision is rare).
+  const t1 = Session.createTraining({
+    matches: MATCHES,
+    rounds: [{ label: 'Pick 3', ratingMin: 1000, ratingMax: 2300, target: 3 }],
+    isCompleted: NEVER_COMPLETED,
+    rng: mulberry32(11)
+  });
+  const t2 = Session.createTraining({
+    matches: MATCHES,
+    rounds: [{ label: 'Pick 3', ratingMin: 1000, ratingMax: 2300, target: 3 }],
+    isCompleted: NEVER_COMPLETED,
+    rng: mulberry32(12)
+  });
+  const set1 = t1.queue.slice().sort().join(',');
+  const set2 = t2.queue.slice().sort().join(',');
+  check('different seeds → different samples (heuristic)',
+        set1 !== set2,
+        'if this flakes, pick another seed pair — C(7,3)=35 combos');
+  // And both samples are individually ascending.
+  const ratingOf = {};
+  MATCHES.forEach(m => { ratingOf[m[0]] = m[1]; });
+  const r1 = t1.queue.map(id => ratingOf[id]);
+  const r2 = t2.queue.map(id => ratingOf[id]);
+  const isAsc = a => a.every((v, i) => i === 0 || a[i - 1] <= v);
+  check('seed-A sample is ascending', isAsc(r1), JSON.stringify(r1));
+  check('seed-B sample is ascending', isAsc(r2), JSON.stringify(r2));
+}
+
+section('Session.createTraining: warm-up — rounds concatenate, each sorted asc internally');
+{
+  // Two rounds: queue[0..count0) is round 0 sorted asc, queue[count0..) is
+  // round 1 sorted asc. The boundary between rounds may step DOWN in rating
+  // (round 1's lowest can be below round 0's highest if buckets overlap or
+  // if user configured a non-monotonic round order — that's allowed).
+  const t = Session.createTraining({
+    matches: MATCHES,
+    rounds: [
+      { label: 'Easy',   ratingMin: 1000, ratingMax: 1499, target: 5 },
+      { label: 'Medium', ratingMin: 1500, ratingMax: 1999, target: 5 }
+    ],
+    isCompleted: NEVER_COMPLETED,
+    rng: mulberry32(13)
+  });
+  const ratingOf = {};
+  MATCHES.forEach(m => { ratingOf[m[0]] = m[1]; });
+  const ratings = t.queue.map(id => ratingOf[id]);
+  const c0 = t.rounds[0].count;
+  const r0 = ratings.slice(0, c0);
+  const r1 = ratings.slice(c0);
+  const isAsc = a => a.every((v, i) => i === 0 || a[i - 1] <= v);
+  check('round 0 segment ascending', isAsc(r0), JSON.stringify(r0));
+  check('round 1 segment ascending', isAsc(r1), JSON.stringify(r1));
+}
+
+section('Session.createTraining: warm-up — ties keep shuffle order (stable sort)');
+{
+  // All four puzzles share rating 1500. Sort is a no-op on values, so the
+  // queue order should match the shuffle order. Two different seeds should
+  // produce different orders (sort can't rescue equality).
+  const TIES = [['a', 1500], ['b', 1500], ['c', 1500], ['d', 1500]];
+  const sA = Session.createTraining({
+    matches: TIES,
+    rounds: [{ label: 'Tied', ratingMin: 1500, ratingMax: 1500, target: 4 }],
+    isCompleted: NEVER_COMPLETED,
+    rng: mulberry32(101)
+  });
+  const sB = Session.createTraining({
+    matches: TIES,
+    rounds: [{ label: 'Tied', ratingMin: 1500, ratingMax: 1500, target: 4 }],
+    isCompleted: NEVER_COMPLETED,
+    rng: mulberry32(202)
+  });
+  check('all four tied ids picked (count=4)', sA.queue.length === 4 && sB.queue.length === 4);
+  check('tied ratings → seed-dependent order',
+        JSON.stringify(sA.queue) !== JSON.stringify(sB.queue),
+        'if this flakes, swap seeds — 4! = 24 permutations');
+}
+
+section('Session.createTraining: warm-up — rating-less puzzles sort to end of round');
+{
+  // p_late has no numeric rating, p_early/p_mid do. Round target = all 3.
+  // Expected order: p_early (1000), p_mid (1500), p_late (no rating, end).
+  const t = Session.createTraining({
+    matches: [['p_late', null], ['p_mid', 1500], ['p_early', 1000]],
+    rounds: [{ label: 'Mix', ratingMin: 0, ratingMax: 9999, target: 5 }],
+    isCompleted: NEVER_COMPLETED,
+    rng: mulberry32(31)
+  });
+  // filterByRating passes rating-less tuples through unfiltered. Confirm
+  // all three made it.
+  check('all 3 in queue (rating-less passes through filter)', t.queue.length === 3);
+  check('p_early first (lowest rating)',  t.queue[0] === 'p_early');
+  check('p_mid second',                    t.queue[1] === 'p_mid');
+  check('rating-less puzzle last',         t.queue[2] === 'p_late');
+}
+
+section('Session.createTraining: warm-up — multiple rating-less entries stay in their shuffle order');
+{
+  // Three rating-less entries in a single round. Comparator returns 0 for
+  // null-vs-null so stable sort preserves the shuffle order. Two seeds
+  // should still produce different orderings (because the shuffle differs
+  // and the sort doesn't override it for tied/null pairs).
+  const NULLS = [['x', null], ['y', null], ['z', null], ['w', null]];
+  const sA = Session.createTraining({
+    matches: NULLS,
+    rounds: [{ label: 'Nulls', ratingMin: 0, ratingMax: 9999, target: 4 }],
+    isCompleted: NEVER_COMPLETED,
+    rng: mulberry32(303)
+  });
+  const sB = Session.createTraining({
+    matches: NULLS,
+    rounds: [{ label: 'Nulls', ratingMin: 0, ratingMax: 9999, target: 4 }],
+    isCompleted: NEVER_COMPLETED,
+    rng: mulberry32(404)
+  });
+  check('all 4 nulls picked', sA.queue.length === 4 && sB.queue.length === 4);
+  check('multiple nulls → seed-dependent order (sort doesn\'t collapse)',
+        JSON.stringify(sA.queue) !== JSON.stringify(sB.queue),
+        'if this flakes, swap seeds — 4! = 24 permutations');
+}
+
 // ━━━ trainingRound ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 section('Session.trainingRound');
@@ -1081,6 +1228,178 @@ section('Session.createTrainingRetry: handles non-numeric / NaN ratings');
   check('non-numeric ratings treated as null/end', t.queue[0] === 'd' && t.queue[1] === 'b');
   check('null-rating entries kept (a before c by input order)',
     t.queue.indexOf('a') >= 0 && t.queue.indexOf('c') >= 0);
+}
+
+// ━━━ endEarly (issue #4) ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+section('Session.endEarly: zero-attempt — collapses to total=0, all rounds 0');
+{
+  // Mid-flight training, user clicked End-here before drilling anything.
+  // attemptedTotal=0; all rounds.count drop to 0; complete=true; cursor at
+  // queue.length so progress() reads N/N (here 0/0).
+  const t = Session.createTraining({
+    matches: [['e1', 1000], ['m1', 1500], ['h1', 2100]],
+    rounds: [
+      { label: 'Easy',   ratingMin: 800,  ratingMax: 1399, target: 1 },
+      { label: 'Medium', ratingMin: 1400, ratingMax: 1999, target: 1 },
+      { label: 'Hard',   ratingMin: 2000, ratingMax: null, target: 1 }
+    ],
+    isCompleted: NEVER_COMPLETED,
+    rng: mulberry32(7)
+  });
+  const r = Session.endEarly(t, {});
+  check('complete=true', r.complete === true);
+  check('cursor=queue.length', r.cursor === r.queue.length);
+  check('total=0 (zero attempts)', r.total === 0);
+  check('round 0 count=0', r.rounds[0].count === 0);
+  check('round 1 count=0', r.rounds[1].count === 0);
+  check('round 2 count=0', r.rounds[2].count === 0);
+  check('queue not truncated', r.queue.length === 3);
+}
+
+section('Session.endEarly: partial-mid-round — counts attempted-in-round');
+{
+  // 2+2+2 training (target=2 each, pool size = target so sampling is
+  // deterministic — every queued id is known up-front, no rng dependency
+  // on which subset got picked). User drilled both Easy + 1 of the 2
+  // Medium = 3 total. Expected round counts: Easy=2, Medium=1, Hard=0.
+  const t = Session.createTraining({
+    matches: [
+      ['e1', 1000], ['e2', 1100],            // Easy pool: exactly 2
+      ['m1', 1500], ['m2', 1600],            // Medium pool: exactly 2
+      ['h1', 2100], ['h2', 2200]             // Hard pool: exactly 2
+    ],
+    rounds: [
+      { label: 'Easy',   ratingMin: 800,  ratingMax: 1399, target: 2 },
+      { label: 'Medium', ratingMin: 1400, ratingMax: 1999, target: 2 },
+      { label: 'Hard',   ratingMin: 2000, ratingMax: null, target: 2 }
+    ],
+    isCompleted: NEVER_COMPLETED,
+    rng: mulberry32(7)
+  });
+  // User drilled both Easy puzzles + 1 of the 2 Medium puzzles.
+  const easyIds = t.queue.slice(t.rounds[0].startIndex,
+                                 t.rounds[0].startIndex + t.rounds[0].count);
+  const mediumIds = t.queue.slice(t.rounds[1].startIndex,
+                                   t.rounds[1].startIndex + t.rounds[1].count);
+  const drilled = {};
+  easyIds.forEach(id => { drilled[id] = true; });
+  drilled[mediumIds[0]] = true;     // only first Medium attempted
+
+  const r = Session.endEarly(t, drilled);
+  check('total=3 (2 Easy + 1 Medium)', r.total === 3);
+  check('round Easy count=2',          r.rounds[0].count === 2);
+  check('round Medium count=1',        r.rounds[1].count === 1);
+  check('round Hard count=0',          r.rounds[2].count === 0);
+  check('complete=true',               r.complete === true);
+  check('startIndex preserved Easy=0', r.rounds[0].startIndex === 0);
+  check('startIndex preserved Medium=2', r.rounds[1].startIndex === 2);
+  check('startIndex preserved Hard=4',   r.rounds[2].startIndex === 4);
+  check('progress() reads total/total', JSON.stringify(Session.progress(r)) === JSON.stringify({current: 3, total: 3}));
+}
+
+section('Session.endEarly: drilledIds with ids not in queue ignored');
+{
+  // User somehow has trainingOutcomes for puzzles that weren't in this
+  // session's queue (e.g., from a prior Retry session that overwrote the
+  // outcomes map — defensive). Those outsider ids must NOT inflate counts.
+  const t = Session.createTraining({
+    matches: [['x1', 1000], ['x2', 1500]],
+    rounds: [
+      { label: 'Easy',   ratingMin: 800,  ratingMax: 1399, target: 1 },
+      { label: 'Medium', ratingMin: 1400, ratingMax: 1999, target: 1 },
+      { label: 'Hard',   ratingMin: 2000, ratingMax: null, target: 1 }
+    ],
+    isCompleted: NEVER_COMPLETED,
+    rng: mulberry32(7)
+  });
+  // 'foreign' is NOT in t.queue.
+  const drilled = { foreign: true };
+  drilled[t.queue[0]] = true;     // legit attempt
+  const r = Session.endEarly(t, drilled);
+  check('total=1 (foreign ignored)', r.total === 1);
+  // Round containing t.queue[0] should have count=1; others 0.
+  let totalCount = 0;
+  for (let i = 0; i < r.rounds.length; i++) totalCount += r.rounds[i].count;
+  check('rounds.count sum = total', totalCount === 1);
+}
+
+section('Session.endEarly: idempotent on already-complete state');
+{
+  const t = Session.createTraining({
+    matches: [['x1', 1000]],
+    rounds: [{ label: 'Solo', ratingMin: 0, ratingMax: 9999, target: 1 }],
+    isCompleted: NEVER_COMPLETED,
+    rng: mulberry32(7)
+  });
+  // Drill the only puzzle so state.complete becomes true.
+  const a = Session.advance(t);
+  const a2 = Session.advance(a.state);
+  check('precondition: a2.state.complete', a2.state.complete === true);
+  const r = Session.endEarly(a2.state, { 'x1': true });
+  check('returns input unchanged when already complete', r === a2.state);
+}
+
+section('Session.endEarly: defensive on null / non-training shapes');
+{
+  check('null → null',          Session.endEarly(null, {}) === null);
+  check('undefined → undefined', Session.endEarly(undefined, {}) === undefined);
+  // Non-training (search) state — the function still runs (no kind gate),
+  // since search states have rounds:undefined, the loop sees no rounds,
+  // and the result is a "complete" state with total=0. UI-layer is the
+  // gate that prevents misuse; lib stays generic.
+  const search = Session.create({
+    matches: MATCHES, ratingMin: 1000, ratingMax: 2200,
+    isCompleted: NEVER_COMPLETED
+  });
+  const r = Session.endEarly(search, {});
+  check('search state: complete=true', r.complete === true);
+  check('search state: total=0',       r.total === 0);
+}
+
+section('Session.endEarly: drilledIds default ({}) treats as zero attempts');
+{
+  const t = Session.createTraining({
+    matches: [['x1', 1000], ['x2', 1500]],
+    rounds: [
+      { label: 'A', ratingMin: 800,  ratingMax: 1399, target: 1 },
+      { label: 'B', ratingMin: 1400, ratingMax: 1999, target: 1 },
+      { label: 'C', ratingMin: 2000, ratingMax: null, target: 1 }
+    ],
+    isCompleted: NEVER_COMPLETED,
+    rng: mulberry32(7)
+  });
+  const r = Session.endEarly(t);  // no drilledIds arg
+  check('omitted drilledIds: total=0', r.total === 0);
+  check('omitted drilledIds: complete=true', r.complete === true);
+}
+
+section('Session.endEarly: returns NEW state object (no input mutation)');
+{
+  const t = Session.createTraining({
+    matches: [['x1', 1000], ['x2', 1500]],
+    rounds: [
+      { label: 'A', ratingMin: 800,  ratingMax: 1399, target: 1 },
+      { label: 'B', ratingMin: 1400, ratingMax: 1999, target: 1 },
+      { label: 'C', ratingMin: 2000, ratingMax: null, target: 1 }
+    ],
+    isCompleted: NEVER_COMPLETED,
+    rng: mulberry32(7)
+  });
+  const cursorBefore = t.cursor;
+  const completeBefore = t.complete;
+  const totalBefore = t.total;
+  const round0CountBefore = t.rounds[0].count;
+  const drilled = {};
+  drilled[t.queue[0]] = true;
+  const r = Session.endEarly(t, drilled);
+  check('input cursor unchanged',     t.cursor === cursorBefore);
+  check('input complete unchanged',   t.complete === completeBefore);
+  check('input total unchanged',      t.total === totalBefore);
+  check('input round 0 count unchanged', t.rounds[0].count === round0CountBefore);
+  check('result is a different object', r !== t);
+  check('result.rounds is a different array', r.rounds !== t.rounds);
+  check('result.rounds[0] is a different object', r.rounds[0] !== t.rounds[0]);
 }
 
 // ─── summary ─────────────────────────────────────────────────────────────
