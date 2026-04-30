@@ -614,6 +614,20 @@ section('Progress.exportData / importData round-trip');
   // Bad import should reject
   check('import null rejected',     Progress.importData(null) === false);
   check('import {} rejected',       Progress.importData({}) === false);
+  // Corrupt shapes that previously slipped through and persisted, then
+  // got rejected by load() on next read — net effect was a silent local
+  // data wipe. These should reject at the write boundary now.
+  freshStorage();
+  Progress.markSeen('keep');
+  check('import {positions:[...]} rejected (array)',
+    Progress.importData({ positions: [{ bad: true }] }) === false);
+  check('  → existing data preserved', Progress.isCompleted('keep'));
+  check('import {positions:"str"} rejected (non-object)',
+    Progress.importData({ positions: 'no' }) === false);
+  check('  → existing data preserved', Progress.isCompleted('keep'));
+  check('import {positions:null} rejected',
+    Progress.importData({ positions: null }) === false);
+  check('  → existing data preserved', Progress.isCompleted('keep'));
 }
 
 section('Progress.clear');

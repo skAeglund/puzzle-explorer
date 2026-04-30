@@ -118,6 +118,138 @@
       outline-offset: 2px;
     }
 
+    /* ─── Sync pill + panel ───────────────────────────────────────────────
+       The pill sits inline with the sound toggle on the top header row;
+       like #datasetInfo, it falls below on narrower viewports thanks to
+       the header's flex-wrap. Smaller and more muted than .review-pill —
+       this is a passive status indicator that only escalates when the
+       user actually has sync set up. */
+    .sync-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      padding: 3px 8px;
+      cursor: pointer;
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: 0.04em;
+      color: var(--fg-dim);
+      transition: color 0.1s, border-color 0.1s, background 0.1s;
+    }
+    .sync-pill:hover { color: var(--fg); border-color: var(--fg-dim); }
+    .sync-pill:focus-visible {
+      outline: 2px solid var(--accent-hover);
+      outline-offset: 2px;
+    }
+    /* Status dot. .off = gray, .syncing = pulsing yellow, .ok = green,
+       .error = red. Pulse via keyframes (already used by .square-hint
+       below in spirit — keep this animation local to the dot to avoid
+       any name clash). */
+    .sync-dot {
+      display: inline-block;
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--fg-dim);
+      flex: 0 0 auto;
+    }
+    .sync-dot.off     { background: var(--fg-dim); }
+    .sync-dot.ok      { background: var(--ok); }
+    .sync-dot.error   { background: var(--error); }
+    .sync-dot.syncing {
+      background: var(--warn);
+      animation: syncPulse 1s ease-in-out infinite;
+    }
+    @keyframes syncPulse {
+      0%, 100% { opacity: 1; }
+      50%      { opacity: 0.35; }
+    }
+
+    /* The expandable settings panel below the header. Uses the same
+       surface tokens as .panel but compact (less padding) since it's
+       a peripheral control, not the primary search/drill UI. Slides in
+       under the header — no animation, just hidden/shown. */
+    .sync-panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 12px 14px;
+      margin-bottom: 16px;
+      font-size: 12px;
+    }
+    .sync-fields { display: flex; flex-direction: column; gap: 8px; }
+    .sync-fields label {
+      font-size: 11px;
+      letter-spacing: 0.04em;
+      color: var(--fg-dim);
+      text-transform: uppercase;
+    }
+    .sync-fields input {
+      background: var(--bg);
+      color: var(--fg);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      padding: 6px 8px;
+      font-family: var(--mono);
+      font-size: 12px;
+      width: 100%;
+    }
+    .sync-fields input:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+    /* Inline hint inside the gist-ID label — un-uppercased so it reads
+       as parenthetical rather than another field name. */
+    .hint-inline {
+      text-transform: none;
+      letter-spacing: 0;
+      color: var(--fg-dim);
+      font-size: 11px;
+      margin-left: 4px;
+    }
+    .sync-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 4px;
+    }
+    /* button base styling is inherited from the global `button` rule
+       (mono font, 12px, surface-2 bg). .primary inherits from
+       `button.primary` further down the sheet — no scoped override
+       needed. .ghost is local since no global counterpart exists. */
+    .sync-actions button.ghost {
+      background: transparent;
+      color: var(--fg-dim);
+    }
+    .sync-actions button.ghost:hover { color: var(--fg); border-color: var(--fg-dim); }
+    .sync-actions button:focus-visible {
+      outline: 2px solid var(--accent-hover);
+      outline-offset: 2px;
+    }
+    .sync-help {
+      color: var(--accent);
+      font-size: 11px;
+      text-decoration: none;
+      margin-left: auto; /* push to right edge of the actions row */
+    }
+    .sync-help:hover { color: var(--accent-hover); text-decoration: underline; }
+    /* Status message — color set inline by JS based on success/error. */
+    .sync-msg {
+      font-size: 12px;
+      padding: 6px 8px;
+      border-radius: 3px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      word-break: break-word;
+    }
+    .sync-msg.ok    { color: var(--ok);    border-color: var(--ok); }
+    .sync-msg.error { color: var(--error); border-color: var(--error); }
+    .sync-msg.info  { color: var(--info);  border-color: var(--info); }
+
     /* Board wrapper — establishes a positioned context for the
        annotation SVG to overlay. Width matches the previous standalone
        #board so the board+SVG share the same bounding box. */
@@ -909,11 +1041,45 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">audit-fixes</span>
+    <span id="buildVersion">cross-device-sync</span>
     <button id="soundToggle" class="sound-toggle" type="button" aria-label="Toggle sound" title="Toggle sound effects">🔊</button>
+    <!-- Cross-device sync pill — sits inline with the sound toggle on the
+         top row, jumps below on narrow viewports thanks to the header's
+         flex-wrap. Click toggles #syncPanel. The dot inside reflects sync
+         status; aria-label is updated alongside the visible text so screen
+         readers track state too. -->
+    <button id="syncPill" class="sync-pill" type="button" aria-label="Sync settings">
+      <span class="sync-dot off" id="syncDot" aria-hidden="true"></span>
+      <span id="syncLabel">Not synced</span>
+    </button>
     <span id="datasetInfo">loading dataset…</span>
     <button id="reviewBadge" class="review-pill" type="button" hidden></button>
   </header>
+
+  <!-- Sync settings panel: toggled by #syncPill. Hidden by default; the
+       click handler flips .hidden. Sits between header and main so it
+       doesn't push the board around when expanded. -->
+  <section id="syncPanel" class="sync-panel" hidden aria-label="Cloud sync settings">
+    <div class="sync-fields">
+      <label for="syncUsernameInput">Username</label>
+      <input id="syncUsernameInput" type="text" autocomplete="off" autocapitalize="off"
+             placeholder="anders" spellcheck="false">
+      <label for="syncTokenInput">GitHub token</label>
+      <input id="syncTokenInput" type="password" autocomplete="off"
+             placeholder="github_pat_… (gist scope)" spellcheck="false">
+      <label for="syncGistIdInput">Gist ID <span class="hint-inline">(optional — created on save if empty)</span></label>
+      <input id="syncGistIdInput" type="text" autocomplete="off"
+             placeholder="leave empty to create a new gist" spellcheck="false">
+      <div class="sync-actions">
+        <button id="syncSaveBtn" class="primary" type="button">Connect &amp; sync</button>
+        <button id="syncDisconnectBtn" class="ghost" type="button" hidden>Disconnect</button>
+        <a class="sync-help" href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">
+          Create token →
+        </a>
+      </div>
+      <div id="syncMsg" class="sync-msg" hidden></div>
+    </div>
+  </section>
 
   <main>
     <!-- The board + annotation SVG share a positioned container so the
@@ -1100,6 +1266,9 @@
   <script src="lib/drill.js"></script>
   <script src="lib/session.js"></script>
   <script src="lib/progress.js"></script>
+  <!-- Cross-device sync via private Gist. Loads after Progress (its hooks
+       wrap Progress.exportData/importData at init time). -->
+  <script src="lib/sync.js"></script>
   <!-- IndexedDB shard cache (independent leaf module; safe to load last) -->
   <script src="lib/cache.js"></script>
   <script src="lib/sound.js"></script>
@@ -1384,6 +1553,7 @@
       if (typeof Drill !== 'object' || !Drill) missing.push('lib/drill.js');
       if (typeof Session !== 'object' || !Session) missing.push('lib/session.js');
       if (typeof Progress !== 'object' || !Progress) missing.push('lib/progress.js');
+      if (typeof Sync !== 'object' || !Sync) missing.push('lib/sync.js');
       if (typeof Sound !== 'object' || !Sound) missing.push('lib/sound.js');
       if (missing.length) {
         setStatus('Failed to load: ' + missing.join(', ') + '. Check the browser console / network tab.', 'error');
@@ -1575,6 +1745,10 @@
       // so updateAutoNextBtn can sync the glyph immediately.
       autoNextEnabled = loadSettings().autoNext;
       updateAutoNextBtn();
+      // Cross-device sync — last so all the UI it touches (refreshReviewBadge,
+      // result rendering) is wired up first. setupSync may fire an async
+      // loadFromGist, but startup doesn't block on it.
+      setupSync();
     }
 
     function applyFen() {
@@ -2609,6 +2783,7 @@
         // already determined SRS placement, this re-run is scoreless.
         if (result.toRecord !== null && !isPracticing) {
           Progress.recordReview(drillState.puzzleId, result.toRecord);
+          recordProgressMutation();
           // First-wrong reschedules to tomorrow → drops out of today's
           // due count → header badge needs to reflect that.
           refreshReviewBadge();
@@ -3378,6 +3553,7 @@
           // with puzzles the user already knows.
           Progress.markSeen(pid);
         }
+        recordProgressMutation();
         // Either path mutates progress state; refresh badge in case the
         // count changed (recordReview reschedules; markSeen never adds
         // to the queue, so the count is unchanged but the call is cheap).
@@ -4248,6 +4424,290 @@
       catch (e) {
         setStatus('Could not save setting — browser storage is full or unavailable.', 'error');
         return false;
+      }
+    }
+
+    // ─── cross-device sync (lib/sync.js) ────────────────────────────────
+    // Wires up the header pill + settings panel to lib/sync.js. The
+    // sequence is:
+    //   1. Sync.init() — restores stored username + creds from LS,
+    //      installs the status callback that drives the dot+label.
+    //   2. Bind UI events (pill click, Save, Disconnect).
+    //   3. If credentials were restored, fire-and-forget loadFromGist()
+    //      to pull any updates other devices made since last session.
+    //      Failures show in the pill but don't block app startup.
+    //   4. pagehide flushes any pending debounced sync via keepalive
+    //      (lib/sync.js opts in based on body size).
+    // Mutations from drilling go through Sync.notifyMutation() right
+    // next to every Progress.recordReview / Progress.markSeen call site
+    // — the wrapper helper recordProgressMutation() centralizes that.
+    function setupSync() {
+      if (typeof Sync !== 'object' || !Sync) return; // graceful if file missing
+      Sync.init({
+        getProgressData: function () {
+          // Read LIVE from LS each time, not a cached snapshot. Drill
+          // mutations write through Progress.save before notifyMutation
+          // fires, so by the time the debounce timer trips and Sync
+          // pulls the data, LS reflects every recorded review.
+          return Progress.exportData();
+        },
+        setProgressData: function (data) {
+          // Called after a successful read-merge-write to import the
+          // merged result locally. Without this, cross-device updates
+          // we just pulled in via the read leg would only show up on
+          // the next page reload.
+          if (data && typeof data === 'object') {
+            Progress.importData(data);
+            // Refresh any UI that depends on Progress state. The badge
+            // is the most visible — a remote-side review may have either
+            // added a new due card (sync from a phone yesterday) or
+            // marked one done. Result rows would also show stale ✓ Done
+            // badges, but the search panel is a re-render-on-action UI:
+            // any subsequent search redraws it from fresh Progress.
+            refreshReviewBadge();
+          }
+        },
+        onStatusChange: function (s) {
+          updateSyncPillUI(s.status, s.label);
+        }
+      });
+
+      // Mirror Sync's username into Progress so the active LS storage key
+      // tracks. setUsername was called inside Sync.init() if a stored
+      // name was present — propagate it to Progress now. If no name was
+      // restored, Progress stays on the legacy key (anonymous mode).
+      var restoredName = Sync.getUsername();
+      if (restoredName) {
+        Progress.setUsername(restoredName);
+        // Don't migrate here — migration is the explicit one-shot we run
+        // at first-login (in onSyncSave). At cold start with a returning
+        // user, the namespaced key already has data; migrating again
+        // would no-op (migrateLegacyToActive bails when active is non-
+        // empty), but it's clearer to keep migration tied to the user-
+        // initiated event.
+      }
+
+      // ─── DOM bindings ─────────────────────────────────────────────────
+      $('#syncPill').on('click', function () {
+        var $p = $('#syncPanel');
+        var hidden = $p.prop('hidden');
+        if (hidden) {
+          // Pre-fill the form with current state so the user sees what
+          // they're editing. The token is masked in the password field
+          // — pre-filling is fine UX even though the field shows dots.
+          // Username + gist ID fall back to the baked-in defaults when
+          // unset, so a brand-new device only needs the PAT pasted to
+          // join the shared "guest" gist. Stored values (from a prior
+          // session or a per-user override) take precedence.
+          var creds = Sync.getCredentials();
+          $('#syncUsernameInput').val(Sync.getUsername() || Sync.DEFAULT_USERNAME);
+          $('#syncTokenInput').val(creds.token || '');
+          $('#syncGistIdInput').val(creds.gistId || Sync.DEFAULT_GIST_ID);
+          // Disconnect button visible only when configured.
+          $('#syncDisconnectBtn').prop('hidden', !Sync.isConfigured());
+          $('#syncMsg').prop('hidden', true).removeClass('ok error info').text('');
+        }
+        $p.prop('hidden', !hidden);
+      });
+
+      $('#syncSaveBtn').on('click', onSyncSave);
+      $('#syncDisconnectBtn').on('click', onSyncDisconnect);
+
+      // Cold-start auto-pull. If a returning user had creds restored from
+      // LS, kick a load now so cross-device updates land before the user
+      // starts drilling. fire-and-forget — the status pill reflects the
+      // outcome.
+      if (Sync.isConfigured()) {
+        Sync.loadFromGist().then(function (result) {
+          // If loadFromGist found local data that isn't in remote (or
+          // newer than remote's), it set dirty=true on its own. Also
+          // honor a dirty flag that survived from a prior crashed
+          // session (Sync.setUsername reads it from LS at init time).
+          // Either way, schedule the push via notifyMutation — this
+          // re-arms the 3s debounce rather than firing immediately,
+          // which is what we want: the user might still be loading the
+          // page, and a hot Gist API write right at startup competes
+          // for bandwidth with the dataset/shard fetches.
+          if (Sync.isDirty() && Sync.isConfigured()) {
+            Sync.notifyMutation();
+          }
+          // Silent on result.ok===false — the pill already shows 'error',
+          // and the user can re-open the panel to see details. Most
+          // common cause is offline/flaky network; the next mutation
+          // will retry via the dirty-flag path.
+        });
+      } else if (Sync.isDirty()) {
+        // Dirty without creds shouldn't happen in normal flow (creds
+        // would've been needed to mark dirty in the first place), but
+        // if it does — e.g. user manually nuked LS creds without
+        // disconnecting through the UI — there's nothing to push.
+        // Leave the dirty flag in place; Disconnect's "preserve local
+        // progress" promise still holds.
+      }
+
+      // pagehide fires reliably on mobile when the OS swaps the tab out
+      // (beforeunload doesn't fire on iOS). flushNow uses keepalive on
+      // small bodies so the request survives the unload.
+      window.addEventListener('pagehide', function () {
+        try { Sync.flushNow(); } catch (e) {}
+      });
+
+      // Initial pill render reflects whatever Sync.init reported.
+      updateSyncPillUI(Sync.getStatus(),
+        Sync.isConfigured() ? 'Synced as ' + Sync.getUsername() : 'Not synced');
+    }
+
+    // Update the header pill's dot + label. Called from Sync's status
+    // callback AND from local UI handlers (e.g. saveSync's success path
+    // sets a transient "Connected" label that the next status callback
+    // will overwrite).
+    function updateSyncPillUI(status, label) {
+      var $dot = $('#syncDot');
+      var $lbl = $('#syncLabel');
+      if (!$dot.length) return;
+      $dot.removeClass('off ok error syncing').addClass(status || 'off');
+      // Default labels by status, overridden by an explicit label arg.
+      var fallback;
+      switch (status) {
+        case 'syncing': fallback = 'Syncing…'; break;
+        case 'ok':      fallback = Sync.isConfigured() ? 'Synced as ' + Sync.getUsername() : 'Synced'; break;
+        case 'error':   fallback = 'Sync error'; break;
+        default:        fallback = 'Not synced';
+      }
+      $lbl.text(label || fallback);
+      // aria-label tracks the visible state for screen readers.
+      $('#syncPill').attr('aria-label', $lbl.text() + ' — open sync settings');
+    }
+
+    function setSyncMsg(text, kind) {
+      var $m = $('#syncMsg');
+      $m.removeClass('ok error info').text('');
+      if (!text) { $m.prop('hidden', true); return; }
+      $m.addClass(kind || 'info').text(text).prop('hidden', false);
+    }
+
+    // Save flow — orchestrates username + creds + (optional) gist creation
+    // + initial load. Each step has a clear failure mode that surfaces in
+    // #syncMsg without disturbing whatever was already configured.
+    //
+    // Save button is disabled for the duration of the async work to
+    // prevent double-click races. Sync.createGist also has its own
+    // in-flight guard against concurrent POSTs, but disabling the button
+    // covers double-loadFromGist + double-setProgressData on the
+    // existing-gist branch too.
+    async function onSyncSave() {
+      var $saveBtn = $('#syncSaveBtn');
+      if ($saveBtn.prop('disabled')) return; // already in flight
+      var username = ($('#syncUsernameInput').val() || '').trim();
+      var token    = ($('#syncTokenInput').val() || '').trim();
+      var gistId   = ($('#syncGistIdInput').val() || '').trim();
+      if (!username) { setSyncMsg('Username is required.', 'error'); return; }
+      if (!token)    { setSyncMsg('GitHub token is required.', 'error'); return; }
+      $saveBtn.prop('disabled', true);
+      // Username gets normalized inside Sync; we just guard against the
+      // empty-after-trim case here so the user sees a clear error.
+      var prevUsername = Sync.getUsername();
+      Sync.setUsername(username);
+      Progress.setUsername(username);
+      // First-login migration — copies legacy unnamespaced LS into the
+      // namespaced slot if the namespaced slot is empty. Only meaningful
+      // on the very first switch from anonymous to a named user.
+      var migrated = Progress.migrateLegacyToActive();
+      // Set creds AFTER setUsername so they get persisted under the
+      // namespaced LS keys.
+      Sync.setCredentials(token, gistId);
+      setSyncMsg(gistId ? 'Connecting…' : 'Creating gist…', 'info');
+      try {
+        if (!gistId) {
+          // Seed the new gist with whatever progress we have locally
+          // (post-migration). This is the entry point that gets a
+          // pre-existing user's FSRS state up to the cloud on day one.
+          var seed = Progress.exportData();
+          seed.username = username;
+          var newId = await Sync.createGist(seed);
+          $('#syncGistIdInput').val(newId);
+          setSyncMsg('Created gist ' + newId.slice(0, 8) + '… and pushed local progress.', 'ok');
+          // No further loadFromGist needed — we just wrote the seed and
+          // it equals our local state. Mark synced and move on.
+          updateSyncPillUI('ok', 'Synced as ' + username);
+        } else {
+          // Existing gist — pull and merge. loadFromGist's result tells
+          // us if there was a username mismatch (wrong PAT/wrong gist
+          // combo) so we can warn loudly instead of silently merging
+          // someone else's data into our local store.
+          var result = await Sync.loadFromGist();
+          if (!result.ok) {
+            if (result.reason === 'username_mismatch') {
+              var remoteName = (result.remote && result.remote.username) || '?';
+              setSyncMsg('Username mismatch: this gist belongs to "' + remoteName + '". Check the gist ID, or change your username to match.', 'error');
+              // Roll back the in-memory credentials so the wrong combo
+              // doesn't auto-sync if the user does something else first.
+              // Also wipe any LS entries we just wrote for the rejected
+              // username so the next correct login doesn't see stale
+              // pre-filled values pointing at someone else's gist.
+              if (prevUsername !== username) {
+                // Clear the rejected-username's LS slots before switching
+                // back. clearCredentials targets the CURRENT username, so
+                // call it while username is still the rejected one.
+                Sync.clearCredentials();
+                Sync.setUsername(prevUsername || '');
+                Progress.setUsername(prevUsername || '');
+              }
+              return;
+            }
+            setSyncMsg('Could not load gist: ' + (result.error || result.reason), 'error');
+            return;
+          }
+          // If the load brought in remote-only data, the badge needs to
+          // reflect any newly-due cards.
+          refreshReviewBadge();
+          var pulledCount = result.data && result.data.positions
+            ? Object.keys(result.data.positions).length : 0;
+          var msg = 'Connected as ' + username + ' — ' + pulledCount + ' position' + (pulledCount === 1 ? '' : 's') + ' synced.';
+          if (migrated) msg += ' (Local progress migrated.)';
+          setSyncMsg(msg, 'ok');
+          // If the merge produced state newer than remote (typical when
+          // an existing user with local FSRS history connects to a fresh
+          // gist, or when the migration just ran), push the merged result
+          // upstream. notifyMutation debounces 3s so the user sees the
+          // success message first, then the pill briefly flickers to
+          // 'syncing' once the push lands.
+          if (Sync.isDirty()) {
+            Sync.notifyMutation();
+          }
+        }
+        $('#syncDisconnectBtn').prop('hidden', false);
+      } catch (e) {
+        var emsg = (e && e.message) ? e.message : String(e);
+        setSyncMsg('Sync failed: ' + emsg, 'error');
+      } finally {
+        $saveBtn.prop('disabled', false);
+      }
+    }
+
+    function onSyncDisconnect() {
+      // Clear credentials but DON'T clear progress — the user just wants
+      // to stop syncing, not lose their drill history. Progress stays in
+      // the namespaced LS slot (still readable by setUsername of the same
+      // name). Also DON'T clear the username — they may want to re-paste
+      // a fresh PAT later without re-typing their identity.
+      Sync.clearCredentials();
+      $('#syncTokenInput').val('');
+      $('#syncGistIdInput').val('');
+      $('#syncDisconnectBtn').prop('hidden', true);
+      setSyncMsg('Disconnected. Local progress preserved.', 'info');
+      updateSyncPillUI('off', 'Not synced');
+    }
+
+    // Helper called next to every Progress.recordReview / Progress.markSeen
+    // call site. Centralizing the notify call means future Progress
+    // mutations don't risk the dev forgetting to ping Sync.
+    function recordProgressMutation() {
+      if (typeof Sync !== 'object' || !Sync) return;
+      try { Sync.notifyMutation(); } catch (e) {
+        if (typeof console !== 'undefined' && console.warn) {
+          console.warn('[sync] notifyMutation threw:', e && e.message);
+        }
       }
     }
 

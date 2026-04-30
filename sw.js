@@ -21,7 +21,7 @@
  * the user picks it up on the next page reload. This avoids the "active
  * SW changes mid-fetch" hazard.
  */
-const VERSION = 'pwa-v1';
+const VERSION = 'pwa-v2';
 const APP_SHELL_CACHE = `app-shell-${VERSION}`;
 const RUNTIME_CACHE   = `runtime-${VERSION}`;
 
@@ -37,6 +37,7 @@ const APP_SHELL = [
   './lib/drill.js',
   './lib/session.js',
   './lib/progress.js',
+  './lib/sync.js',
   './lib/cache.js',
   './lib/vendor/jquery-3.7.1.min.js',
   './lib/vendor/chess-0.10.3.js',
