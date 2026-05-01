@@ -1326,7 +1326,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">premove</span>
+    <span id="buildVersion">sw-version-from-buildversion</span>
     <button id="soundToggle" class="sound-toggle" type="button" aria-label="Toggle sound" title="Toggle sound effects">🔊</button>
     <!-- Stats drawer toggle (issue #9). Same lightweight aesthetic as the
          sound toggle — header real estate is tight, so it's icon-only. The
@@ -7096,15 +7096,28 @@
   });
 
   // ─── Service worker registration (PWA, closes #8) ─────────────────────
-  // Registers sw.js for offline app-shell + cached-shard fallback. NO
-  // skipWaiting in the SW: a new SW installs in the background and goes
+  // Registers sw.js with the current #buildVersion as a ?v= query string.
+  // Browsers treat each unique scriptURL as a distinct SW, so a buildVersion
+  // bump triggers a fresh install — and the SW reads the same ?v= from its
+  // own URL to key its caches, so old caches get cleaned by the activate
+  // handler automatically. Net effect: bumping #buildVersion in this file
+  // (already a per-commit project rule) auto-invalidates SW caches on the
+  // user's next launch. No manual VERSION constant in sw.js to keep in sync.
+  //
+  // NO skipWaiting in the SW: a new SW installs in the background and goes
   // to "waiting" state; the user picks it up on next reload. This avoids
   // the hazard of swapping the controlling SW mid-fetch and means an
   // active drilling session won't see asset URLs change underneath it.
   // No update banner in MVP — refresh-to-update is the contract.
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', function () {
-      navigator.serviceWorker.register('sw.js').catch(function (err) {
+      // Read the build stamp from the DOM. If the element is missing
+      // somehow (defensive), fall back to a plain registration — sw.js
+      // handles the no-?v= case by tagging caches as 'unversioned'.
+      var bv = document.getElementById('buildVersion');
+      var v = bv ? (bv.textContent || '').trim() : '';
+      var url = v ? ('sw.js?v=' + encodeURIComponent(v)) : 'sw.js';
+      navigator.serviceWorker.register(url).catch(function (err) {
         // Soft failure — page still works, just no offline. Logged for
         // debugging; not surfaced in UI.
         if (typeof console !== 'undefined' && console.warn) {

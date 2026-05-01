@@ -2,7 +2,14 @@
  * sw.js — Service worker for Puzzle Explorer.
  *
  * Two cache strategies:
- *   - Same-origin (app shell): cache-first. Works offline once installed.
+ *   - Same-origin navigation requests (the page itself): network-first.
+ *     Always serves the latest index.html — and therefore the latest
+ *     buildVersion — when online; falls back to cache offline. Without
+ *     this, a cache-first SW would pin the user to whatever index.html
+ *     was cached at install time forever, defeating the whole
+ *     buildVersion-driven cache-busting mechanism described below.
+ *   - Same-origin static assets (lib/*, icons): cache-first. Works
+ *     offline once installed.
  *   - puzzle-explorer-data shards (cross-origin to skaeglund.github.io's
  *     other Pages site): network-first, fall back to cache. Fresh data
  *     wins when online; cached shards keep things drillable on flaky
@@ -14,14 +21,31 @@
  * never consulted. The SW's role is only when JS misses IDB, e.g. a
  * fresh install or after a build-stamp wipe.
  *
- * Versioning: bump VERSION whenever any file in APP_SHELL changes. The
- * activate handler deletes caches whose name doesn't match the current
- * APP_SHELL_CACHE / RUNTIME_CACHE, so a bump cleanly invalidates stale
- * precaches. NO skipWaiting — when a new SW installs, it goes to waiting;
- * the user picks it up on the next page reload. This avoids the "active
- * SW changes mid-fetch" hazard.
+ * Versioning: the page registers this script as 'sw.js?v=<buildVersion>'.
+ * Browsers treat each unique scriptURL as a distinct SW, so a buildVersion
+ * bump triggers a fresh install. The new SW reads `?v=` from its own URL
+ * and uses it as the cache key suffix; the activate handler then deletes
+ * any caches whose names don't include the current buildVersion. Net
+ * effect: bumping #buildVersion in index.html — already a per-commit
+ * project rule — automatically invalidates SW caches on the user's next
+ * launch. No separate VERSION bookkeeping in this file.
+ *
+ * NO skipWaiting — when a new SW installs, it goes to waiting; the user
+ * picks it up on the next page reload. This avoids the "active SW changes
+ * mid-fetch" hazard.
  */
-const VERSION = 'pwa-v3';
+// Buildversion comes from the registration URL (sw.js?v=<buildVersion>).
+// Pre-buildversion-coupling installs registered as plain 'sw.js' with no
+// query — fall back to 'unversioned' there so the SW still installs and
+// runs. The next refresh after the new index.html is served will register
+// with ?v= and a properly-versioned SW will replace this one.
+const VERSION = (function () {
+  try {
+    return new URL(self.location).searchParams.get('v') || 'unversioned';
+  } catch (e) {
+    return 'unversioned';
+  }
+})();
 const APP_SHELL_CACHE = `app-shell-${VERSION}`;
 const RUNTIME_CACHE   = `runtime-${VERSION}`;
 
@@ -86,7 +110,24 @@ self.addEventListener('fetch', (event) => {
 
   const url = new URL(req.url);
 
-  // App shell + any same-origin asset: cache-first.
+  // Navigation requests (the user opening / refreshing the app):
+  // network-first against APP_SHELL_CACHE. The latest index.html — and
+  // therefore the latest buildVersion, which keys the SW registration
+  // URL via the page's register('sw.js?v=...') call — is always what
+  // the page sees when online. Cache fallback handles offline. Without
+  // this branch, a cache-first SW would serve the cached index.html
+  // forever, the page would keep registering the same scriptURL, and
+  // no buildVersion bump would ever propagate.
+  if (url.origin === self.location.origin && req.mode === 'navigate') {
+    event.respondWith(networkFirst(req, APP_SHELL_CACHE));
+    return;
+  }
+
+  // App shell + any other same-origin asset (lib/*, icons): cache-first.
+  // These are pre-cached at install time; the activate handler deletes
+  // mismatched-VERSION caches when a buildVersion bump installs a new
+  // SW, so they stay fresh across deploys without the per-asset
+  // round-trip that network-first would impose.
   if (url.origin === self.location.origin) {
     event.respondWith(cacheFirst(req));
     return;
@@ -94,7 +135,7 @@ self.addEventListener('fetch', (event) => {
 
   // Data shards: network-first, cache fallback.
   if (url.host === DATA_HOST && url.pathname.startsWith(DATA_PATH_PREFIX)) {
-    event.respondWith(networkFirst(req));
+    event.respondWith(networkFirst(req, RUNTIME_CACHE));
     return;
   }
   // Anything else (third-party CDNs, analytics, etc.) — pass through.
@@ -121,19 +162,25 @@ async function cacheFirst(req) {
   }
 }
 
-async function networkFirst(req) {
+async function networkFirst(req, cacheName) {
   try {
     const res = await fetch(req);
     // Cache successful responses AND 404s (a 404 means "shard not present
     // in dataset" and is a stable answer worth caching offline). Don't
     // cache 5xx or other transient failures.
     if (res && (res.ok || res.status === 404)) {
-      caches.open(RUNTIME_CACHE).then((cache) => cache.put(req, res.clone()));
+      caches.open(cacheName).then((cache) => cache.put(req, res.clone()));
     }
     return res;
   } catch (e) {
     const cached = await caches.match(req);
     if (cached) return cached;
+    // Navigation request and we have nothing — return the root index.
+    // Same fallback shape as cacheFirst, since both paths can serve nav.
+    if (req.mode === 'navigate') {
+      const fallback = await caches.match('./');
+      if (fallback) return fallback;
+    }
     throw e;
   }
 }
