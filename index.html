@@ -899,6 +899,24 @@
       from { opacity: 1; }
       to   { opacity: 0; }
     }
+    /* Pre-move from/to highlight (orange — chess.com style). Painted on
+       both source and destination of a queued premove during the opp-reply
+       window. Persists from queue until the premove fires (after opp's
+       reply animation settles) or is cancelled (Esc, replaced by another
+       premove, or the user clicks a non-own square). Distinct hue from
+       .square-wrong's red flash so they're never confused, and less
+       saturated than .square-selected's yellow so the user knows the
+       move is queued, not active. Same z-index:-1 + pointer-events:none
+       contract as the other ::before highlights. */
+    #board .square-premove-from::before,
+    #board .square-premove-to::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: rgba(220, 130, 50, 0.55);
+      pointer-events: none;
+      z-index: -1;
+    }
     /* Legal-move dot on empty target */
     #board .square-legal-dot { position: relative; cursor: pointer; }
     #board .square-legal-dot::after {
@@ -1308,7 +1326,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">sync-pill-stable-width</span>
+    <span id="buildVersion">premove</span>
     <button id="soundToggle" class="sound-toggle" type="button" aria-label="Toggle sound" title="Toggle sound effects">🔊</button>
     <!-- Stats drawer toggle (issue #9). Same lightweight aesthetic as the
          sound toggle — header real estate is tight, so it's icon-only. The
@@ -1830,6 +1848,24 @@
     var pendingOppReply = null;  // UCI of opp's auto-reply, scheduled in onSnapEnd
     var oppReplyTimeout = null;  // setTimeout id; cleared on back/destroy
     var introTimeout = null;     // setTimeout id for the pre-puzzle blunder animation
+    // Pre-move state (drill only). When the user drags or clicks a move
+    // during the opponent's reply window — between their successful move
+    // and the auto-played opp reply — we record it here without touching
+    // chess.js, paint orange highlights on from/to, and fire it after the
+    // opp reply's animation settles. Shape: { from, to, promotion } where
+    // promotion is 'q'|'r'|'b'|'n' or null. Cleared on:
+    //   - successful execution (after opp reply)
+    //   - explicit cancel: Esc, click on non-own square w/o selection
+    //   - replacement: another setPremove() call
+    //   - drill teardown: enterDrillMode, onBackClick, handleCompletion
+    // If the queued move is illegal in the post-opp position (e.g. the
+    // intended piece was captured, or the destination is now occupied by
+    // own piece), chess.move returns null/throws and the premove is
+    // silently discarded. If it's legal-but-wrong-vs-solution, the normal
+    // wrong-move flow runs (flash, undo, first-wrong-locks-Again) — same
+    // grading penalty as a live wrong move. Premoves are a speed-vs-
+    // accuracy tradeoff the user opts into per gesture.
+    var premove = null;
     // Promotion picker state. When the user makes a pawn-to-rank-1/8 move,
     // we hold off on calling chess.move and show a 4-piece picker overlay.
     // pendingPromotion = { source, target, isDrag, mode } while open; null
@@ -2126,6 +2162,12 @@
             clearSelection();
             deselectionPending = false;
           }
+          // Esc also cancels a queued premove (Lichess convention). The
+          // promotion picker, when open, has its own keydown.promotion Esc
+          // handler that runs first via $(document) ordering — by the
+          // time we get here, the picker is already gone (or never was)
+          // and clearing premove just hides any orange highlights.
+          if (premove) clearPremove();
           if (hasAnyAnnotations()) clearAnnotations();
           return;
         }
@@ -2766,6 +2808,10 @@
       pendingOppReply = null;
       pendingCompletionResult = null;
       lastSuccessfulUserMove = null;
+      // Pre-move: a stale premove from a prior drill could otherwise paint
+      // highlights on the new puzzle's board. Same defensive shape as the
+      // other "fresh drill" clears.
+      clearPremove();
       // Review nav resets to "live" — every fresh drill starts the user at
       // the position they're solving from, never mid-history.
       drillViewIdx = null;
@@ -3061,6 +3107,13 @@
       // keydown listener, drops pendingPromotion. The board.position sync
       // it does on cancel is harmless here (board is about to be destroyed).
       cancelPromotion();
+      // Pre-move state: $('#board').empty() below wipes the highlight DOM,
+      // but the in-memory `premove` var would survive — so a stray
+      // executePremove timer firing post-destroy could call attemptMove
+      // with stale coords. Defensive clear; the call sites above
+      // (enterDrillMode, onBackClick) already clear, this is belt-and-braces
+      // for any future caller of destroyBoard.
+      premove = null;
       // chessboard.js v1 has destroy(); be defensive in case it's absent.
       if (board && typeof board.destroy === 'function') {
         try { board.destroy(); } catch (e) { /* ignore */ }
@@ -3152,12 +3205,29 @@
       // moves are momentarily the user's "turn" by chess.turn(), so the
       // existing turn-based guard below isn't enough on its own.
       if (solutionAutoplayActive) return false;
+      // Pre-move support: during the opp-reply window (between user's
+      // successful move and the auto-played reply), chess.turn() is the
+      // opponent's color so the live-only checks below would block. Allow
+      // the drag if it's a user-color piece — onDrop will route to
+      // setPremove instead of attemptMove.
+      var userColor = Drill.userColor(drillState);
+      if (inPremoveWindow()) {
+        if (piece[0] !== userColor) return false;
+        if (selectedSquare !== source) clearSelection();
+        // No legal-dot painting: chess.moves on a non-side-to-move piece
+        // returns []. Selection highlight alone is enough — the user is
+        // already in "queue a guess" mode; the lack of dots conveys that.
+        selectedSquare = source;
+        $square(source).addClass('square-selected');
+        return true;
+      }
       // Only the side-to-move's pieces are draggable.
       if (chess.turn() !== piece[0]) return false;
       // Block grabs while it's the opponent's turn (during the 400ms
       // window between user move and scheduled opp reply, chess.turn()
-      // is opponent's color, so this guards naturally).
-      if (chess.turn() !== Drill.userColor(drillState)) return false;
+      // is opponent's color, so this guards naturally — and the premove
+      // window above already handled the case where we WANT input there).
+      if (chess.turn() !== userColor) return false;
       // Re-select the source so legal-move dots stay visible during
       // the drag (matching MistakeLab's onDragStart pattern).
       // NOTE: do NOT reset deselectionPending here. chessboard.js calls
@@ -3175,6 +3245,23 @@
       // for a click that didn't move). Honor pending deselect.
       if (source === target) {
         if (deselectionPending) { deselectionPending = false; clearSelection(); }
+        return 'snapback';
+      }
+      // Pre-move path: chess.turn is opponent's, so we can't validate via
+      // chess.move yet. Stage the queued move + paint orange highlights
+      // and snap the dragged piece back to source — the visual stays
+      // calm (piece on source) until the opp's reply animates and our
+      // staged move fires from playOppReply's tail. Promotion-needing
+      // premoves go through the picker now (in 'premove' mode) so the
+      // user picks under-promotion at queue time, not at execute.
+      if (inPremoveWindow()) {
+        deselectionPending = false;  // drag committed; pending deselect is moot
+        clearSelection();
+        if (isPremovePromotion(source, target)) {
+          showPromotionPicker(source, target, /* isDrag */ true, 'premove');
+        } else {
+          setPremove(source, target, null);
+        }
         return 'snapback';
       }
       var r = attemptMove(source, target);
@@ -3407,7 +3494,12 @@
         isDrag: !!isDrag,
         mode: pickerMode
       };
-      var color = chess.turn();           // 'w' or 'b' — promoting side
+      var srcPiece = chess.get(source);
+      // chess.turn() works for live moves where the side-to-move is
+      // exactly the user, but for premoves chess.turn is the opponent's
+      // color while the promoting pawn belongs to the user. Reading the
+      // piece directly is correct in both cases.
+      var color = (srcPiece && srcPiece.color) ? srcPiece.color : chess.turn();
       // Stack: queen, knight, rook, bishop. Queen first (most common);
       // knight second (typical under-promotion for fork). Rolling along
       // the file away from the promotion edge.
@@ -3492,6 +3584,17 @@
           board.position(chess.fen());
           applyLastMoveAndCheckDeferred(rs.from, rs.to);
         }
+        return;
+      }
+
+      if (p.mode === 'premove') {
+        // Premove with under-promotion. We don't touch chess.js; just stage
+        // the move with the chosen piece and paint highlights. setPremove
+        // replaces any prior queued premove. The drag-source pawn was
+        // already snapped back by onDrop's 'snapback' return — no visual
+        // sync needed beyond highlight paint. Click-source likewise: pawn
+        // never moved visually.
+        setPremove(p.source, p.target, piece);
         return;
       }
 
@@ -3955,6 +4058,129 @@
       jumpToDrillPly(ply);
     }
 
+    // ─── pre-move helpers ───────────────────────────────────────────────
+    // Pre-move can be queued only while we're between a successful user
+    // move and the opp's auto-played reply — i.e. an opp reply is queued
+    // (`pendingOppReply` set, before scheduleOppReplyIfPending starts the
+    // 400ms timer) OR scheduled (`oppReplyTimeout` set, timer in flight).
+    // Once playOppReply runs chess.move and clears both, chess.turn flips
+    // back to the user's color and live input takes over — premove is
+    // not relevant at that point.
+    //
+    // Negative gates: the pre-puzzle blunder intro (introTimeout) is also
+    // an "opp moves first" window but a) the user hasn't played anything
+    // yet and b) we don't show them their own piece colors as draggable
+    // there. solutionAutoplayActive likewise locks input. pendingPromotion
+    // means a picker is open, blocking everything.
+    function inPremoveWindow() {
+      if (mode !== 'drill') return false;
+      if (!drillState || drillState.complete) return false;
+      if (isDrillReviewing()) return false;
+      if (solutionAutoplayActive) return false;
+      if (introTimeout !== null) return false;
+      if (pendingPromotion) return false;
+      return !!(pendingOppReply || oppReplyTimeout);
+    }
+
+    // Detect a premove pawn-promotion. Can't reuse isPromotionMove because
+    // chess.moves({square: source}) returns [] when chess.turn is opp's
+    // (the case during a premove window). So we infer from the source piece
+    // type + target rank instead. Source must be a user-color pawn; target
+    // rank must match the user's promotion edge (8 for white, 1 for black).
+    // We don't validate file-distance (user could queue an obviously-illegal
+    // a7-h8); the eventual chess.move at execute time silently discards
+    // those.
+    function isPremovePromotion(source, target) {
+      if (!chess || !drillState) return false;
+      var p = chess.get(source);
+      if (!p || p.type !== 'p') return false;
+      var userColor = Drill.userColor(drillState);
+      if (p.color !== userColor) return false;
+      var targetRank = parseInt(target[1], 10);
+      if (userColor === 'w' && targetRank === 8) return true;
+      if (userColor === 'b' && targetRank === 1) return true;
+      return false;
+    }
+
+    // Stage a premove. Replaces any prior queued premove (only one at a
+    // time). Visually paints orange highlights on from/to. Note: caller
+    // is responsible for clearing any active selection before calling —
+    // we don't touch selectedSquare here so the staging is independent
+    // of the click-to-move bookkeeping.
+    function setPremove(from, to, promotion) {
+      clearPremove();
+      premove = { from: from, to: to, promotion: promotion || null };
+      $square(from).addClass('square-premove-from');
+      $square(to).addClass('square-premove-to');
+    }
+    function clearPremove() {
+      if (!premove) return;
+      premove = null;
+      $('#board .square-premove-from, #board .square-premove-to')
+        .removeClass('square-premove-from square-premove-to');
+    }
+
+    // Fire the staged premove after opp's reply animation settles. Called
+    // from playOppReply on a setTimeout matching the highlight-reapply
+    // delay (~280ms) so chessboard.js's animated position(fen) has finished
+    // its DOM rebuild before we kick off another animated update on top.
+    //
+    // Re-checks every guard inPremoveWindow tracks (drill mode, completion,
+    // review nav, autoplay, picker) since up to ~700ms may have passed
+    // since the user queued — they could have backed out or completion
+    // could have fired (even-length opp-reply puzzle). Silent discard is
+    // the right answer in all those cases.
+    function executePremove() {
+      if (!premove) return;
+      var pm = premove;
+      // Clear before attempting so any wrong-path side effects (chess.undo +
+      // visual sync below) don't leave stale highlights painted.
+      clearPremove();
+      if (mode !== 'drill' || !drillState || drillState.complete) return;
+      if (isDrillReviewing()) return;
+      if (solutionAutoplayActive) return;
+      if (pendingPromotion) return;
+      // Live-move collision guard: if the user made a live move during the
+      // ~280ms post-opp-animation pad before we fired (see playOppReply),
+      // a NEW opp-reply window is now open (oppReplyTimeout set OR
+      // pendingOppReply set). Firing the staged premove here would either
+      // silently fail (chess.turn is opp's, chess.move rejects) or — far
+      // less likely but theoretically possible — match a legal opp move
+      // and execute a phantom move. Silent discard is the right call.
+      if (pendingOppReply || oppReplyTimeout) return;
+      // Promotion premoves committed via the picker carry their chosen
+      // piece — go straight to commitDrillMove to bypass attemptMove's
+      // re-detect-and-reopen-picker path. Non-promotion premoves go through
+      // attemptMove so the same isPromotionMove check that runs for live
+      // moves runs here too (covers the "queued non-promo, post-opp position
+      // makes it a promo somehow" no-op case — practically impossible but
+      // cheaper to reuse the check than to special-case it).
+      var r;
+      if (pm.promotion) {
+        r = commitDrillMove(pm.from, pm.to, pm.promotion);
+      } else {
+        r = attemptMove(pm.from, pm.to);
+      }
+      if (!r || !r.ok) return;  // illegal in post-opp position → silent discard
+      if (r.wrong) {
+        // commitDrillMove already did chess.undo + flashWrong + paintWrongX.
+        // No board.position call was made, so no visual to sync — but a
+        // drag-source piece occasionally needs the board re-rendered to
+        // shake off any stale state. Cheap to call unconditionally.
+        if (board) board.position(chess.fen(), false);
+        return;
+      }
+      if (r.pending) return;  // promotion picker reopened (defensive — see above)
+      // continue / complete: animate the user's premove into place, paint
+      // lastmove + check, queue any further opp reply. Mirrors the click
+      // handler's post-attemptMove path (board.position is the click-side
+      // analog of chessboard.js's drag-side animation).
+      if (board) board.position(chess.fen());
+      applyLastMoveAndCheckDeferred(r.from, r.to);
+      lastSuccessfulUserMove = null;
+      scheduleOppReplyIfPending();
+    }
+
     // Schedule the queued opp reply with a 400ms 'thinking' delay. Called
     // from both onSnapEnd (drag path) and the click-to-move handler (no
     // onSnapEnd fires for board.position calls). NO `!drillState.complete`
@@ -4016,6 +4242,15 @@
         handleCompletion(pc);
       } else {
         setStatus('Your move.', 'info');
+        // Pre-move: if the user queued a move while the opp's reply was
+        // pending or animating, fire it now that the animation has settled.
+        // The 280ms delay slightly exceeds applyLastMoveAndCheckDeferred's
+        // 250ms repaint window so the highlight state is stable before the
+        // premove kicks off its own animated update. Skipped silently when
+        // pendingCompletionResult ran above — handleCompletion clears
+        // premove anyway, so even if a late-arriving premove existed it
+        // would no-op.
+        if (premove) setTimeout(executePremove, 280);
       }
     }
 
@@ -4024,6 +4259,14 @@
       // check/castle, fired upstream in commitDrillMove or playOppReply)
       // serves as the audio cue for "puzzle done". The visual completion
       // strip + status text + ✓ badge cover the rest.
+      // Pre-move: puzzle is done — clear any queued premove. Most paths
+      // here run from playOppReply's pendingCompletionResult branch (even-
+      // length puzzles where opp gets the last move) or from commitDrillMove
+      // directly (odd-length puzzles). In both cases a stray premove from
+      // an over-eager last-move queue is meaningless now. drillState.complete
+      // also makes executePremove no-op, but we want to clear the highlight
+      // visuals too.
+      clearPremove();
       // SRS-gating: only put a puzzle in the review queue if the user
       // demonstrably needed help on it. Per project rule: wrong attempt
       // OR hint used = SRS; clean first attempt = noted as seen, not
@@ -4253,6 +4496,12 @@
       // existing timer so its setTimeout doesn't race the autoplay loop.
       if (oppReplyTimeout) { clearTimeout(oppReplyTimeout); oppReplyTimeout = null; }
       pendingOppReply = null;
+      // Pre-move: a queued premove from before the user clicked Show
+      // solution is now meaningless — autoplay will play out the rest,
+      // any move the user staged would no-op against solutionAutoplayActive
+      // anyway. Clear so the orange highlights don't sit on top of the
+      // autoplayed sequence.
+      clearPremove();
       // Wipe transient highlights that would be confusing during autoplay
       // (the wrong-X badge from a recent miss, the hint pulse from a
       // recent hint). Lastmove from the player's last correct move can
@@ -4422,6 +4671,12 @@
       cancelAutoNext();
       pendingOppReply = null;
       pendingCompletionResult = null;
+      // Pre-move: Back is the user's explicit "stop" signal — drop any
+      // queued premove so its highlights don't bleed into the post-back
+      // search panel. drillState=null below would also make a stray
+      // executePremove no-op, but explicit clearing is cheap and matches
+      // the other "fresh state" sweeps.
+      clearPremove();
       // Drop any review-nav viewpoint — the next drill (re-entry) sets
       // its own.
       drillViewIdx = null;
@@ -6397,7 +6652,10 @@
         // refusing the initial selection. Mirrors onDragStart's review
         // guard exactly.
         if (isDrillReviewing()) return;
-        if (chess.turn() !== Drill.userColor(drillState)) return;
+        // Pre-move: chess.turn is opp's during the reply window, but we
+        // want clicks to land so the user can queue. inPremoveWindow gates
+        // for picker / autoplay / intro / completion already.
+        if (chess.turn() !== Drill.userColor(drillState) && !inPremoveWindow()) return;
       }
 
       // Left-click on the board clears any drawn annotations (Lichess
@@ -6417,6 +6675,14 @@
 
       var turn = chess.turn();
       var piece = chess.get(sq);
+      // In drill mode, premove window has chess.turn === opp, but we still
+      // want to recognize the user's pieces as "selectable / draggable".
+      // movableColor falls back to chess.turn elsewhere (search mode, live
+      // drill) so the existing piece.color === movableColor compares are
+      // unchanged in those paths.
+      var movableColor = (mode === 'drill' && drillState)
+        ? Drill.userColor(drillState)
+        : turn;
 
       if (selectedSquare) {
         if (sq === selectedSquare) {
@@ -6426,8 +6692,10 @@
           return;
         }
         // Reselect on click of another own piece. Don't preventDefault —
-        // user might drag the new piece.
-        if (piece && piece.color === turn) {
+        // user might drag the new piece. NOTE: we do NOT clear premove
+        // here — Lichess-style, a queued premove survives a fresh selection
+        // and is only replaced when the user actually picks a new dest.
+        if (piece && piece.color === movableColor) {
           clearSelection();
           selectSquare(sq);
           return;
@@ -6443,6 +6711,17 @@
         // attempted. attemptMove returns ok:false on illegal, in which
         // case we just leave the selection cleared.
         clearSelection();
+        // Pre-move path: stage instead of executing. setPremove replaces
+        // any prior queued premove. Promotion-needing premoves open the
+        // picker in 'premove' mode so the user picks under-promotion now.
+        if (inPremoveWindow()) {
+          if (isPremovePromotion(fromSq, sq)) {
+            showPromotionPicker(fromSq, sq, /* isDrag */ false, 'premove');
+          } else {
+            setPremove(fromSq, sq, null);
+          }
+          return;
+        }
         var r = attemptMove(fromSq, sq);
         if (r && r.ok && !r.wrong && !r.pending) {
           // chessboard.js wasn't involved in this move — animate it manually
@@ -6464,8 +6743,15 @@
         return;
       }
       // No selection — select if the click landed on an own-color piece.
-      if (piece && piece.color === turn) {
+      // Otherwise (click on empty / opp piece w/o selection), cancel any
+      // queued premove. The deliberate non-symmetry: clicking an own piece
+      // does NOT cancel premove (you might be redirecting it to a new
+      // destination); clicking a non-piece square does (you're indicating
+      // "no thanks").
+      if (piece && piece.color === movableColor) {
         selectSquare(sq);
+      } else if (premove) {
+        clearPremove();
       }
     }
 
