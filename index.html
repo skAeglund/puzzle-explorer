@@ -3644,6 +3644,12 @@
         // sync needed beyond highlight paint. Click-source likewise: pawn
         // never moved visually.
         setPremove(p.source, p.target, piece);
+        // If the opp's reply timer fired while the picker was open,
+        // playOppReply deferred it (pendingPromotion guard). Now that the
+        // picker is resolved AND the premove is staged, flush — playOppReply
+        // will run the opp's move, see `premove`, and queue executePremove
+        // 280ms later, completing the chain.
+        flushDeferredOppReply();
         return;
       }
 
@@ -3677,12 +3683,20 @@
     // target by chessboard.js's drop animation). board.position with the
     // current — pre-move — fen handles both cases: drag → pawn animates
     // back to source; click → no-op (visual already matches).
+    //
+    // For premove pickers, the opp's reply timer may have fired while the
+    // picker was open; playOppReply then deferred via the pendingPromotion
+    // guard. Now that the picker is closed (cancel = no premove staged),
+    // flushDeferredOppReply releases the deferred reply so the opp's move
+    // animates and the user can continue. No-op for live drill / search
+    // pickers (pendingOppReplyDuringDrag is null in those flows).
     function cancelPromotion() {
       if (!pendingPromotion) return;
       var wasDrag = pendingPromotion.isDrag;
       pendingPromotion = null;
       removePromotionPickerDom();
       if (wasDrag && board) board.position(chess.fen());
+      flushDeferredOppReply();
       // Status: only set if we're not in the middle of a teardown that
       // will overwrite it anyway. Simple to just leave any prior status
       // alone — cancel is silent.
@@ -3886,23 +3900,41 @@
     }
 
     // Fires after a drag's snapback animation completes (chessboard.js v1.0
-    // callback). For premove drags this is where the deferred opp reply —
+    // callback). For premove drags this is where a deferred opp reply —
     // stashed by playOppReply when userDragInProgress was true — finally
-    // runs. By the time onSnapbackEnd fires, chessboard.js has cleared its
-    // internal drag-in-progress flag and removed the floating drag piece
-    // from the body, so the upcoming board.position(fen) inside playOppReply
-    // can safely re-render without producing the duplication artifact.
+    // runs (via flushDeferredOppReply). By the time onSnapbackEnd fires,
+    // chessboard.js has cleared its internal drag-in-progress flag and
+    // hidden the floating drag piece, so the upcoming board.position(fen)
+    // inside playOppReply can safely re-render without producing the
+    // duplication artifact.
     //
     // Search-mode and non-premove drill paths also reach here on any
     // snapback (illegal-target drops, etc.) — for those userDragInProgress
-    // is false and pendingOppReplyDuringDrag is null, so the body is a no-op.
+    // is false and pendingOppReplyDuringDrag is null, so flushDeferredOppReply
+    // is a no-op.
     function onSnapbackEnd(/* source, piece, position, orientation */) {
       userDragInProgress = false;
-      if (pendingOppReplyDuringDrag) {
-        var uci = pendingOppReplyDuringDrag;
-        pendingOppReplyDuringDrag = null;
-        playOppReply(uci);
-      }
+      flushDeferredOppReply();
+    }
+
+    // Run a deferred opp reply if one was stashed by playOppReply because
+    // userDragInProgress or pendingPromotion was set. Called from:
+    //   - onSnapbackEnd: drag resolved, user no longer mid-drag
+    //   - commitPromotion (premove branch): picker resolved, premove staged
+    //   - cancelPromotion: picker resolved, no premove staged
+    // The variable name 'pendingOppReplyDuringDrag' is a slight misnomer
+    // now (covers picker too), kept for git churn reasons; comments
+    // clarify.
+    //
+    // Important: null pendingOppReplyDuringDrag BEFORE calling playOppReply
+    // — if the deferred reply still can't run (e.g. snapback ended but
+    // picker is still open), playOppReply will re-stash via its guard and
+    // we'd want a clean slot.
+    function flushDeferredOppReply() {
+      if (!pendingOppReplyDuringDrag) return;
+      var uci = pendingOppReplyDuringDrag;
+      pendingOppReplyDuringDrag = null;
+      playOppReply(uci);
     }
 
     // Render drillState.sanHistory into #moveStrip as "1. e4 e5  2. Nf3 …"
@@ -4325,19 +4357,30 @@
     function playOppReply(uci) {
       // mode could have changed (user clicked back). Safety check.
       if (mode !== 'drill' || !drillState) return;
-      // Drag-vs-opp-reply coordination: if the user is mid-drag (started
-      // a premove drag during this opp-reply window and hasn't dropped
-      // yet), running the rest of this function would call
-      // board.position(chess.fen()) below and re-render the source
-      // square's piece while chessboard.js's floating drag piece is
-      // still alive on document.body — visually duplicating the piece
-      // on the user's screen. Stash the UCI and bail; onSnapbackEnd
-      // re-invokes playOppReply once chessboard.js has cleared its
-      // drag state. Subsequent retries while still mid-drag overwrite
-      // (only one opp reply per puzzle ply, so overwrite is safe; in
-      // practice this never re-enters because oppReplyTimeout is the
-      // only caller and it fires once).
-      if (userDragInProgress) {
+      // Defer if either of two user-input gestures is in flight:
+      //
+      //   1. userDragInProgress — the user is mid-drag of a premove. If we
+      //      ran board.position(chess.fen()) below, chessboard.js's
+      //      internal T() would re-render the source square's piece while
+      //      the user's floating drag piece (parented to <body>, not
+      //      inside the board) is still alive — visually duplicating the
+      //      piece. The deferred reply fires from onSnapbackEnd once
+      //      chessboard.js has cleared its drag state.
+      //
+      //   2. pendingPromotion — the promotion picker is open (waiting for
+      //      the user to pick a piece). For premove promotions we want
+      //      the opp's reply to play AFTER the user resolves the picker,
+      //      so the user's queued promotion can fire as a premove on the
+      //      post-opp position. Without this guard, the opp's reply
+      //      animates underneath the picker, runs past the
+      //      "if (premove) executePremove" tail, and the user's eventual
+      //      promotion-piece selection stages a premove that never
+      //      executes. Re-fired by flushDeferredOppReply, called from
+      //      commitPromotion (premove branch) and cancelPromotion.
+      //
+      // Subsequent retries while still deferred overwrite the stash —
+      // safe because there's only one opp reply per puzzle ply.
+      if (userDragInProgress || pendingPromotion) {
         pendingOppReplyDuringDrag = uci;
         return;
       }
