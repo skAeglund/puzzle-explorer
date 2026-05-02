@@ -593,50 +593,73 @@
        breathing room as a .row would give. The inner Apply-FEN row has
        its own .row margin-top, so we just lift the top edge here. */
     #fenTools { margin-top: 8px; }
-    /* User presets — same compact look as the examples row but with an
-       inline × delete handle. The preset button + × handle are a single
-       composite affordance laid out as inline-flex so they hug each other
-       and wrap together when the row overflows. The × is its own <button>
-       so it's keyboard-focusable and screen-reader accessible (with an
-       aria-label), and the preset face is also a <button> so semantics
-       match the example-btns above. */
-    .row.user-presets { margin-top: 6px; }
-    .preset {
-      display: inline-flex;
-      align-items: stretch;
-      border-radius: 3px;
-      overflow: hidden;
-      border: 1px solid var(--border);
+    /* ─── Repertoires section ────────────────────────────────────────
+       Replaces the old single-position preset row. A label row up top
+       with a "+ New" affordance, then a wrapping list of repertoire
+       pills, then (when one is active) a control bar + items list. The
+       active pill gets a clear visual lock so the search button's mode
+       is unambiguous. */
+    .repertoires-section { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border); }
+    .repertoires-header { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+    .repertoires-label  { font-size: 11px; color: var(--fg-dim); text-transform: uppercase; letter-spacing: 0.04em; }
+    .repertoires-new    {
+      font-family: var(--mono); font-size: 11px; padding: 3px 8px;
+      background: var(--surface-2); color: var(--fg); border: 1px solid var(--border);
+      border-radius: 3px; cursor: pointer;
     }
-    .preset:hover { border-color: var(--accent); }
-    .preset > .preset-face {
-      font-family: var(--mono);
-      font-size: 11px;
-      padding: 5px 9px;
-      background: var(--surface-2);
-      color: var(--fg);
-      border: none;
-      border-radius: 0;
+    .repertoires-new:hover { border-color: var(--accent); }
+    .row.repertoires-list { margin-top: 0; min-height: 0; }
+    .row.repertoires-list:empty { display: none; }
+    .repertoire-pill {
+      display: inline-flex; align-items: stretch;
+      border: 1px solid var(--border); border-radius: 3px; overflow: hidden;
       cursor: pointer;
-      max-width: 180px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
+      font-family: var(--mono); font-size: 11px;
+      background: var(--surface-2); color: var(--fg);
+      padding: 5px 10px;
+      max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
-    .preset > .preset-face:hover { background: var(--bg); }
-    .preset > .preset-del {
-      font-family: var(--mono);
-      font-size: 12px;
-      line-height: 1;
-      padding: 0 7px;
-      background: var(--surface-2);
-      color: var(--fg-dim);
-      border: none;
-      border-left: 1px solid var(--border);
-      border-radius: 0;
-      cursor: pointer;
+    .repertoire-pill:hover { border-color: var(--accent); }
+    .repertoire-pill.active {
+      border-color: var(--accent); background: var(--accent); color: var(--bg);
     }
-    .preset > .preset-del:hover { background: var(--error); color: var(--bg); }
+    .repertoire-pill-count { color: var(--fg-dim); margin-left: 6px; }
+    .repertoire-pill.active .repertoire-pill-count { color: var(--bg); opacity: 0.85; }
+    /* Active-repertoire control bar: pinned below the list, only visible
+       when a repertoire is selected. Clearly demarcates that the search
+       button now searches the union and not the single position. */
+    .repertoire-active { margin-top: 8px; padding: 8px 10px; border: 1px solid var(--accent); border-radius: 4px; background: var(--surface-2); }
+    .repertoire-active-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+    .repertoire-active-name { font-weight: 600; flex: 1 1 auto; min-width: 100px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .repertoire-active-count { font-family: var(--mono); font-size: 11px; color: var(--fg-dim); }
+    .repertoire-active-bar > button {
+      font-family: var(--mono); font-size: 11px;
+      padding: 4px 9px; background: var(--bg); color: var(--fg);
+      border: 1px solid var(--border); border-radius: 3px; cursor: pointer;
+    }
+    .repertoire-active-bar > button:hover { border-color: var(--accent); }
+    .repertoire-active-bar > .ghost-danger:hover { border-color: var(--error); color: var(--error); }
+    .repertoire-active-bar > .repertoire-exit {
+      font-size: 14px; line-height: 1; padding: 0 8px; min-width: 26px;
+    }
+    .repertoire-items {
+      list-style: none; padding: 6px 0 0; margin: 8px 0 0; border-top: 1px dashed var(--border);
+      max-height: 200px; overflow-y: auto;
+    }
+    .repertoire-items:empty { display: none; }
+    .repertoire-items li {
+      display: flex; align-items: center; gap: 8px; padding: 4px 0;
+      font-family: var(--mono); font-size: 11px;
+    }
+    .repertoire-items li + li { border-top: 1px dotted var(--border); }
+    .repertoire-item-num { color: var(--fg-dim); min-width: 22px; }
+    .repertoire-item-fen { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); }
+    .repertoire-item-load, .repertoire-item-remove {
+      background: transparent; color: var(--fg-dim); border: 1px solid var(--border);
+      border-radius: 3px; padding: 2px 7px; font-size: 10px; cursor: pointer;
+    }
+    .repertoire-item-load:hover { color: var(--fg); border-color: var(--accent); }
+    .repertoire-item-remove:hover { color: var(--error); border-color: var(--error); }
 
     /* Move-builder UI: drag pieces on the board (or click-to-move) to set
        a position one ply at a time. Move list mirrors what's been played;
@@ -1326,7 +1349,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">sw-version-from-buildversion</span>
+    <span id="buildVersion">repertoires</span>
     <button id="soundToggle" class="sound-toggle" type="button" aria-label="Toggle sound" title="Toggle sound effects">🔊</button>
     <!-- Stats drawer toggle (issue #9). Same lightweight aesthetic as the
          sound toggle — header real estate is tight, so it's icon-only. The
@@ -1452,7 +1475,7 @@
     <div id="searchPanel" class="panel">
       <!-- Search action sits at the very top of the panel — closest to the
            board, where the user's eye lands after setting up a position
-           (via drag/click, FEN paste+Apply, or preset). The setup tools
+           (via drag/click, FEN paste+Apply, or repertoire item Load). The setup tools
            below are means; Search is the action. Full-width to feel
            intentional rather than orphaned. -->
       <div class="row search-row">
@@ -1470,7 +1493,6 @@
       </div>
       <div class="row">
         <button id="fenToggleBtn" type="button" title="Show the FEN paste field">Paste FEN…</button>
-        <button id="savePresetBtn" title="Save the current position as a preset">Save position</button>
       </div>
       <!-- FEN paste tools hidden by default — pasting a FEN is rare next to
            building up a position by dragging pieces. Toggled open via the
@@ -1488,8 +1510,34 @@
         <button class="example-btn" data-fen="rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2">1. e4 e5</button>
         <button class="example-btn" data-fen="r1b5/pp1nkpr1/2q1p3/8/3N4/3B4/P1P2PPP/R2Q1RK1 b - - 4 18">specific puzzle</button>
       </div>
-      <!-- User-saved presets. Hidden when empty; populated by renderUserPresets(). -->
-      <div class="row user-presets" id="userPresetsRow" hidden></div>
+      <!-- ─── Repertoires (named multi-position groups) ─────────────────
+           Replaces the old single-position presets. Each repertoire is a
+           pill-button labeled "<name> · <count>". Clicking activates the
+           repertoire for searching + training; clicking the active one
+           again deactivates. Edit + delete live behind a per-repertoire
+           expander to keep the row visually quiet.
+           Synced cross-device via lib/repertoires.js + lib/sync.js. -->
+      <div class="repertoires-section">
+        <div class="repertoires-header">
+          <span class="repertoires-label">Repertoires</span>
+          <button id="newRepertoireBtn" type="button" class="repertoires-new" title="Create a new repertoire">+ New</button>
+        </div>
+        <div class="row repertoires-list" id="repertoiresList"></div>
+        <!-- Active-repertoire control strip. Hidden when no repertoire is
+             active; shows position count, [+ Add current], [Edit name],
+             [Delete], and an exit (×) button. -->
+        <div class="repertoire-active" id="repertoireActive" hidden>
+          <div class="repertoire-active-bar">
+            <span class="repertoire-active-name" id="repertoireActiveName"></span>
+            <span class="repertoire-active-count" id="repertoireActiveCount"></span>
+            <button id="repertoireAddCurrentBtn" type="button" title="Add the position currently on the board to this repertoire">+ Add current</button>
+            <button id="repertoireRenameBtn" type="button" title="Rename this repertoire">Rename</button>
+            <button id="repertoireDeleteBtn" type="button" class="ghost-danger" title="Delete this repertoire">Delete</button>
+            <button id="repertoireExitBtn" type="button" class="repertoire-exit" title="Exit repertoire mode" aria-label="Exit repertoire mode">×</button>
+          </div>
+          <ol class="repertoire-items" id="repertoireItems"></ol>
+        </div>
+      </div>
     </div>
 
     <div id="drillPanel" class="panel" hidden>
@@ -1670,6 +1718,10 @@
   <script src="lib/drill.js"></script>
   <script src="lib/session.js"></script>
   <script src="lib/progress.js"></script>
+  <!-- Named groups of FENs for multi-position search/training (closes #N).
+       Loads after posKey (uses fenPositionKey for item dedup) and before
+       sync (sync.merge handles a `repertoires` branch alongside positions). -->
+  <script src="lib/repertoires.js"></script>
   <!-- Cross-device sync via private Gist. Loads after Progress (its hooks
        wrap Progress.exportData/importData at init time). -->
   <script src="lib/sync.js"></script>
@@ -2036,36 +2088,37 @@
         applyFen();
       });
 
-      // User-preset buttons. Click the face → load the preset's FEN
-      // (same behavior as example-btn). Click the × → delete with
-      // confirm. Both are delegated since the row is re-rendered on
-      // every save / delete.
-      $('#savePresetBtn').on('click', onSavePresetClick);
-      $('#userPresetsRow').on('click', '.preset-face', function () {
-        var fen = $(this).data('fen');
+      // ─── Repertoires DOM bindings ────────────────────────────────────
+      // The repertoires row is delegated since pills are rebuilt on every
+      // create / rename / delete. Active-bar buttons are direct since
+      // those elements live in static HTML.
+      $('#newRepertoireBtn').on('click', onNewRepertoireClick);
+      $('#repertoiresList').on('click', '.repertoire-pill', function () {
+        var id = $(this).attr('data-rep-id');
+        if (id) toggleRepertoireActive(id);
+      });
+      $('#repertoireExitBtn').on('click', deactivateRepertoire);
+      $('#repertoireAddCurrentBtn').on('click', onAddCurrentToRepertoire);
+      $('#repertoireRenameBtn').on('click', onRenameRepertoire);
+      $('#repertoireDeleteBtn').on('click', onDeleteRepertoire);
+      // Item rows: load (puts FEN on the position-builder board) + remove.
+      $('#repertoireItems').on('click', '.repertoire-item-load', function (e) {
+        e.stopPropagation();
+        var fen = $(this).attr('data-fen');
+        var ori = $(this).attr('data-orientation') || '';
         if (!fen) return;
-        var savedOri = $(this).data('orientation');  // '', 'white', or 'black'
+        // Same fen-load semantics as the old preset-face click: optional
+        // orientation rebuild for black-perspective items, then applyFen.
+        var needsRebuild = (ori === 'white' || ori === 'black') && ori !== searchOrientation;
+        if (needsRebuild) searchOrientation = ori;
         $('#fenInput').val(fen);
-        // applyFen() sets chess.js + board position but doesn't touch the
-        // board's orientation (it reuses the existing chessboard.js
-        // instance). If the preset saved an orientation that differs from
-        // the current one, set searchOrientation BEFORE applyFen — and
-        // then rebuild the board, since chessboard.js can't change
-        // orientation on the fly.
-        var needsRebuild = (savedOri === 'white' || savedOri === 'black')
-          && savedOri !== searchOrientation;
-        if (needsRebuild) searchOrientation = savedOri;
         applyFen();
         if (needsRebuild) rebuildSearchBoard();
       });
-      $('#userPresetsRow').on('click', '.preset-del', function (e) {
-        // The face and the × are siblings inside the same .preset wrapper;
-        // clicks on the × bubble up through .preset, which itself has no
-        // handler, so no propagation guard is needed here. The handler is
-        // bound on .preset-del directly.
+      $('#repertoireItems').on('click', '.repertoire-item-remove', function (e) {
         e.stopPropagation();
-        var name = $(this).attr('data-preset-name');
-        if (typeof name === 'string') deleteUserPreset(name);
+        var fen = $(this).attr('data-fen');
+        if (fen) onRemoveRepertoireItem(fen);
       });
 
       // Move-builder buttons.
@@ -2214,7 +2267,7 @@
 
       loadDatasetInfo();
       refreshReviewBadge();
-      renderUserPresets();
+      renderRepertoires();
       // Persisted settings (auto-next toggle today; future settings live in
       // the same storage object). Loaded after the button is in the DOM
       // so updateAutoNextBtn can sync the glyph immediately.
@@ -2293,6 +2346,12 @@
         setStatus('lib/posKey.js failed to load — check the network tab.', 'error');
         return;
       }
+      // Repertoire mode: search the union across all FENs in the active
+      // repertoire. Single-position branch below remains the default.
+      if (activeRepertoireId) {
+        await searchPuzzlesForActiveRepertoire();
+        return;
+      }
       var fen = chess.fen();
       searchFen = fen;
       var key = fenPositionKey(fen);
@@ -2347,6 +2406,188 @@
       } catch (e) {
         setStatus('Fetch error: ' + e.message + '. Are you serving over http (not file://)? Is data/ generated?', 'error');
       }
+    }
+
+    // ─── Repertoire-mode search ────────────────────────────────────────
+    // Fetch the unique shards covering all FENs in the active repertoire
+    // in parallel, look up each FEN's matches in its shard, dedupe by
+    // puzzle id (puzzles can appear at multiple positions in the source
+    // game), apply the perspective filter PER ITEM (so each FEN's
+    // side-to-move determines what counts as "my color" for that FEN's
+    // puzzles), then render the union.
+    //
+    // Per-item perspective filter rationale: if a repertoire mixes
+    // white-side and black-side study (e.g. white opening lines AND
+    // black defenses), a global searchOrientation toggle would be
+    // wrong-by-design. Each FEN already encodes its own side-to-move; we
+    // honor that. The "my color only" toggle gates the filter overall —
+    // turning it OFF returns all colors per item (same global
+    // semantics).
+    async function searchPuzzlesForActiveRepertoire() {
+      // Capture the active id so we can detect a mid-flight deactivation
+      // or switch (user clicks ×, picks a different repertoire, or a
+      // remote-side delete sync arrives during our awaits). Without this
+      // guard, results can paint into the UI after the user already
+      // moved on — surprising and bad.
+      var capturedId = activeRepertoireId;
+      var rep = Repertoires.get(capturedId);
+      if (!rep) {
+        // Active vanished underneath us. Fall back gracefully.
+        deactivateRepertoire();
+        return;
+      }
+      if (!rep.items.length) {
+        renderResults([]);
+        setStatus('Repertoire "' + rep.name + '" has no positions yet. Set a position on the board, then click + Add current.', 'warn');
+        return;
+      }
+      // Compute (key, shard, item) triples for every item. Items with
+      // unparseable FENs are dropped with a console warning rather than
+      // failing the whole search.
+      var triples = [];
+      for (var i = 0; i < rep.items.length; i++) {
+        var it = rep.items[i];
+        var k;
+        try { k = fenPositionKey(it.fen); } catch (e) { k = ''; }
+        if (!k) {
+          if (typeof console !== 'undefined' && console.warn) {
+            console.warn('[repertoires] skipping unparseable FEN at index', i, it.fen);
+          }
+          continue;
+        }
+        var sh;
+        try { sh = await shardIdAsync(k); } catch (e) {
+          setStatus('SHA-1 hashing not available (Web Crypto required, http context).', 'error');
+          return;
+        }
+        // Mid-flight deactivation / switch — bail without touching UI
+        // beyond what's already been done (status string is fine).
+        if (activeRepertoireId !== capturedId) return;
+        triples.push({ key: k, shard: sh, item: it });
+      }
+      if (!triples.length) {
+        renderResults([]);
+        setStatus('No usable positions in repertoire "' + rep.name + '".', 'warn');
+        return;
+      }
+      // Unique shards across all items. Ordering doesn't matter since the
+      // result is rebuilt from the unionedMatches map.
+      var uniqueShards = {};
+      for (var t = 0; t < triples.length; t++) uniqueShards[triples[t].shard] = true;
+      var shardList = Object.keys(uniqueShards);
+      setStatus('Searching repertoire "' + rep.name + '" — fetching ' +
+                shardList.length + ' shard' + (shardList.length === 1 ? '' : 's') + '…', 'info');
+      try {
+        // Parallel-fetch all unique shards. fetchIndexShardCached hits
+        // IDB first, so re-running a search on a previously-loaded
+        // repertoire is local. 404s come back as {status: 404, json:
+        // null} — treat empty.
+        var fetched = await Promise.all(shardList.map(function (s) {
+          return fetchIndexShardCached(s).then(function (res) { return { shard: s, res: res }; });
+        }));
+        // Final mid-flight check before we touch the result list. After
+        // this point, we're synchronous, so no further awaits can race.
+        if (activeRepertoireId !== capturedId) return;
+        var byShard = {};
+        var anyHit = false;
+        for (var f = 0; f < fetched.length; f++) {
+          var entry = fetched[f];
+          if (entry.res && entry.res.status !== 404 && entry.res.json) {
+            byShard[entry.shard] = entry.res.json;
+            anyHit = true;
+          } else {
+            byShard[entry.shard] = null;
+          }
+        }
+        // Walk triples, look up matches per item, apply per-item
+        // perspective filter, dedupe by puzzle id (m[0]) keeping the
+        // first occurrence — multiple FENs that all match the same
+        // puzzle should not inflate the count.
+        //
+        // We track UNIQUE puzzle ids both pre- and post-filter so the
+        // status messages report a number the user understands. A naive
+        // `rawTotal += raw.length` would double-count a puzzle whose
+        // source game passes through several positions in the
+        // repertoire (which is the common case for opening study).
+        var unioned = Object.create(null);
+        var rawSeen = Object.create(null);
+        for (var p = 0; p < triples.length; p++) {
+          var tr = triples[p];
+          var idx = byShard[tr.shard];
+          if (!idx) continue;
+          var raw = idx[tr.key] || [];
+          // Per-item perspective filter: derive the item's side-to-move
+          // from the FEN itself (field 2), so the filter respects the
+          // item even if its stored `orientation` field is missing.
+          var stm = _fenSideToMove(tr.item.fen);  // 'w' | 'b' | null
+          var keep;
+          if (matchOwnColorOnly && stm) {
+            keep = raw.filter(function (m) { return m[2] === undefined || m[2] === stm; });
+          } else {
+            keep = raw;
+          }
+          // Track every pid that surfaced (regardless of filter outcome)
+          // so the unfiltered-unique count is correct across the
+          // repertoire.
+          for (var qq = 0; qq < raw.length; qq++) {
+            var rmm = raw[qq];
+            if (rmm && rmm[0]) rawSeen[rmm[0]] = true;
+          }
+          for (var q = 0; q < keep.length; q++) {
+            var mm = keep[q];
+            if (!mm || !mm[0]) continue;
+            // Dedupe — first FEN wins. Subsequent matches against the
+            // same pid get dropped silently.
+            if (!unioned[mm[0]]) unioned[mm[0]] = mm;
+          }
+        }
+        var matches = [];
+        for (var pid in unioned) {
+          if (Object.prototype.hasOwnProperty.call(unioned, pid)) matches.push(unioned[pid]);
+        }
+        var rawUniqueCount = 0;
+        for (var rid in rawSeen) {
+          if (Object.prototype.hasOwnProperty.call(rawSeen, rid)) rawUniqueCount++;
+        }
+        var filteredOutUnique = rawUniqueCount - matches.length;
+        renderResults(matches);
+        configureSlider(matches);
+        // Status. anyHit=false means every shard 404'd (small dataset
+        // or unindexed positions); show that explicitly.
+        var filterNote = (matchOwnColorOnly && filteredOutUnique > 0)
+          ? ' (' + filteredOutUnique + ' hidden — wrong color)'
+          : '';
+        if (!anyHit) {
+          setStatus('No puzzles found across this repertoire. (None of the ' +
+                    shardList.length + ' shards are in the current dataset.)', 'info');
+        } else if (matches.length === 0) {
+          if (rawUniqueCount > 0 && matchOwnColorOnly) {
+            setStatus(rawUniqueCount + ' puzzle' + (rawUniqueCount === 1 ? '' : 's') +
+              ' found across the repertoire, but none in your perspective. Uncheck "My color only" to see them.', 'info');
+          } else {
+            setStatus('No puzzles found across this repertoire.', 'info');
+          }
+        } else if (matches.length > MAX_RESULTS) {
+          setStatus(matches.length + ' unique matches across "' + rep.name + '"' + filterNote +
+            ' (showing first ' + MAX_RESULTS + ' by rating).', 'ok');
+        } else {
+          setStatus(matches.length + ' match' + (matches.length === 1 ? '' : 'es') +
+            ' found across "' + rep.name + '"' + filterNote + '.', 'ok');
+        }
+      } catch (e) {
+        setStatus('Fetch error: ' + e.message + '. Are you serving over http (not file://)? Is data/ generated?', 'error');
+      }
+    }
+
+    // Extract side-to-move from a FEN. Returns 'w' | 'b' | null. The 2nd
+    // space-separated field is the canonical location; we don't import
+    // chess.js here because this runs in the hot path of repertoire
+    // search and a string split is much cheaper than Chess().load().
+    function _fenSideToMove(fen) {
+      if (typeof fen !== 'string' || !fen) return null;
+      var parts = fen.split(/\s+/);
+      var stm = parts[1];
+      return (stm === 'w' || stm === 'b') ? stm : null;
     }
 
     async function shardIdAsync(s) {
@@ -5805,7 +6046,7 @@
     // ─── settings storage ───────────────────────────────────────────────
     // Single JSON object under puzzle_explorer_settings. Future settings
     // get added as new keys here rather than each as its own LS entry.
-    // Defensive read pattern matches lib/progress.js / user presets:
+    // Defensive read pattern matches lib/progress.js / lib/repertoires.js:
     // any failure (missing / corrupt JSON / non-object) → defaults.
     var SETTINGS_STORAGE_KEY = 'puzzle_explorer_settings';
 
@@ -6118,7 +6359,20 @@
           // mutations write through Progress.save before notifyMutation
           // fires, so by the time the debounce timer trips and Sync
           // pulls the data, LS reflects every recorded review.
-          return Progress.exportData();
+          //
+          // Repertoires are a separate LS slot but ride the same gist
+          // file — they're a sibling branch in the synced payload, with
+          // their own per-id latest-wins merge in Sync.merge. Compose
+          // here so Progress and Repertoires can stay loosely coupled
+          // (neither knows about the other's storage).
+          var progressData = Progress.exportData();
+          var out = {
+            positions:   progressData.positions,
+            version:     progressData.version,
+            repertoires: (typeof Repertoires === 'object' && Repertoires) ? Repertoires.exportData() : {}
+          };
+          if (progressData.meta) out.meta = progressData.meta;
+          return out;
         },
         setProgressData: function (data) {
           // Called after a successful read-merge-write to import the
@@ -6126,7 +6380,16 @@
           // we just pulled in via the read leg would only show up on
           // the next page reload.
           if (data && typeof data === 'object') {
-            Progress.importData(data);
+            // Progress.importData enforces its own shape (positions
+            // required); pass only the keys it expects so a malformed
+            // repertoires branch can't poison its validation.
+            var progressShape = { positions: data.positions || {} };
+            if (data.meta) progressShape.meta = data.meta;
+            if (typeof data.version === 'number') progressShape.version = data.version;
+            Progress.importData(progressShape);
+            if (typeof Repertoires === 'object' && Repertoires) {
+              Repertoires.importData(data.repertoires || {});
+            }
             // Refresh any UI that depends on Progress state. The badge
             // is the most visible — a remote-side review may have either
             // added a new due card (sync from a phone yesterday) or
@@ -6134,6 +6397,15 @@
             // badges, but the search panel is a re-render-on-action UI:
             // any subsequent search redraws it from fresh Progress.
             refreshReviewBadge();
+            // Re-render the repertoires row so a remote-side create /
+            // rename / delete shows up without a page reload. If the
+            // active repertoire was deleted remotely, drop it.
+            if (typeof renderRepertoires === 'function') {
+              if (activeRepertoireId && !Repertoires.get(activeRepertoireId)) {
+                deactivateRepertoire();
+              }
+              renderRepertoires();
+            }
           }
         },
         onStatusChange: function (s) {
@@ -6141,13 +6413,14 @@
         }
       });
 
-      // Mirror Sync's username into Progress so the active LS storage key
-      // tracks. setUsername was called inside Sync.init() if a stored
-      // name was present — propagate it to Progress now. If no name was
+      // Mirror Sync's username into Progress + Repertoires so the active
+      // LS storage keys track. setUsername was called inside Sync.init()
+      // if a stored name was present — propagate it now. If no name was
       // restored, Progress stays on the legacy key (anonymous mode).
       var restoredName = Sync.getUsername();
       if (restoredName) {
         Progress.setUsername(restoredName);
+        if (typeof Repertoires === 'object' && Repertoires) Repertoires.setUsername(restoredName);
         // Don't migrate here — migration is the explicit one-shot we run
         // at first-login (in onSyncSave). At cold start with a returning
         // user, the namespaced key already has data; migrating again
@@ -6278,20 +6551,32 @@
       var prevUsername = Sync.getUsername();
       Sync.setUsername(username);
       Progress.setUsername(username);
+      if (typeof Repertoires === 'object' && Repertoires) Repertoires.setUsername(username);
       // First-login migration — copies legacy unnamespaced LS into the
       // namespaced slot if the namespaced slot is empty. Only meaningful
-      // on the very first switch from anonymous to a named user.
+      // on the very first switch from anonymous to a named user. Same
+      // pattern for both Progress and Repertoires.
       var migrated = Progress.migrateLegacyToActive();
+      var migratedReps = (typeof Repertoires === 'object' && Repertoires)
+        ? Repertoires.migrateLegacyToActive()
+        : false;
       // Set creds AFTER setUsername so they get persisted under the
       // namespaced LS keys.
       Sync.setCredentials(token, gistId);
       setSyncMsg(gistId ? 'Connecting…' : 'Creating gist…', 'info');
       try {
         if (!gistId) {
-          // Seed the new gist with whatever progress we have locally
-          // (post-migration). This is the entry point that gets a
-          // pre-existing user's FSRS state up to the cloud on day one.
-          var seed = Progress.exportData();
+          // Seed the new gist with whatever progress + repertoires we
+          // have locally (post-migration). This is the entry point that
+          // gets a pre-existing user's FSRS state — and any repertoires
+          // built up in anonymous mode — up to the cloud on day one.
+          var prog = Progress.exportData();
+          var seed = {
+            positions: prog.positions,
+            version: prog.version,
+            repertoires: (typeof Repertoires === 'object' && Repertoires) ? Repertoires.exportData() : {}
+          };
+          if (prog.meta) seed.meta = prog.meta;
           seed.username = username;
           var newId = await Sync.createGist(seed);
           $('#syncGistIdInput').val(newId);
@@ -6299,6 +6584,12 @@
           // No further loadFromGist needed — we just wrote the seed and
           // it equals our local state. Mark synced and move on.
           updateSyncPillUI('ok', 'Synced as ' + username);
+          // Re-render the repertoires row. The pills shown before this
+          // call were drawn from the legacy LS key (anonymous mode); we
+          // just switched to the namespaced key and migrated the data
+          // across, so a fresh render guarantees what the user sees
+          // matches what's actually backing the search.
+          if (typeof renderRepertoires === 'function') renderRepertoires();
         } else {
           // Existing gist — pull and merge. loadFromGist's result tells
           // us if there was a username mismatch (wrong PAT/wrong gist
@@ -6321,6 +6612,7 @@
                 Sync.clearCredentials();
                 Sync.setUsername(prevUsername || '');
                 Progress.setUsername(prevUsername || '');
+                if (typeof Repertoires === 'object' && Repertoires) Repertoires.setUsername(prevUsername || '');
               }
               return;
             }
@@ -6328,12 +6620,17 @@
             return;
           }
           // If the load brought in remote-only data, the badge needs to
-          // reflect any newly-due cards.
+          // reflect any newly-due cards. Also re-render the repertoires
+          // row, since loadFromGist's setProgressData callback already
+          // imported anything new from the gist.
           refreshReviewBadge();
+          if (typeof renderRepertoires === 'function') renderRepertoires();
           var pulledCount = result.data && result.data.positions
             ? Object.keys(result.data.positions).length : 0;
           var msg = 'Connected as ' + username + ' — ' + pulledCount + ' position' + (pulledCount === 1 ? '' : 's') + ' synced.';
-          if (migrated) msg += ' (Local progress migrated.)';
+          if (migrated && migratedReps) msg += ' (Local progress + repertoires migrated.)';
+          else if (migrated)            msg += ' (Local progress migrated.)';
+          else if (migratedReps)        msg += ' (Local repertoires migrated.)';
           setSyncMsg(msg, 'ok');
           // If the merge produced state newer than remote (typical when
           // an existing user with local FSRS history connects to a fresh
@@ -7107,102 +7404,169 @@
       return 'https://lichess.org/analysis/' + encoded + '?color=' + side;
     }
 
-    // ─── user FEN presets (issue #2) ────────────────────────────────────
-    // localStorage-backed list of {name, fen} the user can save and recall.
-    // Stored as a JSON array; insertion order is presentation order
-    // (newest at the end). Defensive against corrupt JSON / quota /
-    // private-mode failures, same pattern as lib/progress.js. The
-    // hardcoded .example-btn presets above are NOT touched by this
-    // feature — they're uneditable defaults.
-    var PRESETS_STORAGE_KEY = 'puzzle_explorer_presets';
-    var PRESET_NAME_MAX = 60;
-    var PRESET_NAME_MIN = 1;
+    // ─── Repertoires UI (named multi-position groups) ──────────────────
+    // Layered on top of lib/repertoires.js. The active repertoire is
+    // tracked in memory only — page reload returns to single-position
+    // search mode by default. This keeps reload behavior predictable: if
+    // a user came back to the tab the next day they wouldn't expect to
+    // still be filtered to a 12-position Caro-Kann set.
+    //
+    // Mutation paths funnel through repertoireMutated() which (a) calls
+    // Sync.notifyMutation so the gist gets the change and (b) re-renders
+    // the row + active control bar.
+    var activeRepertoireId = null;
 
-    function _presetsStorage() {
-      // Wrap localStorage access. Browsers in incognito sometimes throw
-      // on the property access itself (Safari historically); guard at
-      // the call site. Returns null when storage isn't usable.
-      try { return window.localStorage || null; } catch (e) { return null; }
-    }
-    function loadUserPresets() {
-      var s = _presetsStorage();
-      if (!s) return [];
-      var raw;
-      try { raw = s.getItem(PRESETS_STORAGE_KEY); } catch (e) { return []; }
-      if (!raw) return [];
-      var parsed;
-      try { parsed = JSON.parse(raw); } catch (e) { return []; }
-      if (!Array.isArray(parsed)) return [];
-      // Filter to well-formed entries — drop anything corrupt rather
-      // than throwing. A surviving partial list is more useful than a
-      // hard-error page on first load.
-      // orientation is optional (added in followup) — older presets
-      // without it just don't auto-flip on click; everything else
-      // works the same.
-      var out = [];
-      for (var i = 0; i < parsed.length; i++) {
-        var e = parsed[i];
-        if (!e || typeof e !== 'object') continue;
-        if (typeof e.name !== 'string' || typeof e.fen !== 'string') continue;
-        if (!e.name || !e.fen) continue;
-        var entry = { name: e.name, fen: e.fen };
-        if (e.orientation === 'white' || e.orientation === 'black') {
-          entry.orientation = e.orientation;
+    function repertoireMutated() {
+      // Same posture as recordProgressMutation — graceful if Sync isn't
+      // loaded, swallow notify failures rather than crashing the UI on a
+      // background-tab fetch hiccup.
+      if (typeof Sync === 'object' && Sync) {
+        try { Sync.notifyMutation(); } catch (e) {
+          if (typeof console !== 'undefined' && console.warn) {
+            console.warn('[sync] notifyMutation threw:', e && e.message);
+          }
         }
-        out.push(entry);
-      }
-      return out;
-    }
-    function saveUserPresets(list) {
-      var s = _presetsStorage();
-      if (!s) return false;
-      try { s.setItem(PRESETS_STORAGE_KEY, JSON.stringify(list)); return true; }
-      catch (e) {
-        // Quota exceeded / private-mode write failure. Surface a status
-        // line so the user knows why their save didn't stick rather
-        // than letting the row silently fail to update.
-        setStatus('Could not save preset — browser storage is full or unavailable.', 'error');
-        return false;
       }
     }
 
-    function renderUserPresets() {
-      var list = loadUserPresets();
-      var $row = $('#userPresetsRow').empty();
-      // The hardcoded demo presets above are useful as orientation when
-      // the saved-presets list is empty, and pure noise once the user has
-      // curated their own. Toggle them as the inverse of the saved list.
-      // Self-healing: if the user ever deletes all their saved presets,
-      // the demos return to help re-orient.
+    function renderRepertoires() {
+      var list = (typeof Repertoires === 'object' && Repertoires) ? Repertoires.list() : [];
+      var $row = $('#repertoiresList').empty();
+      // Hide the demo example-btn row whenever the user has at least one
+      // repertoire — same self-healing logic as the old preset row.
       $('#examplesRow').prop('hidden', list.length > 0);
-      if (!list.length) { $row.prop('hidden', true); return; }
-      $row.prop('hidden', false);
       for (var i = 0; i < list.length; i++) {
-        var p = list[i];
-        var $wrap = $('<span class="preset"></span>');
-        // Use jQuery .text() / .data() / .attr() for both children — never
-        // string-concat user-supplied names into HTML. Names go through
-        // window.prompt() but defense in depth still matters since the
-        // store could be modified via devtools or restored from a corrupt
-        // export later.
-        var $face = $('<button type="button" class="preset-face"></button>')
-          .text(p.name)
-          .attr('title', p.name + '  ·  ' + p.fen +
-            (p.orientation ? '  ·  ' + p.orientation + ' perspective' : ''))
-          .data('fen', p.fen)
-          .data('orientation', p.orientation || '');
-        var $del = $('<button type="button" class="preset-del">×</button>')
-          .attr('aria-label', 'Delete preset ' + p.name)
-          .attr('data-preset-name', p.name);
-        $wrap.append($face).append($del);
-        $row.append($wrap);
+        var r = list[i];
+        var $pill = $('<button type="button" class="repertoire-pill"></button>')
+          .attr('data-rep-id', r.id)
+          .attr('title', r.name + ' · ' + r.items.length + ' position' + (r.items.length === 1 ? '' : 's'));
+        $pill.append($('<span class="repertoire-pill-name"></span>').text(r.name));
+        $pill.append($('<span class="repertoire-pill-count"></span>').text('· ' + r.items.length));
+        if (r.id === activeRepertoireId) $pill.addClass('active');
+        $row.append($pill);
+      }
+      renderActiveRepertoire();
+    }
+
+    // Render the active-repertoire control bar + items list. No-op when
+    // nothing's active. Called from renderRepertoires AND directly after
+    // any mutation that affects the active set (add/remove items,
+    // rename) — the pill row and the active panel can drift out of sync
+    // otherwise (rename changes the pill label but not the items list).
+    function renderActiveRepertoire() {
+      var $box = $('#repertoireActive');
+      if (!activeRepertoireId) { $box.prop('hidden', true); return; }
+      var rep = (typeof Repertoires === 'object' && Repertoires) ? Repertoires.get(activeRepertoireId) : null;
+      if (!rep) {
+        // Active repertoire vanished (deleted on another device, then
+        // synced over). Clean up and bail without crashing.
+        activeRepertoireId = null;
+        $box.prop('hidden', true);
+        return;
+      }
+      $box.prop('hidden', false);
+      $('#repertoireActiveName').text(rep.name);
+      $('#repertoireActiveCount').text(rep.items.length + ' position' + (rep.items.length === 1 ? '' : 's'));
+      var $items = $('#repertoireItems').empty();
+      for (var i = 0; i < rep.items.length; i++) {
+        var item = rep.items[i];
+        var $li = $('<li></li>');
+        $li.append($('<span class="repertoire-item-num"></span>').text((i + 1) + '.'));
+        // Label preferred when present; fall back to a compact slice of
+        // the FEN. The full FEN goes in the title attr for hover.
+        var displayText = (typeof item.label === 'string' && item.label) ? item.label : item.fen;
+        $li.append($('<span class="repertoire-item-fen"></span>')
+          .text(displayText)
+          .attr('title', item.fen + (item.orientation ? '  ·  ' + item.orientation + ' perspective' : '')));
+        $li.append($('<button type="button" class="repertoire-item-load">Load</button>')
+          .attr('data-fen', item.fen)
+          .attr('data-orientation', item.orientation || '')
+          .attr('title', 'Load this position on the search board'));
+        $li.append($('<button type="button" class="repertoire-item-remove">×</button>')
+          .attr('data-fen', item.fen)
+          .attr('aria-label', 'Remove this position from the repertoire'));
+        $items.append($li);
       }
     }
 
-    function onSavePresetClick() {
-      // Use the applied position (chess.fen()), not whatever's typed in
-      // the textarea. Matches example-btn semantics: user must Apply
-      // first if they want to save typed-but-not-committed FEN.
+    // Activate / deactivate. Clicking the active pill again deactivates
+    // (matches "selecting the selected" filter UX patterns elsewhere).
+    function toggleRepertoireActive(id) {
+      if (activeRepertoireId === id) { deactivateRepertoire(); return; }
+      var rep = Repertoires.get(id);
+      if (!rep) {
+        // Stale click against a now-deleted repertoire. Re-render to clear it.
+        renderRepertoires();
+        return;
+      }
+      activeRepertoireId = id;
+      renderRepertoires();
+      // Reset any prior single-position results — the user is switching
+      // search modes and the old result list would be misleading. Empty
+      // matches state also disables the session/training Start buttons
+      // until a fresh repertoire search runs (configureSlider hides the
+      // panel when the list is empty).
+      lastMatches = null;
+      renderResults([]);
+      // Status hint so the user knows what to do next. Click Search to
+      // pull the union; we don't auto-fetch on activation since fetching
+      // can be many shards and the user may want to set a rating range
+      // first via filters / training-customize panel.
+      setStatus('Repertoire "' + rep.name + '" active. Click Search to find puzzles across ' +
+                rep.items.length + ' position' + (rep.items.length === 1 ? '' : 's') + '.',
+                rep.items.length > 0 ? 'info' : 'warn');
+    }
+
+    function deactivateRepertoire() {
+      if (!activeRepertoireId) return;
+      activeRepertoireId = null;
+      lastMatches = null;
+      renderResults([]);
+      renderRepertoires();
+      setStatus('Repertoire mode off. Set a single position and click Search.', 'info');
+    }
+
+    function onNewRepertoireClick() {
+      var raw = window.prompt('New repertoire name:');
+      if (raw === null) return;
+      var name = raw.trim();
+      if (!name) {
+        setStatus('Repertoire name cannot be empty.', 'warn');
+        return;
+      }
+      // Bypass the create() name length cap exactly so the user gets a
+      // clearer error than just a silent null. Repertoires.create returns
+      // null on duplicate-name OR over-length OR quota fail; disambiguate
+      // here with our own pre-checks for the common cases.
+      if (name.length > 80) {
+        setStatus('Repertoire name too long (' + name.length + ' chars; max 80).', 'warn');
+        return;
+      }
+      var existing = Repertoires.list();
+      var lower = name.toLowerCase();
+      for (var i = 0; i < existing.length; i++) {
+        if (existing[i].name.toLowerCase() === lower) {
+          setStatus('A repertoire named "' + existing[i].name + '" already exists.', 'warn');
+          return;
+        }
+      }
+      var rep = Repertoires.create(name);
+      if (!rep) {
+        setStatus('Could not create repertoire — browser storage may be full.', 'error');
+        return;
+      }
+      // Activate the new repertoire so the user can immediately start
+      // adding positions to it. Also re-renders the row.
+      activeRepertoireId = rep.id;
+      renderRepertoires();
+      lastMatches = null;
+      renderResults([]);
+      setStatus('Created "' + rep.name + '". Set a position on the board, then click + Add current.', 'ok');
+      repertoireMutated();
+    }
+
+    function onAddCurrentToRepertoire() {
+      if (!activeRepertoireId) return;
       if (!chess) {
         setStatus('Board not ready yet — try again in a moment.', 'warn');
         return;
@@ -7213,58 +7577,114 @@
         setStatus('Could not read the current position.', 'error');
         return;
       }
-      // Defensive: chess.js always emits a valid FEN, but cheap to check.
+      // Defensive — chess.js can in theory emit a malformed FEN if the
+      // board state was corrupted by a partial-move bug. Verify before
+      // persisting; saving an unparseable FEN would poison searches.
       var verify = new Chess();
       if (!verify.load(fen)) {
-        setStatus('Current position is invalid — cannot save.', 'error');
+        setStatus('Current position is invalid — cannot add.', 'error');
         return;
       }
-
-      var existing = loadUserPresets();
-      var raw = window.prompt('Name this position:');
-      if (raw === null) return;                  // user cancelled
-      var name = raw.trim();
-      if (name.length < PRESET_NAME_MIN) {
-        setStatus('Preset name cannot be empty.', 'warn');
+      var rep = Repertoires.get(activeRepertoireId);
+      if (!rep) {
+        // Active was deleted underneath us. Clean up.
+        deactivateRepertoire();
         return;
       }
-      if (name.length > PRESET_NAME_MAX) {
-        setStatus('Preset name too long (' + name.length + ' chars; max ' + PRESET_NAME_MAX + ').', 'warn');
-        return;
-      }
-      // Case-insensitive duplicate check. A user expecting "London" to
-      // be distinct from "london" is more confusing than helpful here.
-      var lower = name.toLowerCase();
-      for (var i = 0; i < existing.length; i++) {
-        if (existing[i].name.toLowerCase() === lower) {
-          setStatus('A preset named "' + existing[i].name + '" already exists.', 'warn');
-          return;
+      var ok = Repertoires.addItem(activeRepertoireId, fen, { orientation: searchOrientation });
+      if (!ok) {
+        // Disambiguate dedup vs. quota / cap. Re-fetch and check size.
+        var after = Repertoires.get(activeRepertoireId);
+        if (after && after.items.length === rep.items.length) {
+          setStatus('This position is already in "' + rep.name + '".', 'info');
+        } else {
+          setStatus('Could not add position — repertoire may be full or storage unavailable.', 'error');
         }
+        return;
       }
-
-      existing.push({ name: name, fen: fen, orientation: searchOrientation });
-      if (!saveUserPresets(existing)) return;    // status set by saveUserPresets
-      renderUserPresets();
-      setStatus('Saved preset "' + name + '" (' + searchOrientation + ' perspective).', 'ok');
+      // renderRepertoires cascades to renderActiveRepertoire — single
+      // call refreshes both the pill (count) and the items list.
+      renderRepertoires();
+      var updated = Repertoires.get(activeRepertoireId);
+      setStatus('Added position to "' + rep.name + '" (' + updated.items.length + ' total).', 'ok');
+      repertoireMutated();
     }
 
-    function deleteUserPreset(name) {
-      var list = loadUserPresets();
-      var idx = -1;
-      for (var i = 0; i < list.length; i++) {
-        if (list[i].name === name) { idx = i; break; }
-      }
-      if (idx === -1) {
-        // Name vanished between render and click (corrupt store, or
-        // another tab edited storage). Just re-render and bail.
-        renderUserPresets();
+    function onRemoveRepertoireItem(fen) {
+      if (!activeRepertoireId || typeof fen !== 'string') return;
+      var rep = Repertoires.get(activeRepertoireId);
+      if (!rep) { deactivateRepertoire(); return; }
+      // No confirm — the action is per-item and easily redo-able by
+      // clicking + Add current with the FEN reloaded. A confirm here would
+      // be friction-without-payoff.
+      var ok = Repertoires.removeItem(activeRepertoireId, fen);
+      if (!ok) {
+        setStatus('Could not remove position.', 'error');
         return;
       }
-      if (!window.confirm('Delete preset "' + name + '"?')) return;
-      list.splice(idx, 1);
-      if (!saveUserPresets(list)) return;
-      renderUserPresets();
-      setStatus('Deleted preset "' + name + '".', 'info');
+      renderRepertoires();
+      repertoireMutated();
+    }
+
+    function onRenameRepertoire() {
+      if (!activeRepertoireId) return;
+      var rep = Repertoires.get(activeRepertoireId);
+      if (!rep) { deactivateRepertoire(); return; }
+      var raw = window.prompt('Rename repertoire:', rep.name);
+      if (raw === null) return;
+      var name = raw.trim();
+      if (!name) {
+        setStatus('Repertoire name cannot be empty.', 'warn');
+        return;
+      }
+      if (name.length > 80) {
+        setStatus('Repertoire name too long (' + name.length + ' chars; max 80).', 'warn');
+        return;
+      }
+      // Pre-check duplicate so we can give a useful error. rename() also
+      // checks but returns false silently across all causes.
+      var lower = name.toLowerCase();
+      if (lower !== rep.name.toLowerCase()) {
+        var others = Repertoires.list();
+        for (var i = 0; i < others.length; i++) {
+          if (others[i].id !== rep.id && others[i].name.toLowerCase() === lower) {
+            setStatus('A repertoire named "' + others[i].name + '" already exists.', 'warn');
+            return;
+          }
+        }
+      }
+      var ok = Repertoires.rename(activeRepertoireId, name);
+      if (!ok) {
+        setStatus('Could not rename repertoire.', 'error');
+        return;
+      }
+      renderRepertoires();
+      setStatus('Renamed to "' + name + '".', 'ok');
+      repertoireMutated();
+    }
+
+    function onDeleteRepertoire() {
+      if (!activeRepertoireId) return;
+      var rep = Repertoires.get(activeRepertoireId);
+      if (!rep) { deactivateRepertoire(); return; }
+      // Confirm IS warranted here — deletion drops all items and will
+      // sync to other devices. Tombstone makes recovery impossible
+      // without manual gist edit.
+      var msg = 'Delete repertoire "' + rep.name + '" (' + rep.items.length + ' position' +
+                (rep.items.length === 1 ? '' : 's') + ')? This cannot be undone.';
+      if (!window.confirm(msg)) return;
+      var ok = Repertoires['delete'](activeRepertoireId);
+      if (!ok) {
+        setStatus('Could not delete repertoire.', 'error');
+        return;
+      }
+      var deletedName = rep.name;
+      activeRepertoireId = null;
+      lastMatches = null;
+      renderResults([]);
+      renderRepertoires();
+      setStatus('Deleted "' + deletedName + '".', 'info');
+      repertoireMutated();
     }
 
     async function loadDatasetInfo() {

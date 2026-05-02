@@ -61,6 +61,7 @@ const APP_SHELL = [
   './lib/drill.js',
   './lib/session.js',
   './lib/progress.js',
+  './lib/repertoires.js',
   './lib/sync.js',
   './lib/cache.js',
   './lib/vendor/jquery-3.7.1.min.js',
