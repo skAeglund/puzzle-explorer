@@ -89,6 +89,22 @@ const DATA_HOST = 'skaeglund.github.io';
 const DATA_PATH_PREFIX = '/puzzle-explorer-data/';
 
 self.addEventListener('install', (event) => {
+  // skipWaiting() lets a fresh SW activate immediately rather than sitting
+  // in "waiting" state until every controlled tab closes. The original
+  // posture here was the opposite — wait, on the theory that swapping
+  // assets under an active drilling session was a worse hazard than
+  // serving stale code. A real incident reversed that calculus: a clone-
+  // after-await bug in the cache update path silently failed every cache
+  // refresh, and lib/sync.js stayed stale for an existing user across
+  // deploys; the new index.html (served via hard-refresh) loaded with the
+  // old sync.js, whose merge() didn't know about repertoires, and every
+  // subsequent sync wrote merged data without the field — wiping local
+  // repertoires through setProgressData. Stale code is worse than a mid-
+  // session asset swap. With this in place, future buildVersion bumps
+  // propagate on the next normal reload without requiring the user to
+  // close every tab. Paired with clients.claim() in activate so the new
+  // SW takes over already-open pages immediately.
+  self.skipWaiting();
   event.waitUntil(
     caches.open(APP_SHELL_CACHE).then((cache) => cache.addAll(APP_SHELL))
   );
@@ -148,8 +164,16 @@ async function cacheFirst(req) {
   try {
     const res = await fetch(req);
     if (res && res.ok) {
-      // Fire-and-forget cache update — don't block the response on it.
-      caches.open(APP_SHELL_CACHE).then((cache) => cache.put(req, res.clone()));
+      // Clone SYNCHRONOUSLY before returning. If the clone is created
+      // inside the caches.open .then callback, it runs after `return res`
+      // resolves and the page has started reading the body — at which
+      // point clone() throws "Response body is already used" and the
+      // cache update silently fails. That's how a stale lib/sync.js
+      // shipped to an existing user once persisted across deploys: every
+      // attempted re-cache failed, so the old SW kept serving the old
+      // file from its old cache. Capture the clone first.
+      const clone = res.clone();
+      caches.open(APP_SHELL_CACHE).then((cache) => cache.put(req, clone));
     }
     return res;
   } catch (e) {
@@ -170,7 +194,9 @@ async function networkFirst(req, cacheName) {
     // in dataset" and is a stable answer worth caching offline). Don't
     // cache 5xx or other transient failures.
     if (res && (res.ok || res.status === 404)) {
-      caches.open(cacheName).then((cache) => cache.put(req, res.clone()));
+      // Synchronous clone — see cacheFirst's comment for why.
+      const clone = res.clone();
+      caches.open(cacheName).then((cache) => cache.put(req, clone));
     }
     return res;
   } catch (e) {

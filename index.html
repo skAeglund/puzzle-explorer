@@ -1349,7 +1349,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">repertoires</span>
+    <span id="buildVersion">sw-clone-fix</span>
     <button id="soundToggle" class="sound-toggle" type="button" aria-label="Toggle sound" title="Toggle sound effects">🔊</button>
     <!-- Stats drawer toggle (issue #9). Same lightweight aesthetic as the
          sound toggle — header real estate is tight, so it's icon-only. The
@@ -7728,11 +7728,12 @@
   // (already a per-commit project rule) auto-invalidates SW caches on the
   // user's next launch. No manual VERSION constant in sw.js to keep in sync.
   //
-  // NO skipWaiting in the SW: a new SW installs in the background and goes
-  // to "waiting" state; the user picks it up on next reload. This avoids
-  // the hazard of swapping the controlling SW mid-fetch and means an
-  // active drilling session won't see asset URLs change underneath it.
-  // No update banner in MVP — refresh-to-update is the contract.
+  // sw.js calls skipWaiting() in install + clients.claim() in activate, so
+  // a new build takes over the next reload without the user having to close
+  // every tab. The original "wait for tab close" posture got reverted after
+  // a stale-asset incident — see the long comment in sw.js's install
+  // handler. Refresh-to-update remains the contract; the only change is
+  // that the wait-period is gone.
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', function () {
       // Read the build stamp from the DOM. If the element is missing
