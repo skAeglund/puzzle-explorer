@@ -298,6 +298,112 @@ section('merge: streak meta — bad shape (array) ignored on local');
   check('remote meta wins over array-shaped local meta', m.meta && m.meta.lastReviewDay === '2025-06-15');
 }
 
+// ━━━ REPERTOIRES BRANCH (mirrors positions; tombstone-aware) ━━━━━━━━━━━━━
+
+section('merge: repertoires — disjoint ids unioned');
+{
+  const local  = { positions: {}, repertoires: { rep_a: { id: 'rep_a', name: 'A', items: [], createdAt: 't', lastSeen: '2026-01-01T00:00:00Z' } } };
+  const remote = { positions: {}, repertoires: { rep_b: { id: 'rep_b', name: 'B', items: [], createdAt: 't', lastSeen: '2026-01-01T00:00:00Z' } } };
+  const m = Sync.merge(local, remote);
+  check('rep_a present', m.repertoires.rep_a && m.repertoires.rep_a.name === 'A');
+  check('rep_b present', m.repertoires.rep_b && m.repertoires.rep_b.name === 'B');
+}
+
+section('merge: repertoires — newer lastSeen wins');
+{
+  const local  = { positions: {}, repertoires: { rep_x: { id: 'rep_x', name: 'Local',  items: [{fen: 'a/8/8/8/8/8/8/8 w - - 0 1'}], createdAt: 't', lastSeen: '2026-01-02T00:00:00Z' } } };
+  const remote = { positions: {}, repertoires: { rep_x: { id: 'rep_x', name: 'Remote', items: [], createdAt: 't', lastSeen: '2026-01-01T00:00:00Z' } } };
+  const m = Sync.merge(local, remote);
+  check('local newer wins on name',  m.repertoires.rep_x.name === 'Local');
+  check('local newer wins on items', m.repertoires.rep_x.items.length === 1);
+}
+
+section('merge: repertoires — equal lastSeen → remote wins (deterministic)');
+{
+  const local  = { positions: {}, repertoires: { rep_x: { id: 'rep_x', name: 'Local',  items: [], createdAt: 't', lastSeen: '2026-01-01T00:00:00Z' } } };
+  const remote = { positions: {}, repertoires: { rep_x: { id: 'rep_x', name: 'Remote', items: [], createdAt: 't', lastSeen: '2026-01-01T00:00:00Z' } } };
+  const m = Sync.merge(local, remote);
+  check('tiebreak → remote', m.repertoires.rep_x.name === 'Remote');
+}
+
+section('merge: repertoires — tombstone newer than live entry wins');
+{
+  const local  = { positions: {}, repertoires: { rep_x: { id: 'rep_x', deleted: true, lastSeen: '2026-01-02T00:00:00Z' } } };
+  const remote = { positions: {}, repertoires: { rep_x: { id: 'rep_x', name: 'Stale', items: [{fen: 'x'}], createdAt: 't', lastSeen: '2026-01-01T00:00:00Z' } } };
+  const m = Sync.merge(local, remote);
+  check('tombstone wins',                m.repertoires.rep_x.deleted === true);
+  check('stale name not dragged through', m.repertoires.rep_x.name === undefined);
+  check('stale items not dragged through', m.repertoires.rep_x.items === undefined);
+  check('lastSeen is the tombstone\'s',   m.repertoires.rep_x.lastSeen === '2026-01-02T00:00:00Z');
+}
+
+section('merge: repertoires — live edit newer than tombstone resurrects cleanly');
+{
+  // Device A deleted at T0; Device B re-edited (manually re-creating with
+  // same id is unusual but the merge must NOT poison a winning live
+  // entry by pulling deleted:true from the loser via spread).
+  const local  = { positions: {}, repertoires: { rep_x: { id: 'rep_x', name: 'Resurrected', items: [{fen: 'a/8/8/8/8/8/8/8 w - - 0 1'}], createdAt: 't', lastSeen: '2026-01-02T00:00:00Z' } } };
+  const remote = { positions: {}, repertoires: { rep_x: { id: 'rep_x', deleted: true, lastSeen: '2026-01-01T00:00:00Z' } } };
+  const m = Sync.merge(local, remote);
+  check('live entry wins',                  m.repertoires.rep_x.name === 'Resurrected');
+  check('NOT marked deleted (no spread of loser tombstone fields)', m.repertoires.rep_x.deleted !== true);
+  check('items preserved',                  m.repertoires.rep_x.items.length === 1);
+}
+
+section('merge: repertoires — older tombstone vs newer tombstone (tombstone wins regardless)');
+{
+  const local  = { positions: {}, repertoires: { rep_x: { id: 'rep_x', deleted: true, lastSeen: '2026-01-02T00:00:00Z' } } };
+  const remote = { positions: {}, repertoires: { rep_x: { id: 'rep_x', deleted: true, lastSeen: '2026-01-01T00:00:00Z' } } };
+  const m = Sync.merge(local, remote);
+  check('tombstone preserved as tombstone', m.repertoires.rep_x.deleted === true);
+  check('newer lastSeen wins',              m.repertoires.rep_x.lastSeen === '2026-01-02T00:00:00Z');
+}
+
+section('merge: repertoires — local-only tombstone preserved');
+{
+  // Device A created + deleted; remote never saw it. Tombstone must
+  // survive the union so a future remote sync that learns about the
+  // (long-deleted) entry won't resurrect it without a fresh edit.
+  const local  = { positions: {}, repertoires: { rep_x: { id: 'rep_x', deleted: true, lastSeen: '2026-01-02T00:00:00Z' } } };
+  const remote = { positions: {}, repertoires: {} };
+  const m = Sync.merge(local, remote);
+  check('local-only tombstone passes through', m.repertoires.rep_x && m.repertoires.rep_x.deleted === true);
+}
+
+section('merge: repertoires — bad shape on remote normalized to empty branch');
+{
+  const m = Sync.merge(
+    { positions: {}, repertoires: { rep_a: { id: 'rep_a', name: 'A', items: [], createdAt: 't', lastSeen: '2026-01-01T00:00:00Z' } } },
+    { positions: {}, repertoires: 'not-an-object' }
+  );
+  check('local repertoire still merges in', m.repertoires.rep_a && m.repertoires.rep_a.name === 'A');
+  check('repertoires is an object',         m.repertoires && typeof m.repertoires === 'object' && !Array.isArray(m.repertoires));
+}
+
+section('merge: repertoires — array-shaped local branch ignored');
+{
+  const m = Sync.merge(
+    { positions: {}, repertoires: ['nonsense'] },
+    { positions: {}, repertoires: { rep_a: { id: 'rep_a', name: 'A', items: [], createdAt: 't', lastSeen: '2026-01-01T00:00:00Z' } } }
+  );
+  check('remote rep_a survives', m.repertoires.rep_a && m.repertoires.rep_a.name === 'A');
+}
+
+section('merge: repertoires — forward-compat fields on remote preserved when remote wins');
+{
+  const local  = { positions: {}, repertoires: { rep_x: { id: 'rep_x', name: 'Local',  items: [], createdAt: 't', lastSeen: '2026-01-01T00:00:00Z' } } };
+  const remote = { positions: {}, repertoires: { rep_x: { id: 'rep_x', name: 'Remote', items: [], createdAt: 't', lastSeen: '2026-01-02T00:00:00Z', futureField: 'X' } } };
+  const m = Sync.merge(local, remote);
+  check('remote wins',                  m.repertoires.rep_x.name === 'Remote');
+  check('forward-compat field carried', m.repertoires.rep_x.futureField === 'X');
+}
+
+section('merge: repertoires — neither side has the branch (no crash)');
+{
+  const m = Sync.merge({ positions: {} }, { positions: {} });
+  check('repertoires defaults to empty object', m.repertoires && typeof m.repertoires === 'object' && Object.keys(m.repertoires).length === 0);
+}
+
 // ━━━ USERNAME / CREDENTIALS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 section('Sync.setUsername normalizes + persists');
