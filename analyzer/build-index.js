@@ -9,9 +9,15 @@
  *   node analyzer/build-index.js <input.pgn> [out_dir]
  *
  * Output:
- *   <out_dir>/index/<hex>.json     posKey -> [[puzzleId, rating], ...]
+ *   <out_dir>/index/<hex>.json     posKey -> [[puzzleId, rating, color, ply], ...]
  *   <out_dir>/puzzles/<hex>.ndjson one puzzle body per line, keyed off puzzleId hash
  *   <out_dir>/meta.json            build stats
+ *
+ * Index entry: tuple of [puzzleId, rating, color, ply]. All fields after
+ * puzzleId are OPTIONAL by reader convention — older shards emit length-2
+ * or length-3 entries and are passed through unchanged. Readers that filter
+ * on a missing field treat it as "unknown" (color → all-pass; ply → no
+ * filter, i.e. effectively Infinity).
  */
 
 const fs = require('fs');
@@ -123,7 +129,14 @@ function processGame(pgnText) {
   // no need for a separate replay loop.
   const verbose = game.history({ verbose: true });
   if (verbose.length === 0) return { err: 'empty_mainline', puzzleId: h.PuzzleId };
-  const positions = verbose.map(m => fenPositionKey(m.after));
+  // Track ply (1-indexed: verbose[0].after is the position after ply 1) so
+  // downstream filters can drop emissions past a depth limit without re-walking
+  // the source PGN. Initial position (ply 0) is intentionally skipped — every
+  // game shares it, indexing it is meaningless.
+  const positions = verbose.map((m, i) => ({
+    posKey: fenPositionKey(m.after),
+    ply: i + 1,
+  }));
   // game.fen() === verbose[verbose.length-1].after === puzzle starting position
 
   // Convert Annotator (SAN solution) → UCI
@@ -226,27 +239,34 @@ async function main() {
     }
     parsed++;
     const { body, positions } = r;
-    // Index entry: [puzzleId, rating, color]. `color` is 'w' or 'b' — the
-    // puzzle's starting side-to-move (i.e. who solves the tactic). The
+    // Index entry: [puzzleId, rating, color, ply]. `color` is 'w' or 'b' —
+    // the puzzle's starting side-to-move (i.e. who solves the tactic). The
     // frontend uses this to filter by board orientation: when the user
     // is set up from black's perspective, only black-to-move puzzles
-    // match. Cost: 3 chars/entry pre-gzip; ~3.6MB at 1.2M scale.
-    // Field is OPTIONAL by frontend convention — entries without it are
-    // treated as "color unknown, pass through" so old data still works
-    // until a republish.
+    // match. `ply` is the source-game ply at which this position occurs
+    // (1-indexed); used by post-build filters to drop emissions past a
+    // depth limit without rebuilding. All fields after puzzleId are
+    // OPTIONAL by reader convention — entries from older builds omit
+    // them and are passed through unchanged. Cost: 3 chars/entry pre-gzip
+    // for color (~3.6MB at 1.2M scale), 2-4 chars for ply (~3-5MB at 1.2M).
     const colorChar = body.fen.split(' ')[1];  // 'w' or 'b'
-    const previewEntry = [body.id, body.rating, colorChar];
-    const previewJson = JSON.stringify(previewEntry);
+    // Per-position entry construction: ply differs across positions even
+    // within the same source game, so we can't reuse a single pre-serialized
+    // JSON string here — JSON.stringify per emit (still cheap; build is
+    // bottlenecked elsewhere on PGN parse + fs writes).
 
-    // Dedup positions within this game (transpositions in source game itself)
+    // Dedup positions within this game (transpositions in source game itself).
+    // Verbose history is in ply order, so first-seen is also lowest-ply,
+    // matching what callers want from a "min ply" semantic.
     const seen = new Set();
-    for (const pos of positions) {
-      if (seen.has(pos)) continue;
-      seen.add(pos);
-      const sid = shardId(pos);
+    for (const { posKey, ply } of positions) {
+      if (seen.has(posKey)) continue;
+      seen.add(posKey);
+      const sid = shardId(posKey);
       let buf = indexBufs.get(sid);
       if (!buf) { buf = []; indexBufs.set(sid, buf); allIndexShards.add(sid); }
-      buf.push(pos + '\t' + previewJson);
+      const entryJson = JSON.stringify([body.id, body.rating, colorChar, ply]);
+      buf.push(posKey + '\t' + entryJson);
       positionEntries++;
     }
 

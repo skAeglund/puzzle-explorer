@@ -60,9 +60,9 @@ function parseArgs(argv) {
 // Input: parsed shard object {posKey: [entry, ...]}.
 // Output: { kept: {posKey: [entry...]}, droppedKeys, referencedPuzzleIds }.
 //
-// Each entry is [puzzleId, rating, color?, ...]. We collect puzzleId from
-// every kept entry into the referenced set, which is then used to filter
-// body shards.
+// Each entry is [puzzleId, rating, color?, ply?, ...]. We collect puzzleId
+// from every kept entry into the referenced set, which is then used to
+// filter body shards.
 function filterIndexShard(shardObj, whitelistSet) {
   const kept = Object.create(null);
   const referencedIds = new Set();
