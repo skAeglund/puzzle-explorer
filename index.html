@@ -1349,7 +1349,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">sw-clone-fix</span>
+    <span id="buildVersion">repertoire-perspective-fix</span>
     <button id="soundToggle" class="sound-toggle" type="button" aria-label="Toggle sound" title="Toggle sound effects">🔊</button>
     <!-- Stats drawer toggle (issue #9). Same lightweight aesthetic as the
          sound toggle — header real estate is tight, so it's icon-only. The
@@ -2516,13 +2516,25 @@
           var idx = byShard[tr.shard];
           if (!idx) continue;
           var raw = idx[tr.key] || [];
-          // Per-item perspective filter: derive the item's side-to-move
-          // from the FEN itself (field 2), so the filter respects the
-          // item even if its stored `orientation` field is missing.
-          var stm = _fenSideToMove(tr.item.fen);  // 'w' | 'b' | null
+          // Per-item perspective filter. The user's study color is captured
+          // in item.orientation at addItem time (from searchOrientation, the
+          // board flip when they hit "+ Add current"). That is what we filter
+          // against — NOT the side-to-move of the saved FEN, which is a
+          // different thing. Concrete: a Caro-Kann black-perspective study
+          // saves the position after 1.e4 c6 2.d4 d5 with orientation='black'
+          // but the FEN itself is white-to-move. Filtering on FEN STM there
+          // surfaces white-to-move puzzles ("white finds the tactic"), which
+          // is the opposite of what a black-perspective trainee wants. Fall
+          // back to FEN STM only when orientation is absent (legacy items
+          // pre-dating the orientation field, or any future code path that
+          // skips capturing it).
+          var color = null;
+          if (tr.item.orientation === 'white') color = 'w';
+          else if (tr.item.orientation === 'black') color = 'b';
+          else color = _fenSideToMove(tr.item.fen);
           var keep;
-          if (matchOwnColorOnly && stm) {
-            keep = raw.filter(function (m) { return m[2] === undefined || m[2] === stm; });
+          if (matchOwnColorOnly && color) {
+            keep = raw.filter(function (m) { return m[2] === undefined || m[2] === color; });
           } else {
             keep = raw;
           }
