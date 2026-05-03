@@ -1349,7 +1349,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">repertoire-perspective-fix</span>
+    <span id="buildVersion">filter-stats-display</span>
     <button id="soundToggle" class="sound-toggle" type="button" aria-label="Toggle sound" title="Toggle sound effects">🔊</button>
     <!-- Stats drawer toggle (issue #9). Same lightweight aesthetic as the
          sound toggle — header real estate is tight, so it's icon-only. The
@@ -7710,8 +7710,15 @@
         return;
       }
       var meta = result.meta;
-      var built = meta.builtAt ? new Date(meta.builtAt).toISOString().slice(0, 10) : '?';
-      var n = meta.puzzlesParsed || 0;
+      // Prefer filterStats values when the dataset has been filtered — the
+      // pre-filter puzzlesParsed/builtAt would be wildly misleading on a
+      // filtered dataset (e.g. showing 5.86M when the served set is 3.7M).
+      var stats = meta.filterStats;
+      var n = (stats && typeof stats.bodiesKept === 'number')
+        ? stats.bodiesKept
+        : (meta.puzzlesParsed || 0);
+      var dateSrc = meta.filteredAt || meta.builtAt;
+      var built = dateSrc ? new Date(dateSrc).toISOString().slice(0, 10) : '?';
       $('#datasetInfo').text(n.toLocaleString() + ' puzzles · ' + built);
     }
 
