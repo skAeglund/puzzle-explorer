@@ -1349,7 +1349,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">sw-controllerchange-reload</span>
+    <span id="buildVersion">puzzle-start-ply</span>
     <button id="soundToggle" class="sound-toggle" type="button" aria-label="Toggle sound" title="Toggle sound effects">🔊</button>
     <!-- Stats drawer toggle (issue #9). Same lightweight aesthetic as the
          sound toggle — header real estate is tight, so it's icon-only. The
@@ -1629,11 +1629,21 @@
     </div>
 
     <div id="sessionPanel" class="panel" hidden>
-      <!-- Ply (source-game halfmove) range. Applies to BOTH "Start session"
-           and "Start training" — it's a global pre-filter on the position
-           pool. Rating range below is local to "Start session"; training
-           has its own per-round rating brackets in the disclosure. -->
-      <label title="Filter by source-game ply (halfmove number) at the puzzle position. 1 ply = 1 halfmove. Use a low max (e.g. 0–16) to drill opening puzzles only; widen to include middlegame/endgame puzzles. Applies to both Start session and Start training.">Source-game ply</label>
+      <!-- Puzzle start ply (source-game halfmove count where the puzzle
+           begins) range. Applies to BOTH "Start session" and "Start
+           training" — it's a global pre-filter on the position pool.
+           Rating range below is local to "Start session"; training has
+           its own per-round rating brackets in the disclosure.
+
+           Filter semantics: drop puzzles whose source game extends past
+           the threshold before the puzzle starts. NOT "drop puzzles
+           whose source game passed through the search position past
+           ply N" — that's a different question that the older m[3]-based
+           filter answered, and it gave useless results at popular
+           opening posKeys (every puzzle reaches 1.e4 at ply 1). The
+           m[4] field carries puzzle-start-ply per entry. Pre-m[4]
+           shards: filter no-ops gracefully (entries pass through). -->
+      <label title="Filter by puzzle start ply — the halfmove count of the source game at the position where the puzzle begins. Use a low max (e.g. 0–16) to drill puzzles whose source games entered the puzzle position in the opening; widen to include middlegame/endgame puzzles. Applies to both Start session and Start training.">Puzzle start ply</label>
       <div class="dual-range" id="plyRange">
         <div class="range-track"></div>
         <div class="range-fill" id="plyRangeFill"></div>

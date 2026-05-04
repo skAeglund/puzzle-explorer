@@ -9,15 +9,33 @@
  *   node analyzer/build-index.js <input.pgn> [out_dir]
  *
  * Output:
- *   <out_dir>/index/<hex>.json     posKey -> [[puzzleId, rating, color, ply], ...]
+ *   <out_dir>/index/<hex>.json     posKey -> [[puzzleId, rating, color, ply, startPly], ...]
  *   <out_dir>/puzzles/<hex>.ndjson one puzzle body per line, keyed off puzzleId hash
  *   <out_dir>/meta.json            build stats
  *
- * Index entry: tuple of [puzzleId, rating, color, ply]. All fields after
- * puzzleId are OPTIONAL by reader convention — older shards emit length-2
- * or length-3 entries and are passed through unchanged. Readers that filter
- * on a missing field treat it as "unknown" (color → all-pass; ply → no
- * filter, i.e. effectively Infinity).
+ * Index entry: tuple of [puzzleId, rating, color, ply, startPly]. All fields
+ * after puzzleId are OPTIONAL by reader convention — older shards emit
+ * length-2 / 3 / 4 entries and are passed through unchanged. Readers that
+ * filter on a missing field treat it as "unknown":
+ *   - color (m[2]) missing → "All colors" semantics (filter no-ops)
+ *   - ply (m[3]) missing → emission-ply filter no-ops (passes through)
+ *   - startPly (m[4]) missing → puzzle-start-ply filter no-ops (passes through)
+ *
+ * ply vs startPly — easy to confuse:
+ *   - ply (m[3]):      source-game ply at which THIS particular posKey was
+ *                      reached. Different across entries of the same puzzle
+ *                      (one entry per mainline position, one ply each). Used
+ *                      by filter-data.js's --max-emission-ply to drop deep
+ *                      mainline emissions while keeping the puzzle body.
+ *   - startPly (m[4]): source-game ply at which the PUZZLE ITSELF starts
+ *                      (= verbose.length, the final mainline ply where
+ *                      puzzle.fen lives). CONSTANT across all entries of
+ *                      a given puzzle. Used by the runtime "puzzle start
+ *                      ply" slider so that searching at e.g. 1.e4 with
+ *                      max-ply 16 actually filters out puzzles that start
+ *                      deep in the source game (which m[3] alone can't
+ *                      answer — m[3] for the 1.e4 entry is always 1 even
+ *                      if the puzzle starts at ply 50).
  */
 
 const fs = require('fs');
@@ -239,17 +257,28 @@ async function main() {
     }
     parsed++;
     const { body, positions } = r;
-    // Index entry: [puzzleId, rating, color, ply]. `color` is 'w' or 'b' —
-    // the puzzle's starting side-to-move (i.e. who solves the tactic). The
-    // frontend uses this to filter by board orientation: when the user
-    // is set up from black's perspective, only black-to-move puzzles
-    // match. `ply` is the source-game ply at which this position occurs
-    // (1-indexed); used by post-build filters to drop emissions past a
-    // depth limit without rebuilding. All fields after puzzleId are
+    // Index entry: [puzzleId, rating, color, ply, startPly]. See file
+    // header for the field semantics. Quick recap of the two ply fields,
+    // since this is the only place both are emitted:
+    //   - ply (m[3]):      source-game ply at THIS posKey (varies per entry)
+    //   - startPly (m[4]): source-game ply where the puzzle starts
+    //                      (= positions.length, constant per puzzle)
+    // `color` is 'w' or 'b' — the puzzle's starting side-to-move (i.e.
+    // who solves the tactic). The frontend uses this to filter by board
+    // orientation: when the user is set up from black's perspective,
+    // only black-to-move puzzles match. All fields after puzzleId are
     // OPTIONAL by reader convention — entries from older builds omit
     // them and are passed through unchanged. Cost: 3 chars/entry pre-gzip
-    // for color (~3.6MB at 1.2M scale), 2-4 chars for ply (~3-5MB at 1.2M).
+    // for color (~3.6MB at 1.2M scale), 2-4 chars for ply, similar for
+    // startPly. startPly repeats across a puzzle's entries so post-gzip
+    // cost is much smaller than pre-gzip (LZ77 collapses the duplication
+    // within each shard wherever entries cluster).
     const colorChar = body.fen.split(' ')[1];  // 'w' or 'b'
+    // Puzzle starts at the final mainline position (verbose[length-1].after
+    // === game.fen() === puzzle.fen). The 1-indexed ply at that position
+    // is `positions.length` (positions[i].ply = i+1, last index = length-1,
+    // last ply = length). Constant across all of this puzzle's entries.
+    const startPly = positions.length;
     // Per-position entry construction: ply differs across positions even
     // within the same source game, so we can't reuse a single pre-serialized
     // JSON string here — JSON.stringify per emit (still cheap; build is
@@ -265,7 +294,7 @@ async function main() {
       const sid = shardId(posKey);
       let buf = indexBufs.get(sid);
       if (!buf) { buf = []; indexBufs.set(sid, buf); allIndexShards.add(sid); }
-      const entryJson = JSON.stringify([body.id, body.rating, colorChar, ply]);
+      const entryJson = JSON.stringify([body.id, body.rating, colorChar, ply, startPly]);
       buf.push(posKey + '\t' + entryJson);
       positionEntries++;
     }

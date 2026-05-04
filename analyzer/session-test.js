@@ -87,17 +87,26 @@ section('Session.countUnsolved');
 
 // ━━━ filterByPly ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-// Length-4 fixture: [id, rating, color, ply]. Tests below use this when
-// they need ply data; the legacy MATCHES fixture (length-2) stays untouched
-// so backward-compat behavior remains exercised by every other section.
+// Length-5 fixture: [id, rating, color, ply, startPly]. filterByPly reads
+// m[4] (puzzle-start-ply), NOT m[3] (per-position emission ply). The two
+// fields differ across entries of the same puzzle: m[3] varies per posKey
+// (where in the source game this position was reached), m[4] is constant
+// per puzzle (where in the source game the puzzle itself starts). Test
+// fixture mirrors what an index shard at a single posKey would produce —
+// one entry per puzzle, all sharing the same m[3] (here: 1, as if every
+// puzzle was emitted at "1.e4"-style search position) but differing in
+// m[4] (each puzzle starts at a different point in its own source game).
+//
+// The legacy MATCHES fixture (length-2) stays untouched so backward-compat
+// behavior remains exercised by every other section.
 const MATCHES_PLY = [
-  ['p1', 1000, 'w', 3],
-  ['p2', 1200, 'b', 6],
-  ['p3', 1400, 'w', 9],
-  ['p4', 1600, 'b', 12],
-  ['p5', 1800, 'w', 18],
-  ['p6', 2000, 'b', 25],
-  ['p7', 2200, 'w', 40]
+  ['p1', 1000, 'w', 1,  3],
+  ['p2', 1200, 'b', 1,  6],
+  ['p3', 1400, 'w', 1,  9],
+  ['p4', 1600, 'b', 1, 12],
+  ['p5', 1800, 'w', 1, 18],
+  ['p6', 2000, 'b', 1, 25],
+  ['p7', 2200, 'w', 1, 40]
 ];
 
 section('Session.filterByPly');
@@ -123,33 +132,52 @@ section('Session.filterByPly');
   const oneSidedHigh = Session.filterByPly(MATCHES_PLY, 20, null);
   check('null upper → no upper limit', oneSidedHigh.length === 2);  // p6,p7
 
-  // Missing / non-numeric ply tuples pass through (legacy length-3 entries).
+  // Missing / non-numeric startPly tuples pass through. Older shards
+  // emitted length-3 (no ply, no startPly) and length-4 (per-position
+  // ply but no startPly) — both must survive the new m[4] filter, since
+  // back-compat with pre-m[4] shards is a hard rule.
   const mixed = [
     ['legacy3', 1500, 'w'],            // pre-ply build, length 3
-    ['legacy2', 1500],                 // legacy length 2 (older)
-    ['nullply', 1500, 'w', null],      // explicit null ply
-    ['plyok', 1500, 'w', 5]
+    ['legacy2', 1500],                 // older still, length 2
+    ['legacy4', 1500, 'w', 5],         // post-ply, pre-startPly: length 4
+    ['nullsp',  1500, 'w', 5, null],   // explicit null startPly
+    ['spok',    1500, 'w', 1, 5]       // length 5, in-range startPly
   ];
   const mixedOut = Session.filterByPly(mixed, 0, 10);
   check('legacy length-3 passes through', mixedOut.some(m => m[0] === 'legacy3'));
   check('legacy length-2 passes through', mixedOut.some(m => m[0] === 'legacy2'));
-  check('null ply passes through',       mixedOut.some(m => m[0] === 'nullply'));
-  check('numeric ply still filtered',     mixedOut.some(m => m[0] === 'plyok'));
+  check('legacy length-4 (no startPly) passes through',
+        mixedOut.some(m => m[0] === 'legacy4'));
+  check('null startPly passes through',   mixedOut.some(m => m[0] === 'nullsp'));
+  check('numeric startPly still filtered', mixedOut.some(m => m[0] === 'spok'));
 
   // Tight upper bound that would exclude the numeric one: legacy entries
-  // still pass through because we only filter when ply is numeric.
+  // still pass through because we only filter when startPly is numeric.
   const mixedOut2 = Session.filterByPly(mixed, 0, 3);
-  check('out-of-range numeric dropped', !mixedOut2.some(m => m[0] === 'plyok'));
+  check('out-of-range numeric dropped', !mixedOut2.some(m => m[0] === 'spok'));
   check('legacy still passes when numeric excluded',
         mixedOut2.some(m => m[0] === 'legacy3') &&
         mixedOut2.some(m => m[0] === 'legacy2') &&
-        mixedOut2.some(m => m[0] === 'nullply'));
+        mixedOut2.some(m => m[0] === 'legacy4') &&
+        mixedOut2.some(m => m[0] === 'nullsp'));
 
   // Defensive: malformed entries skipped, not crashing.
-  const dirty = [null, undefined, [], ['ok', 1500, 'w', 5]];
+  const dirty = [null, undefined, [], ['ok', 1500, 'w', 1, 5]];
   const dirtyOut = Session.filterByPly(dirty, 0, 80);
   check('malformed entries skipped',
         dirtyOut.length === 1 && dirtyOut[0][0] === 'ok');
+
+  // Per-position ply (m[3]) MUST NOT influence filtering — that was the
+  // previous behavior and was incorrect for "puzzle start ply" semantics.
+  // Verify: an entry with m[3] way outside the bounds and m[4] in-range
+  // survives; the symmetric case is dropped. Confirms we read m[4] only.
+  const m3outOf = [
+    ['m3low',  1500, 'w', 1,   30],   // m[3]=1 in range, m[4]=30 OUT → drop
+    ['m3high', 1500, 'w', 99,  5]     // m[3]=99 out, m[4]=5 IN → keep
+  ];
+  const m3test = Session.filterByPly(m3outOf, 0, 10);
+  check('m[3] (per-position ply) is not used as the filter field',
+        m3test.length === 1 && m3test[0][0] === 'm3high');
 
   // Does not mutate input.
   const inputBefore = JSON.stringify(MATCHES_PLY);
@@ -161,7 +189,10 @@ section('Session.filterByPly');
 
 section('Session.create — ply filter');
 {
-  // Tight ply window [9, 18] should yield p3,p4,p5 (regardless of rating).
+  // Tight startPly window [9, 18] should yield p3,p4,p5 (regardless of
+  // rating). Note: filter operates on m[4] (puzzle start ply) — m[3]
+  // (per-position emission ply) is constant=1 across the fixture and
+  // not what's being filtered.
   const s = Session.create({
     matches: MATCHES_PLY,
     plyMin: 9,
@@ -178,7 +209,7 @@ section('Session.create — ply filter');
 
 section('Session.create — ply + rating filters compose');
 {
-  // ply [0, 20] keeps p1..p5; rating [1300, 1900] keeps p3,p4,p5.
+  // startPly [0, 20] keeps p1..p5; rating [1300, 1900] keeps p3,p4,p5.
   // Intersection: p3,p4,p5.
   const s = Session.create({
     matches: MATCHES_PLY,
@@ -219,7 +250,7 @@ section('Session.create — ply filter empty → complete=true');
 
 section('Session.createTraining — ply filter applies to all rounds');
 {
-  // Ply window [0, 10] keeps p1,p2,p3 across all rounds.
+  // startPly window [0, 10] keeps p1,p2,p3 across all rounds.
   // Rating buckets: Easy[1000,1399]→p1,p2; Medium[1400,1999]→p3.
   // Hard[2000+] is empty after ply filter (p6@25, p7@40 both excluded).
   const t = Session.createTraining({
@@ -245,7 +276,7 @@ section('Session.createTraining — ply filter applies to all rounds');
 
 section('Session.createTraining — short rounds when ply filter starves a bucket');
 {
-  // Spec: target=15 in Easy, but ply window [0,5] gives only p1@3 in
+  // Spec: target=15 in Easy, but startPly window [0,5] gives only p1@3 in
   // Easy's rating bucket. Round delivers 1 puzzle (short), session does
   // not error. Matches the existing "small unseen pools silently deliver
   // short rounds" posture for previously-drilled puzzles.
