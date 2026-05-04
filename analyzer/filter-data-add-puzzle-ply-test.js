@@ -494,6 +494,238 @@ section('CLI: no filter and no --add-puzzle-ply rejects with exit 1');
     stderr.includes('filter') && stderr.includes('operation'));
 }
 
+// ─── runFilter: refuses --add-puzzle-ply when source is emission-capped ──
+section('runFilter: refuses --addPuzzlePly when source meta shows maxEmissionPly');
+{
+  // Reproduces the bug where --add-puzzle-ply was run on data-filtered/
+  // (which had been emission-capped). The pre-pass walks survivor entries
+  // and computes max(m[3]) clamped to the cap — producing wrong m[4]
+  // values. The safety check reads source meta.json's filterStats and
+  // refuses to run when the input is partial-puzzle.
+  const src = path.join(tmpRoot, 'src-emission-capped');
+  fs.mkdirSync(path.join(src, 'index'), { recursive: true });
+  fs.mkdirSync(path.join(src, 'puzzles'), { recursive: true });
+  fs.writeFileSync(path.join(src, 'index', '000.json'), JSON.stringify({
+    'k1': [['p1', 1500, 'w', 5]],
+  }));
+  fs.writeFileSync(path.join(src, 'puzzles', '000.ndjson'),
+    '{"id":"p1","rating":1500}\n');
+  // This is what filter-data.js writes after a --max-emission-ply run.
+  fs.writeFileSync(path.join(src, 'meta.json'), JSON.stringify({
+    source: 'test',
+    filterStats: {
+      maxEmissionPly: 22,
+      ratingFloor: 1000,
+    },
+  }));
+
+  const out = path.join(tmpRoot, 'out-emission-capped');
+  let threw = false, msg = '';
+  try {
+    F.runFilter({
+      sourceDir: src,
+      outDir: out,
+      addPuzzlePly: true,
+      dryRun: false,
+    });
+  } catch (e) {
+    threw = true;
+    msg = e.message;
+  }
+  check('throws when source meta has maxEmissionPly set', threw);
+  check('error explains: emission-capped',
+    msg.includes('emission-capped') && msg.includes('maxEmissionPly=22'));
+  check('error includes correct salvage recipe',
+    msg.includes('--source-dir ./data') && msg.includes('--add-puzzle-ply'));
+}
+
+section('runFilter: refuses --addPuzzlePly when source meta shows whitelistSize');
+{
+  // Whitelist also drops entries per puzzle (positions outside the whitelist
+  // disappear), leaving partial puzzles. max(m[3]) over surviving entries
+  // can underestimate when the puzzle's deepest position isn't in the
+  // whitelist. Same correctness issue as emission-capping.
+  const src = path.join(tmpRoot, 'src-whitelisted');
+  fs.mkdirSync(path.join(src, 'index'), { recursive: true });
+  fs.mkdirSync(path.join(src, 'puzzles'), { recursive: true });
+  fs.writeFileSync(path.join(src, 'index', '000.json'), JSON.stringify({
+    'k1': [['p1', 1500, 'w', 5]],
+  }));
+  fs.writeFileSync(path.join(src, 'puzzles', '000.ndjson'),
+    '{"id":"p1","rating":1500}\n');
+  fs.writeFileSync(path.join(src, 'meta.json'), JSON.stringify({
+    source: 'test',
+    filterStats: { whitelistSize: 100 },
+  }));
+
+  const out = path.join(tmpRoot, 'out-whitelisted');
+  let threw = false, msg = '';
+  try {
+    F.runFilter({
+      sourceDir: src,
+      outDir: out,
+      addPuzzlePly: true,
+      dryRun: false,
+    });
+  } catch (e) {
+    threw = true;
+    msg = e.message;
+  }
+  check('throws when source meta has whitelistSize > 0', threw);
+  check('error explains: whitelist-filtered',
+    msg.includes('whitelist-filtered') && msg.includes('whitelistSize=100'));
+}
+
+section('runFilter: --addPuzzlePly OK when source is rating-floor-only filtered');
+{
+  // ratingFloor drops puzzles WHOLESALE (all entries of a sub-floor puzzle
+  // drop together — rating is per-puzzle). Surviving puzzles retain ALL
+  // their entries, so max(m[3]) is unaffected. Backfill is safe.
+  const src = path.join(tmpRoot, 'src-rating-only');
+  fs.mkdirSync(path.join(src, 'index'), { recursive: true });
+  fs.mkdirSync(path.join(src, 'puzzles'), { recursive: true });
+  fs.writeFileSync(path.join(src, 'index', '000.json'), JSON.stringify({
+    'k1': [['p1', 1500, 'w', 5]],
+  }));
+  fs.writeFileSync(path.join(src, 'puzzles', '000.ndjson'),
+    '{"id":"p1","rating":1500}\n');
+  fs.writeFileSync(path.join(src, 'meta.json'), JSON.stringify({
+    source: 'test',
+    filterStats: {
+      ratingFloor: 1000,
+      maxEmissionPly: null,    // explicitly null — not capped
+      whitelistSize: null,
+    },
+  }));
+
+  const out = path.join(tmpRoot, 'out-rating-only');
+  let threw = false;
+  try {
+    F.runFilter({
+      sourceDir: src,
+      outDir: out,
+      addPuzzlePly: true,
+      dryRun: false,
+    });
+  } catch (e) {
+    threw = true;
+  }
+  check('does NOT throw when only rating-floor was applied to source',
+    !threw);
+  check('produced upgraded length-5 output',
+    fs.existsSync(path.join(out, 'index', '000.json')) &&
+    JSON.parse(fs.readFileSync(path.join(out, 'index', '000.json'), 'utf8'))['k1'][0].length === 5);
+}
+
+section('runFilter: --addPuzzlePly OK when source is max-puzzle-ply-only filtered');
+{
+  // maxPuzzlePly also drops puzzles wholesale (whole id removed when
+  // start ply > cap). Surviving puzzles retain ALL their entries, so
+  // max(m[3]) is unaffected. Backfill is safe.
+  const src = path.join(tmpRoot, 'src-puzzle-ply-only');
+  fs.mkdirSync(path.join(src, 'index'), { recursive: true });
+  fs.mkdirSync(path.join(src, 'puzzles'), { recursive: true });
+  fs.writeFileSync(path.join(src, 'index', '000.json'), JSON.stringify({
+    'k1': [['p1', 1500, 'w', 5]],
+  }));
+  fs.writeFileSync(path.join(src, 'puzzles', '000.ndjson'),
+    '{"id":"p1","rating":1500}\n');
+  fs.writeFileSync(path.join(src, 'meta.json'), JSON.stringify({
+    source: 'test',
+    filterStats: { maxPuzzlePly: 80 },
+  }));
+
+  const out = path.join(tmpRoot, 'out-puzzle-ply-only');
+  let threw = false;
+  try {
+    F.runFilter({
+      sourceDir: src,
+      outDir: out,
+      addPuzzlePly: true,
+      dryRun: false,
+    });
+  } catch (e) {
+    threw = true;
+  }
+  check('does NOT throw when only max-puzzle-ply was applied to source',
+    !threw);
+}
+
+section('runFilter: safety check skipped when meta.json absent');
+{
+  // No meta.json means we can't tell if the source is filtered — the
+  // safety check is best-effort. Fall back to running. This preserves
+  // back-compat for synthetic test fixtures and any hand-built sources
+  // without meta.
+  const src = path.join(tmpRoot, 'src-no-meta');
+  fs.mkdirSync(path.join(src, 'index'), { recursive: true });
+  fs.mkdirSync(path.join(src, 'puzzles'), { recursive: true });
+  fs.writeFileSync(path.join(src, 'index', '000.json'), JSON.stringify({
+    'k1': [['p1', 1500, 'w', 5]],
+  }));
+  fs.writeFileSync(path.join(src, 'puzzles', '000.ndjson'),
+    '{"id":"p1","rating":1500}\n');
+  // NO meta.json deliberately
+
+  const out = path.join(tmpRoot, 'out-no-meta');
+  let threw = false;
+  try {
+    F.runFilter({
+      sourceDir: src,
+      outDir: out,
+      addPuzzlePly: true,
+      dryRun: false,
+    });
+  } catch (e) {
+    threw = true;
+  }
+  check('does NOT throw when source has no meta.json', !threw);
+}
+
+section('runFilter: combined unsafe filter+stamp single-pass IS allowed');
+{
+  // Anders's salvage path: run filter-data.js with --max-emission-ply
+  // AND --add-puzzle-ply in one call against UNFILTERED source. The
+  // pre-pass walks the unfiltered source (full emissions visible),
+  // computes correct max(m[3]) per puzzle, then the filter writes the
+  // capped output with the canonical m[4] stamped. Single-pass is the
+  // ONLY correct way to combine these — the safety check must not
+  // refuse it.
+  const src = path.join(tmpRoot, 'src-salvage');
+  fs.mkdirSync(path.join(src, 'index'), { recursive: true });
+  fs.mkdirSync(path.join(src, 'puzzles'), { recursive: true });
+  // Unfiltered source: NO filterStats in meta. Has entries at deep plies.
+  fs.writeFileSync(path.join(src, 'index', '000.json'), JSON.stringify({
+    'k1': [['p1', 1500, 'w', 5]],   // emission ply 5
+    'k2': [['p1', 1500, 'b', 30]],  // emission ply 30 — the puzzle's start
+  }));
+  fs.writeFileSync(path.join(src, 'puzzles', '000.ndjson'),
+    '{"id":"p1","rating":1500}\n');
+  fs.writeFileSync(path.join(src, 'meta.json'), JSON.stringify({
+    source: 'unfiltered build',
+  }));
+
+  const out = path.join(tmpRoot, 'out-salvage');
+  const stats = F.runFilter({
+    sourceDir: src,
+    outDir: out,
+    maxEmissionPly: 22,
+    addPuzzlePly: true,
+    dryRun: false,
+  });
+
+  check('filter+stamp succeeded', stats.entriesUpgradedToLength5 === 1);
+  const outIdx = JSON.parse(fs.readFileSync(path.join(out, 'index', '000.json'), 'utf8'));
+  // k2 (emission 30) was dropped by emission-cap; k1 (emission 5) survives
+  // and gets m[4]=30 stamped — the CORRECT puzzle start ply, derived from
+  // the unfiltered source before filtering.
+  check('survivor at k1 stamped with correct m[4]=30 (NOT clamped to cap)',
+    outIdx['k1'] && outIdx['k1'][0][4] === 30,
+    'got ' + (outIdx['k1'] && outIdx['k1'][0][4]));
+  check('emission-capped entry at k2 dropped',
+    !outIdx['k2']);
+}
+
 // ─── cleanup ─────────────────────────────────────────────────────────────
 fs.rmSync(tmpRoot, { recursive: true, force: true });
 

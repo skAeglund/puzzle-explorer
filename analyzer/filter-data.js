@@ -40,15 +40,23 @@
  *        Length-5+ entries pass through unchanged (m[4] already canonical).
  *        Length-3 entries pass through unchanged — they lack the anchoring
  *        m[3] field, and synthesizing one would amount to fabricating data
- *        we don't have. The stamping value comes from the same pre-pass
- *        --max-puzzle-ply uses (max of m[3] across the puzzle's entries
- *        when input is length-4; m[4] itself when input is already
- *        length-5). For non-transposing source games these values are
- *        exact; for transposing ones the max(m[3]) approximation may
- *        underestimate startPly by a few plies. A full rebuild via
- *        build-index.js gives canonical m[4] for all puzzles;
- *        --add-puzzle-ply is a backfill for already-built data that
- *        avoids the multi-hour PGN re-walk.
+ *        we don't have. The stamping value comes from a pre-pass that
+ *        computes max(m[3]) per puzzleId across the source dir's entries
+ *        (or reads m[4] directly when input is already length-5).
+ *
+ *        IMPORTANT: source must be UNFILTERED build output (or filtered
+ *        only by ratingFloor / maxPuzzlePly, which drop puzzles wholesale).
+ *        Running against a source that's been emission-capped (filtered by
+ *        --max-emission-ply) or position-whitelisted produces wrong m[4]
+ *        values, because those filters drop SOME entries per puzzle —
+ *        max(m[3]) over the survivors then clamps to the cap rather than
+ *        reflecting the puzzle's true source-game start ply. The script
+ *        detects this via meta.json's filterStats and refuses to run.
+ *
+ *        For non-transposing source games the derived value is exact (the
+ *        puzzle's last emission IS its start ply); for transposing games
+ *        max(m[3]) may underestimate by a few plies. A full rebuild via
+ *        build-index.js gives canonical m[4] for all puzzles.
  *
  *        Bypasses the "no-op identity copy" refusal — running with only
  *        --add-puzzle-ply is a valid operation (stamps existing data
@@ -59,8 +67,8 @@
  *   - Size shrink:            node filter-data.js --rating-floor 1000 --max-emission-ply 24
  *   - Repertoire + shrink:    node filter-data.js whitelist.txt --rating-floor 1000
  *   - Drop deep middlegame:   node filter-data.js --max-puzzle-ply 50
- *   - Backfill m[4] only:     node filter-data.js --add-puzzle-ply --source-dir ./data-filtered --out-dir ./data-filtered-stamped
- *   - Filter + stamp:         node filter-data.js --rating-floor 1000 --max-emission-ply 22 --max-puzzle-ply 80 --add-puzzle-ply
+ *   - Filter + stamp m[4]:    node filter-data.js --source-dir ./data --rating-floor 1000 --max-emission-ply 22 --max-puzzle-ply 80 --add-puzzle-ply
+ *   - Stamp m[4] only (must run on unfiltered build): node filter-data.js --source-dir ./data --out-dir ./data-stamped --add-puzzle-ply
  *
  * Each filtered run also annotates meta.json with `filterStats` recording
  * what was dropped/upgraded and why, so the output is self-documenting.
@@ -398,6 +406,50 @@ function runFilter(opts) {
   const hasAddPuzzlePly = !!addPuzzlePly;
   if (!hasWhitelist && !hasRating && !hasEmissionPly && !hasPuzzlePly && !hasAddPuzzlePly) {
     throw new Error('no filter or operation active; refusing to run as identity copy');
+  }
+
+  // ─── Safety: --add-puzzle-ply requires unfiltered source ───
+  // The pre-pass derives m[4] = max(m[3]) per puzzleId across entries
+  // visible in the source dir. If the source has been emission-ply-capped
+  // OR position-whitelisted, entries are MISSING per puzzle — and max
+  // over the survivors clamps to whatever the cap was (or whatever the
+  // whitelist let through). The result is wrong: every puzzle whose
+  // deepest surviving emission hits the cap gets m[4] = cap, regardless
+  // of its true start ply.
+  //
+  // ratingFloor and maxPuzzlePly are safe — they drop puzzles WHOLESALE
+  // (rating is a per-puzzle property, so all entries of a sub-floor puzzle
+  // drop together; maxPuzzlePly drops by puzzle id). Surviving puzzles
+  // retain ALL their entries, so max(m[3]) is unaffected.
+  //
+  // Detect the unsafe case via meta.json's filterStats. If it shows the
+  // input was emission-capped or whitelisted, refuse with the right recipe.
+  if (hasAddPuzzlePly && fs.existsSync(metaIn)) {
+    let srcMeta;
+    try { srcMeta = JSON.parse(fs.readFileSync(metaIn, 'utf8')); } catch (e) { srcMeta = null; }
+    const fs0 = srcMeta && srcMeta.filterStats;
+    if (fs0) {
+      const cap = (typeof fs0.maxEmissionPly === 'number') && fs0.maxEmissionPly > 0
+        ? fs0.maxEmissionPly : null;
+      const wlSize = (typeof fs0.whitelistSize === 'number') && fs0.whitelistSize > 0
+        ? fs0.whitelistSize : 0;
+      if (cap !== null || wlSize > 0) {
+        const why = cap !== null
+          ? `source was emission-capped at maxEmissionPly=${cap}`
+          : `source was whitelist-filtered (whitelistSize=${wlSize})`;
+        throw new Error(
+          '--add-puzzle-ply: ' + why + '. Backfilling against partial-puzzle ' +
+          'input clamps m[4] to the cap (or to whatever positions survived ' +
+          'the whitelist), producing wrong values. Re-run from the unfiltered ' +
+          'build output, applying all filters AND --add-puzzle-ply in one pass:\n' +
+          '  node analyzer/filter-data.js \\\n' +
+          '    --source-dir ./data \\\n' +
+          '    --out-dir ./data-filtered \\\n' +
+          '    --rating-floor N --max-emission-ply N --max-puzzle-ply N \\\n' +
+          '    --add-puzzle-ply'
+        );
+      }
+    }
   }
 
   // Output dir setup — wipe and recreate for repeatability. Skipped on
