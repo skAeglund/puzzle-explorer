@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
  * filter-data.js — Filter a built data directory by position whitelist and/or
- * threshold filters (rating floor, emission ply cap, puzzle-start ply cap).
+ * threshold filters (rating floor, emission ply cap, puzzle-start ply cap),
+ * and optionally stamp the puzzle-start-ply field (m[4]) on every index entry.
  *
  * Reads <source-dir> (default ./data/) and writes a filtered copy to
  * <out-dir> (default ./data-filtered/). The local source directory is
@@ -26,18 +27,43 @@
  *
  *   4. --max-puzzle-ply N:
  *        Drop the WHOLE puzzle (body + all index entries) if its starting
- *        position is past ply N. Starting ply is derived as the max ply
- *        across all index entries for that puzzleId — requires a pre-pass
- *        over the index, additive ~5min on a multi-GB build.
+ *        position is past ply N. Starting ply is read from m[4] (canonical)
+ *        if entries have it, else derived as max ply (m[3]) across all
+ *        index entries for that puzzleId — requires a pre-pass over the
+ *        index, additive ~5min on a multi-GB build.
  *
- * Filters can be combined freely. Common recipes:
+ * Operations (not filters — they don't drop anything):
+ *
+ *   --add-puzzle-ply:
+ *        Stamp m[4] (puzzle-start ply) on length-4 index entries to upgrade
+ *        them in-place to length-5 [id, rating, color, ply, startPly].
+ *        Length-5+ entries pass through unchanged (m[4] already canonical).
+ *        Length-3 entries pass through unchanged — they lack the anchoring
+ *        m[3] field, and synthesizing one would amount to fabricating data
+ *        we don't have. The stamping value comes from the same pre-pass
+ *        --max-puzzle-ply uses (max of m[3] across the puzzle's entries
+ *        when input is length-4; m[4] itself when input is already
+ *        length-5). For non-transposing source games these values are
+ *        exact; for transposing ones the max(m[3]) approximation may
+ *        underestimate startPly by a few plies. A full rebuild via
+ *        build-index.js gives canonical m[4] for all puzzles;
+ *        --add-puzzle-ply is a backfill for already-built data that
+ *        avoids the multi-hour PGN re-walk.
+ *
+ *        Bypasses the "no-op identity copy" refusal — running with only
+ *        --add-puzzle-ply is a valid operation (stamps existing data
+ *        without filtering anything else).
+ *
+ * Filters and operations can be combined freely. Common recipes:
  *   - Repertoire-only:        node filter-data.js whitelist.txt
  *   - Size shrink:            node filter-data.js --rating-floor 1000 --max-emission-ply 24
  *   - Repertoire + shrink:    node filter-data.js whitelist.txt --rating-floor 1000
  *   - Drop deep middlegame:   node filter-data.js --max-puzzle-ply 50
+ *   - Backfill m[4] only:     node filter-data.js --add-puzzle-ply --source-dir ./data-filtered --out-dir ./data-filtered-stamped
+ *   - Filter + stamp:         node filter-data.js --rating-floor 1000 --max-emission-ply 22 --max-puzzle-ply 80 --add-puzzle-ply
  *
  * Each filtered run also annotates meta.json with `filterStats` recording
- * what was dropped and why, so the output is self-documenting.
+ * what was dropped/upgraded and why, so the output is self-documenting.
  *
  * Usage:
  *   node analyzer/filter-data.js [whitelist.txt]
@@ -46,10 +72,12 @@
  *     [--rating-floor N]         drop entries (and bodies) below this rating
  *     [--max-emission-ply N]     drop entries past this ply
  *     [--max-puzzle-ply N]       drop puzzles whose start ply > N
+ *     [--add-puzzle-ply]         stamp m[4] (puzzle-start ply) on every entry
  *     [--dry-run]                report stats without writing
  *
- * Exits non-zero if no filter is active (refuses to run as a no-op identity
- * copy), or if the source dir is missing structure.
+ * Exits non-zero if no filter or operation is active (refuses to run as a
+ * no-op identity copy), if source-dir == out-dir (would wipe input), or if
+ * the source dir is missing structure.
  */
 
 const fs = require('fs');
@@ -78,18 +106,29 @@ function parseArgs(argv) {
 // ─── pure: filter index shard JSON ───────────────────────────────────────
 // Input: parsed shard object {posKey: [entry, ...]} and a `criteria` bag.
 // Output: { kept: {posKey: [entry...]}, referencedPuzzleIds, positionsKept,
-//           positionsDropped, entriesKept, entriesDropped }.
+//           positionsDropped, entriesKept, entriesDropped, entriesUpgraded }.
 //
-// Each entry is [puzzleId, rating, color?, ply?, ...]. An entry survives iff:
+// Each entry is [puzzleId, rating, color?, ply?, startPly?, ...]. An entry
+// survives iff:
 //   - whitelistSet, if provided, contains its posKey
 //   - rating ≥ ratingFloor (if active)
 //   - ply ≤ maxEmissionPly (if active; entries lacking a ply field pass)
 //   - puzzleId ∉ droppedPuzzleIds (if provided)
+//
+// Surviving entries are also UPGRADED in shape iff puzzleStartPlyMap is
+// provided:
+//   - length-4 entries [id, rating, color, ply] gain m[4] from the map →
+//     length-5 [id, rating, color, ply, startPly]. Increments
+//     entriesUpgraded.
+//   - length-5+ entries pass through unchanged (m[4] already canonical).
+//   - length-3 entries pass through unchanged (no m[3] to anchor on; we
+//     don't synthesize a missing m[3] just to add m[4]).
+//
 // A position survives iff it has at least one surviving entry.
 //
-// All filter inputs are optional. When all are nullish, the shard is passed
-// through unchanged (every position kept) — this is the legacy whitelist-only
-// path with the whitelistSet absent.
+// All filter inputs are optional. When all are nullish AND no upgrade map
+// is provided, the shard is passed through unchanged (every position kept,
+// no per-entry copy) — fast path for the legacy whitelist-only case.
 function filterIndexShard(shardObj, criteria) {
   // Backward-compat: callers passing a Set as the second arg get the old
   // whitelist-only behavior. Keeps existing tests and external callers
@@ -101,6 +140,7 @@ function filterIndexShard(shardObj, criteria) {
   const ratingFloor = (typeof c.ratingFloor === 'number') ? c.ratingFloor : null;
   const maxEmissionPly = (typeof c.maxEmissionPly === 'number') ? c.maxEmissionPly : null;
   const droppedPuzzleIds = c.droppedPuzzleIds || null;
+  const puzzleStartPlyMap = c.puzzleStartPlyMap || null;
 
   const kept = Object.create(null);
   const referencedIds = new Set();
@@ -108,6 +148,12 @@ function filterIndexShard(shardObj, criteria) {
   let positionsDropped = 0;
   let entriesKept = 0;
   let entriesDropped = 0;
+  let entriesUpgraded = 0;
+
+  // Per-entry walk needed iff there's filtering to do OR upgrading to do.
+  // Without either, the shard pass-through fast path applies.
+  const hasEntryFilter = (ratingFloor !== null) || (maxEmissionPly !== null) || !!droppedPuzzleIds;
+  const hasUpgrade = !!puzzleStartPlyMap;
 
   for (const posKey of Object.keys(shardObj)) {
     if (whitelistSet && !whitelistSet.has(posKey)) {
@@ -116,9 +162,10 @@ function filterIndexShard(shardObj, criteria) {
       continue;
     }
     const inEntries = shardObj[posKey];
-    // Fast path: no entry-level filters → keep array as-is, skip per-entry
-    // copy. Big win on legacy whitelist-only filtering at multi-GB scale.
-    if (ratingFloor === null && maxEmissionPly === null && !droppedPuzzleIds) {
+    // Fast path: no entry-level filters AND no upgrades → keep array as-is,
+    // skip per-entry copy. Big win on legacy whitelist-only filtering at
+    // multi-GB scale.
+    if (!hasEntryFilter && !hasUpgrade) {
       kept[posKey] = inEntries;
       positionsKept++;
       entriesKept += inEntries.length;
@@ -127,7 +174,7 @@ function filterIndexShard(shardObj, criteria) {
       }
       continue;
     }
-    // Entry-level filtering path.
+    // Entry-level filtering and/or upgrade path.
     const survivors = [];
     for (let i = 0; i < inEntries.length; i++) {
       const e = inEntries[i];
@@ -141,7 +188,20 @@ function filterIndexShard(shardObj, criteria) {
       if (maxEmissionPly !== null && ply !== null && ply > maxEmissionPly) {
         entriesDropped++; continue;
       }
-      survivors.push(e);
+      // Upgrade to length-5 if requested AND the entry needs it.
+      let outE = e;
+      if (hasUpgrade && e.length === 4) {
+        const sp = puzzleStartPlyMap.get(id);
+        if (typeof sp === 'number' && isFinite(sp) && sp > 0) {
+          outE = [e[0], e[1], e[2], e[3], sp];
+          entriesUpgraded++;
+        }
+        // If the map has no entry for this id (shouldn't happen — pre-pass
+        // walks the same shards we're now reading) or has 0/non-numeric,
+        // leave the entry length-4. Filter readers already pass-through
+        // length-4 entries via filterByPly's missing-m[4] back-compat.
+      }
+      survivors.push(outE);
       entriesKept++;
       referencedIds.add(id);
     }
@@ -159,25 +219,51 @@ function filterIndexShard(shardObj, criteria) {
     positionsDropped: positionsDropped,
     entriesKept: entriesKept,
     entriesDropped: entriesDropped,
+    entriesUpgraded: entriesUpgraded,
   };
 }
 
 // ─── pure: compute puzzle starting ply from index entries ────────────────
-// For each puzzleId, the starting ply equals the MAX ply across all of its
-// index entries. (build-index walks each source-game's mainline once and
-// emits the puzzle's `fen` — its starting position — at the final ply.
-// Earlier plies are positions the source game passed through before the
-// blunder.) Updates `maxByIdMap` in place; entries without a ply field
-// (legacy length-3 shards) contribute 0, which means the puzzle is treated
-// as starting at ply 0 — never dropped by --max-puzzle-ply, which is the
-// correct backward-compat behavior.
+// For each puzzleId, derives the puzzle's source-game starting ply.
+//
+// Input shape preference, per-entry:
+//   1. Length-5+ entry: read m[4] directly (canonical startPly from
+//      build-index.js — exact, dedup-invariant, identical across all
+//      entries of one puzzle, so the per-puzzle "max" reduces to the
+//      single value).
+//   2. Length-4 entry: read m[3] (per-position emission ply). MAX m[3]
+//      across the puzzle's entries approximates startPly. Exact for
+//      non-transposing source games (the overwhelming majority); for
+//      transposing games (where the source mainline returns to an
+//      earlier-seen position) max(m[3]) may underestimate by a few
+//      plies because dedup-keeps-min-ply collapses re-visited positions
+//      to their earliest emission. Acceptable for filter-data.js's use
+//      cases (--max-puzzle-ply tolerates a few plies of imprecision;
+//      --add-puzzle-ply backfill labels are good enough until full
+//      rebuild).
+//   3. Length-3 entry: contributes 0. Per --max-puzzle-ply's contract
+//      (legacy entries are never dropped by puzzle-ply filtering),
+//      and per --add-puzzle-ply's contract (length-3 entries don't
+//      get upgraded — no anchoring m[3] to extend from).
+//
+// Updates `maxByIdMap` in place.
 function collectMaxPlyPerPuzzle(shardObj, maxByIdMap) {
   for (const posKey of Object.keys(shardObj)) {
     const entries = shardObj[posKey];
     for (let i = 0; i < entries.length; i++) {
       const e = entries[i];
       const id = e[0];
-      const ply = (e.length >= 4 && typeof e[3] === 'number') ? e[3] : 0;
+      let ply = 0;
+      if (e.length >= 5 && typeof e[4] === 'number' && isFinite(e[4])) {
+        ply = e[4];          // canonical startPly
+      } else if (e.length >= 4 && typeof e[3] === 'number' && isFinite(e[3])) {
+        ply = e[3];          // approximate via emission ply
+      }
+      // Guard against NaN-contamination via isFinite above. NaN passes
+      // typeof === 'number', and NaN > anything is always false — so a
+      // single NaN entry would freeze the map value for that puzzle at
+      // NaN forever. Treating non-finite values as 0 (legacy fallback)
+      // keeps the map well-formed.
       const prev = maxByIdMap.get(id);
       if (prev === undefined || ply > prev) maxByIdMap.set(id, ply);
     }
@@ -260,8 +346,12 @@ function filterBodyShard(ndjsonText, criteria) {
 // all writes. Returns a stats object.
 //
 // Filters: any combination of whitelistSet, ratingFloor, maxEmissionPly,
-// maxPuzzlePly. At least one must be set or runFilter throws (no-op identity
-// copies are refused — they're never what the caller wanted).
+// maxPuzzlePly. Operations: addPuzzlePly. At least one filter or operation
+// must be active or runFilter throws (no-op identity copies are refused —
+// they're never what the caller wanted).
+//
+// outDir must not equal sourceDir — output prep wipes the dir, which would
+// destroy the input. Resolved paths compared post-realpath.
 function runFilter(opts) {
   const {
     sourceDir, outDir, dryRun,
@@ -269,6 +359,7 @@ function runFilter(opts) {
     ratingFloor,
     maxEmissionPly,
     maxPuzzlePly,
+    addPuzzlePly,
   } = opts;
   const indexInDir = path.join(sourceDir, 'index');
   const puzzlesInDir = path.join(sourceDir, 'puzzles');
@@ -278,13 +369,35 @@ function runFilter(opts) {
     throw new Error(`source dir missing index/ or puzzles/: ${sourceDir}`);
   }
 
-  // Refuse to run as identity copy — caller almost certainly forgot a filter.
+  // In-place wipe guard. Source is always realpath'd (must exist). Output
+  // is realpath'd ONLY if it already exists — a non-existent path can't
+  // be a symlink to source, and realpathSync would throw on missing paths.
+  // Comparing canonical paths catches:
+  //   - same string (./data-filtered ./data-filtered)
+  //   - relative vs absolute (./data /home/.../data)
+  //   - symlinked outDir pointing at source (rare, but rmSync follows
+  //     directory symlinks recursively, which would wipe source)
+  const resolvedSource = fs.realpathSync(sourceDir);
+  const resolvedOut = fs.existsSync(outDir)
+    ? fs.realpathSync(outDir)
+    : path.resolve(outDir);
+  if (resolvedSource === resolvedOut) {
+    throw new Error(
+      'sourceDir and outDir resolve to the same path; refusing to wipe input. ' +
+      'Pick a different --out-dir, then move/replace the source dir manually.'
+    );
+  }
+
+  // Refuse to run as identity copy — caller almost certainly forgot a filter
+  // or operation. addPuzzlePly counts: it's not a filter (drops nothing)
+  // but it transforms entries, which is a real operation.
   const hasWhitelist = whitelistSet && whitelistSet.size > 0;
   const hasRating = (typeof ratingFloor === 'number') && ratingFloor > 0;
   const hasEmissionPly = (typeof maxEmissionPly === 'number') && maxEmissionPly > 0;
   const hasPuzzlePly = (typeof maxPuzzlePly === 'number') && maxPuzzlePly > 0;
-  if (!hasWhitelist && !hasRating && !hasEmissionPly && !hasPuzzlePly) {
-    throw new Error('no filter active; refusing to run as identity copy');
+  const hasAddPuzzlePly = !!addPuzzlePly;
+  if (!hasWhitelist && !hasRating && !hasEmissionPly && !hasPuzzlePly && !hasAddPuzzlePly) {
+    throw new Error('no filter or operation active; refusing to run as identity copy');
   }
 
   // Output dir setup — wipe and recreate for repeatability. Skipped on
@@ -300,21 +413,28 @@ function runFilter(opts) {
   const indexFiles = fs.readdirSync(indexInDir).filter(f => f.endsWith('.json'));
 
   // ─── Optional pre-pass: build puzzleId → maxPly map ───
-  // Only triggered by --max-puzzle-ply since deriving puzzle-start ply from
-  // index entries requires seeing every entry for each puzzle. ~140MB peak
-  // RSS at 5.86M scale; tolerable.
+  // Triggered by either:
+  //   - --max-puzzle-ply: needs droppedPuzzleIds (which puzzles to drop
+  //     wholesale)
+  //   - --add-puzzle-ply: needs the map itself, threaded into
+  //     filterIndexShard so length-4 entries can be upgraded to length-5
+  //     by appending the map's value as m[4]
+  // Both cases share the same pre-pass; running once. ~140MB peak RSS at
+  // 5.86M scale; tolerable.
   let droppedPuzzleIds = null;
   let puzzleStartPlyMap = null;
-  if (hasPuzzlePly) {
+  if (hasPuzzlePly || hasAddPuzzlePly) {
     puzzleStartPlyMap = new Map();
     for (const f of indexFiles) {
       const text = fs.readFileSync(path.join(indexInDir, f), 'utf8');
       const obj = JSON.parse(text);
       collectMaxPlyPerPuzzle(obj, puzzleStartPlyMap);
     }
-    droppedPuzzleIds = new Set();
-    for (const [id, maxPly] of puzzleStartPlyMap) {
-      if (maxPly > maxPuzzlePly) droppedPuzzleIds.add(id);
+    if (hasPuzzlePly) {
+      droppedPuzzleIds = new Set();
+      for (const [id, maxPly] of puzzleStartPlyMap) {
+        if (maxPly > maxPuzzlePly) droppedPuzzleIds.add(id);
+      }
     }
   }
 
@@ -323,6 +443,7 @@ function runFilter(opts) {
   let positionsDropped = 0;
   let entriesKept = 0;
   let entriesDropped = 0;
+  let entriesUpgraded = 0;
   let indexShardsKept = 0;
   let indexShardsDropped = 0;
   // Union of ids referenced by ALL kept entries across ALL shards.
@@ -333,6 +454,10 @@ function runFilter(opts) {
     ratingFloor: hasRating ? ratingFloor : null,
     maxEmissionPly: hasEmissionPly ? maxEmissionPly : null,
     droppedPuzzleIds: droppedPuzzleIds,
+    // Threading the map into filterIndexShard ONLY when --add-puzzle-ply
+    // is set — keeps existing filter modes' output shape unchanged. Users
+    // who want m[4] stamping must opt in explicitly.
+    puzzleStartPlyMap: hasAddPuzzlePly ? puzzleStartPlyMap : null,
   };
   for (const f of indexFiles) {
     const text = fs.readFileSync(path.join(indexInDir, f), 'utf8');
@@ -342,6 +467,7 @@ function runFilter(opts) {
     positionsDropped += r.positionsDropped;
     entriesKept += r.entriesKept;
     entriesDropped += r.entriesDropped;
+    entriesUpgraded += r.entriesUpgraded || 0;
     for (const id of r.referencedPuzzleIds) referencedIds.add(id);
     if (r.positionsKept > 0) {
       indexShardsKept++;
@@ -394,7 +520,9 @@ function runFilter(opts) {
       ratingFloor: hasRating ? ratingFloor : null,
       maxEmissionPly: hasEmissionPly ? maxEmissionPly : null,
       maxPuzzlePly: hasPuzzlePly ? maxPuzzlePly : null,
+      addPuzzlePly: hasAddPuzzlePly,
       puzzlesDroppedByPuzzlePly: droppedPuzzleIds ? droppedPuzzleIds.size : 0,
+      entriesUpgradedToLength5: entriesUpgraded,
       indexShardsKept,
       indexShardsDropped,
       positionsKept,
@@ -418,7 +546,9 @@ function runFilter(opts) {
     ratingFloor: hasRating ? ratingFloor : null,
     maxEmissionPly: hasEmissionPly ? maxEmissionPly : null,
     maxPuzzlePly: hasPuzzlePly ? maxPuzzlePly : null,
+    addPuzzlePly: hasAddPuzzlePly,
     puzzlesDroppedByPuzzlePly: droppedPuzzleIds ? droppedPuzzleIds.size : 0,
+    entriesUpgradedToLength5: entriesUpgraded,
     indexShardsKept, indexShardsDropped,
     positionsKept, positionsDropped,
     entriesKept, entriesDropped,
@@ -440,6 +570,7 @@ function main() {
   const RATING_FLOOR = flags['rating-floor'] != null ? parseInt(flags['rating-floor'], 10) : null;
   const MAX_EMISSION_PLY = flags['max-emission-ply'] != null ? parseInt(flags['max-emission-ply'], 10) : null;
   const MAX_PUZZLE_PLY = flags['max-puzzle-ply'] != null ? parseInt(flags['max-puzzle-ply'], 10) : null;
+  const ADD_PUZZLE_PLY = !!flags['add-puzzle-ply'];
 
   // Validate any provided numeric flags up front.
   for (const [name, val] of [
@@ -453,12 +584,13 @@ function main() {
     }
   }
 
-  // Need at least one filter
-  if (!WHITELIST && RATING_FLOOR === null && MAX_EMISSION_PLY === null && MAX_PUZZLE_PLY === null) {
+  // Need at least one filter or operation. --add-puzzle-ply alone is a
+  // valid operation (stamps existing data without filtering anything else).
+  if (!WHITELIST && RATING_FLOOR === null && MAX_EMISSION_PLY === null && MAX_PUZZLE_PLY === null && !ADD_PUZZLE_PLY) {
     console.error('usage: node filter-data.js [whitelist.txt] [--source-dir DIR] [--out-dir DIR]');
     console.error('                            [--rating-floor N] [--max-emission-ply N]');
-    console.error('                            [--max-puzzle-ply N] [--dry-run]');
-    console.error('At least one filter must be specified.');
+    console.error('                            [--max-puzzle-ply N] [--add-puzzle-ply] [--dry-run]');
+    console.error('At least one filter or operation must be specified.');
     process.exit(1);
   }
 
@@ -479,6 +611,7 @@ function main() {
   if (RATING_FLOOR !== null) console.log(`rating floor:        ${RATING_FLOOR}`);
   if (MAX_EMISSION_PLY !== null) console.log(`max emission ply:    ${MAX_EMISSION_PLY}`);
   if (MAX_PUZZLE_PLY !== null) console.log(`max puzzle-start ply: ${MAX_PUZZLE_PLY}`);
+  if (ADD_PUZZLE_PLY)          console.log(`add puzzle-start ply: yes (stamping m[4] on length-4 entries)`);
   console.log(`source:    ${SOURCE}`);
   console.log(`out:       ${OUT}${DRY ? '  (DRY RUN — no writes)' : ''}`);
 
@@ -489,6 +622,7 @@ function main() {
     ratingFloor: RATING_FLOOR,
     maxEmissionPly: MAX_EMISSION_PLY,
     maxPuzzlePly: MAX_PUZZLE_PLY,
+    addPuzzlePly: ADD_PUZZLE_PLY,
     dryRun: DRY,
   });
 

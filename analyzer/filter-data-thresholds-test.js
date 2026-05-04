@@ -172,7 +172,7 @@ section('filterBodyShard: backward-compat (Set as 2nd arg)');
 }
 
 // ─── collectMaxPlyPerPuzzle ─────────────────────────────────────────────
-section('collectMaxPlyPerPuzzle');
+section('collectMaxPlyPerPuzzle: max(m[3]) approximation for length-4 input');
 {
   const shard1 = {
     'pos-A': [['p1', 1500, 'w', 5], ['p2', 1500, 'w', 10]],
@@ -184,7 +184,8 @@ section('collectMaxPlyPerPuzzle');
   const m = new Map();
   F.collectMaxPlyPerPuzzle(shard1, m);
   F.collectMaxPlyPerPuzzle(shard2, m);
-  check('p1 max ply = 60', m.get('p1') === 60, 'got ' + m.get('p1'));
+  check('p1 max ply = 60 (length-4: max of 5,25,60)',
+    m.get('p1') === 60, 'got ' + m.get('p1'));
   check('p2 max ply = 10', m.get('p2') === 10);
   check('p3 max ply = 8', m.get('p3') === 8);
 }
@@ -199,6 +200,76 @@ section('collectMaxPlyPerPuzzle: legacy length-3 contributes 0');
   check('p1 (legacy, no ply) recorded as 0',
     m.get('p1') === 0, 'got ' + m.get('p1'));
   check('p2 unaffected', m.get('p2') === 25);
+}
+
+section('collectMaxPlyPerPuzzle: prefers canonical m[4] over m[3] when present');
+{
+  // For length-5 input, m[4] is the canonical startPly (constant per puzzle,
+  // dedup-invariant). Reading m[4] directly gives the exact value; max(m[3])
+  // would underestimate for transposing source games. The new logic prefers
+  // m[4] whenever the entry is length-5, regardless of m[3].
+  const shard = {
+    'pos-A': [
+      ['p1', 1500, 'w', 3, 22],   // length-5: m[3]=3, m[4]=22 → use 22
+      ['p2', 1600, 'b', 4, 15],   // length-5: m[3]=4, m[4]=15 → use 15
+    ],
+    'pos-B': [
+      ['p1', 1500, 'w', 5, 22],   // m[3] varies (5 here, 3 above), m[4]=22 stable
+    ],
+  };
+  const m = new Map();
+  F.collectMaxPlyPerPuzzle(shard, m);
+  check('p1: m[4]=22 used (max via m[4]=22 across both entries; max via m[3]=5 would be wrong)',
+    m.get('p1') === 22, 'got ' + m.get('p1'));
+  check('p2: m[4]=15 used (NOT m[3]=4)',
+    m.get('p2') === 15, 'got ' + m.get('p2'));
+}
+
+section('collectMaxPlyPerPuzzle: mixed length-4 + length-5 input');
+{
+  // Pathological: same puzzle has both length-4 and length-5 entries (e.g.
+  // partial backfill). Each entry contributes its best-available value:
+  // length-5 entries contribute m[4], length-4 entries contribute m[3].
+  // Final per-puzzle max is the max across both.
+  const shard = {
+    'pos-A': [
+      ['p1', 1500, 'w', 5],          // length-4: contributes m[3]=5
+      ['p1', 1500, 'b', 3, 22],      // length-5: contributes m[4]=22
+    ],
+  };
+  const m = new Map();
+  F.collectMaxPlyPerPuzzle(shard, m);
+  check('p1 max = 22 (m[4] wins over m[3])',
+    m.get('p1') === 22, 'got ' + m.get('p1'));
+}
+
+section('collectMaxPlyPerPuzzle: NaN/non-finite ply does not poison the map');
+{
+  // Defensive: corrupt input could have NaN in m[3] or m[4]. typeof NaN is
+  // 'number', so a naive check would set the map value to NaN; then
+  // NaN > anything is always false, so subsequent legitimate plies for the
+  // same puzzle would never update the map. Verifying isFinite() guards
+  // both readers.
+  const shard = {
+    'pos-A': [
+      ['p1', 1500, 'w', NaN],          // corrupt m[3] → contributes 0
+      ['p1', 1500, 'w', 10],           // valid → contributes 10
+    ],
+    'pos-B': [
+      ['p2', 1500, 'w', 5, NaN],       // corrupt m[4] → falls back to m[3]=5
+    ],
+    'pos-C': [
+      ['p3', 1500, 'w', 7, Infinity],  // non-finite m[4] → fallback to m[3]=7
+    ],
+  };
+  const m = new Map();
+  F.collectMaxPlyPerPuzzle(shard, m);
+  check('p1: NaN entry doesn\'t poison; max = 10',
+    m.get('p1') === 10, 'got ' + m.get('p1'));
+  check('p2: NaN m[4] falls back to m[3]=5',
+    m.get('p2') === 5, 'got ' + m.get('p2'));
+  check('p3: Infinity m[4] falls back to m[3]=7',
+    m.get('p3') === 7, 'got ' + m.get('p3'));
 }
 
 // ─── runFilter: end-to-end on a synthetic data dir ──────────────────────
