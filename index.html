@@ -1349,7 +1349,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">filter-stats-display</span>
+    <span id="buildVersion">ply-filter</span>
     <button id="soundToggle" class="sound-toggle" type="button" aria-label="Toggle sound" title="Toggle sound effects">🔊</button>
     <!-- Stats drawer toggle (issue #9). Same lightweight aesthetic as the
          sound toggle — header real estate is tight, so it's icon-only. The
@@ -1629,6 +1629,21 @@
     </div>
 
     <div id="sessionPanel" class="panel" hidden>
+      <!-- Ply (source-game halfmove) range. Applies to BOTH "Start session"
+           and "Start training" — it's a global pre-filter on the position
+           pool. Rating range below is local to "Start session"; training
+           has its own per-round rating brackets in the disclosure. -->
+      <label title="Filter by source-game ply (halfmove number) at the puzzle position. 1 ply = 1 halfmove. Use a low max (e.g. 0–16) to drill opening puzzles only; widen to include middlegame/endgame puzzles. Applies to both Start session and Start training.">Source-game ply</label>
+      <div class="dual-range" id="plyRange">
+        <div class="range-track"></div>
+        <div class="range-fill" id="plyRangeFill"></div>
+        <input type="range" id="plyMin" min="0" max="80" value="0" step="1">
+        <input type="range" id="plyMax" min="0" max="80" value="80" step="1">
+      </div>
+      <div class="range-values">
+        <span id="plyRangeMinLabel">0</span>
+        <span id="plyRangeMaxLabel">any</span>
+      </div>
       <label>Rating range</label>
       <div class="dual-range" id="ratingRange">
         <div class="range-track"></div>
@@ -1648,10 +1663,13 @@
         <button id="startSessionBtn" class="primary">Start session</button>
       </div>
       <!-- Training session: 3 chained rounds across difficulty buckets
-           (defaults: 15 easy + 10 medium + 5 hard). Independent of the
-           slider above — training has its own bucket bounds. The
-           rating bounds are user-customizable via the disclosure below
-           (collapsed by default; native <details> for zero-JS toggle). -->
+           (defaults: 15 easy + 10 medium + 5 hard). Rating-independent
+           of the dual-range slider above — training has its own per-
+           round rating brackets in the disclosure. The PLY slider above
+           DOES apply (it's a global pre-filter shared with random
+           session). The training rating bounds are user-customizable
+           via the disclosure below (collapsed by default; native
+           <details> for zero-JS toggle). -->
       <div class="training-divider"></div>
       <details class="training-ranges" id="trainingRanges">
         <summary class="training-ranges-summary">Customize ranges</summary>
@@ -1735,6 +1753,13 @@
     var board = null;
     var chess = null;
     var MAX_RESULTS = 100;       // cap visible matches; filters/pagination later
+    // Upper bound of the source-game ply slider in #sessionPanel. Covers
+    // virtually all puzzles — the average source game is ~28 ply long
+    // and the long tail rarely exceeds 80. Slider value at the max is
+    // displayed as "any" and getActivePlyRange() returns null for the
+    // upper bound (= no filter). Kept in sync with the slider markup
+    // (input[type=range] max=80) and validatePlyRange's clamp range.
+    var PLY_RANGE_MAX = 80;
     // Training-session round configuration. Three buckets the user
     // drills sequentially: easy → medium → hard. Labels are fixed; rating
     // bounds AND target counts are user-adjustable via the Customize-
@@ -2179,11 +2204,16 @@
       // Slider 'input' fires continuously as the user drags; 'change'
       // fires only on release. Use 'input' for live count + fill updates.
       $('#ratingMin, #ratingMax').on('input', onRatingSliderInput);
+      $('#plyMin, #plyMax').on('input', onPlySliderInput);
+      // Save ply range on slider release (not on every drag tick — that
+      // would hammer LS during a drag). 'change' fires once per release.
+      $('#plyMin, #plyMax').on('change', onPlySliderChange);
       // Click-on-track restoration. Native <input type=range> jumps the
       // thumb to a track click, but our `pointer-events: none` (needed
       // for both thumbs to stay grabbable) suppresses that. Rebound here
-      // on the container — see onRatingTrackMousedown for the dance.
-      $('#ratingRange').on('mousedown', onRatingTrackMousedown);
+      // on the container — see onDualRangeTrackMousedown for the dance.
+      $('#ratingRange').on('mousedown', onDualRangeTrackMousedown);
+      $('#plyRange').on('mousedown', onDualRangeTrackMousedown);
       $('#results').on('click', 'li[data-puzzle-id]', function () {
         var pid = $(this).attr('data-puzzle-id');
         if (pid) startDrillByPuzzleId(pid);
@@ -2273,6 +2303,17 @@
       // so updateAutoNextBtn can sync the glyph immediately.
       autoNextEnabled = loadSettings().autoNext;
       updateAutoNextBtn();
+      // Restore the saved ply range, if any. The slider markup ships
+      // with [0, 80] (= no filter); a saved partial range overlays
+      // those values. updatePlyRangeUI then paints the fill overlay
+      // and value labels off the restored values. No-op if nothing
+      // saved or saved data was rejected by validatePlyRange.
+      var savedPly = loadSettings().plyRange;
+      if (savedPly) {
+        $('#plyMin').val(Math.max(0, Math.min(PLY_RANGE_MAX, savedPly.min)));
+        $('#plyMax').val(Math.max(0, Math.min(PLY_RANGE_MAX, savedPly.max)));
+      }
+      updatePlyRangeUI();
       // Cross-device sync — last so all the UI it touches (refreshReviewBadge,
       // result rendering) is wired up first. setupSync may fire an async
       // loadFromGist, but startup doesn't block on it.
@@ -2710,6 +2751,13 @@
         return;
       }
       var inRange = Session.filterByRating(lastMatches, rmin, rmax);
+      // Layer the ply filter on top so live counts match what
+      // onStartSessionClick will actually queue. Same null-bounds-mean-
+      // no-filter contract via getActivePlyRange.
+      var ply = getActivePlyRange();
+      if (ply.min !== null || ply.max !== null) {
+        inRange = Session.filterByPly(inRange, ply.min, ply.max);
+      }
       var unsolved = Session.countUnsolved(inRange, Progress.isCompleted);
       var solved = inRange.length - unsolved;
       var msg;
@@ -2730,8 +2778,9 @@
 
     // updateTrainingMetaUI — refresh the per-round count line + Start
     // training button enabled state. Training is independent of the
-    // dual-range slider (it has its own fixed buckets), so this is NOT
-    // called on slider drag — only on fresh search and on return-from-drill.
+    // RATING dual-range slider (it has its own fixed buckets) — but the
+    // PLY range above does apply, so onPlySliderInput calls this on
+    // every drag. Also called on fresh search and return-from-drill.
     //
     // Counts only walk what they need: for each round, scan lastMatches
     // in order, dedupe against earlier rounds (matching createTraining's
@@ -2748,6 +2797,13 @@
         $btn.prop('disabled', true);
         return;
       }
+      // Pre-filter by ply once (cheap; matches createTraining which
+      // also applies ply once at the top before per-round logic).
+      // No-op fast path inside filterByPly when both bounds are null.
+      var ply = getActivePlyRange();
+      var pool = (ply.min !== null || ply.max !== null)
+        ? Session.filterByPly(lastMatches, ply.min, ply.max)
+        : lastMatches;
       var seen = Object.create(null);
       var grandTotal = 0;
       var parts = [];
@@ -2758,8 +2814,8 @@
         var max = (r.ratingMax === null || r.ratingMax === undefined) ?  Infinity : +r.ratingMax;
         var target = (typeof r.target === 'number' && r.target > 0) ? r.target : 0;
         var count = 0;
-        for (var j = 0; j < lastMatches.length && count < target; j++) {
-          var m = lastMatches[j];
+        for (var j = 0; j < pool.length && count < target; j++) {
+          var m = pool[j];
           if (!m || m.length < 2) continue;
           var rat = m[1];
           // Match Session.filterByRating — non-numeric ratings pass the
@@ -2920,18 +2976,97 @@
       updateSessionPanelUI();
     }
 
-    // Click-on-track behavior for the dual-range slider. The default
-    // <input type=range> behavior of "click track to jump" is killed by
-    // our `pointer-events: none` on the inputs (necessary so both thumbs
-    // remain grabbable when stacked). We restore it here: a mousedown on
-    // any non-thumb part of the slider container moves the CLOSEST thumb
-    // to the click position, then enters a synthetic drag (document-level
+    // Live-drag handler for the ply range. Mirrors onRatingSliderInput's
+    // clamp dance, but ALSO refreshes training meta (ply applies to both
+    // modes — rating range applies to "Start session" only, hence its
+    // handler updates only sessionCounts).
+    function onPlySliderInput(e) {
+      var pmin = +$('#plyMin').val();
+      var pmax = +$('#plyMax').val();
+      var which = e.target && e.target.id;
+      if (which === 'plyMin' && pmin > pmax) {
+        $('#plyMin').val(pmax);
+      } else if (which === 'plyMax' && pmax < pmin) {
+        $('#plyMax').val(pmin);
+      }
+      updatePlyRangeUI();
+      updateSessionPanelUI();
+      updateTrainingMetaUI();
+    }
+
+    // Persist ply range on slider release. Fires once per drag (on
+    // 'change'), not per tick — keeps LS writes off the drag-update
+    // hot path. The 'input' handler above does live UI updates without
+    // touching storage.
+    function onPlySliderChange() {
+      var pmin = +$('#plyMin').val();
+      var pmax = +$('#plyMax').val();
+      saveSettings({ plyRange: { min: pmin, max: pmax } });
+    }
+
+    // Repaint the ply-range fill overlay + value labels off current
+    // slider values. Called from onPlySliderInput and init. (Not from
+    // configureSlider — the ply slider has fixed [0, 80] bounds and
+    // doesn't auto-scale to data extents; the user's filter intent
+    // persists across searches.) The "any" upper-bound label appears
+    // when max is at the attribute max — signals "no upper limit
+    // applied" without needing to teach the user that 80 == ∞ here.
+    function updatePlyRangeUI() {
+      var $pmin = $('#plyMin'), $pmax = $('#plyMax');
+      var pmin = +$pmin.val();
+      var pmax = +$pmax.val();
+      var attrMin = +$pmin.attr('min');
+      var attrMax = +$pmin.attr('max');
+      var span = attrMax - attrMin;
+      var loPct = span > 0 ? ((pmin - attrMin) / span) * 100 : 0;
+      var hiPct = span > 0 ? ((pmax - attrMin) / span) * 100 : 100;
+      $('#plyRangeFill').css({ left: loPct + '%', width: (hiPct - loPct) + '%' });
+      $('#plyRangeMinLabel').text(pmin);
+      $('#plyRangeMaxLabel').text(pmax >= attrMax ? 'any' : pmax);
+    }
+
+    // Read the active ply bounds, returning null/null when the user has
+    // the slider open all the way (no filter). Caller passes the result
+    // straight into Session.create / Session.createTraining as
+    // plyMin/plyMax. Returning nulls (rather than 0/Infinity) keeps the
+    // factory's "missing → null" convention so the returned state
+    // correctly reflects "no filter" rather than "[0, 80]".
+    //
+    // Each end is snapped INDEPENDENTLY: pmin at attrMin → min=null,
+    // pmax at attrMax → max=null. A partial range like [0, 30] returns
+    // {min:null, max:30}. Numerically identical to {min:0, max:30} —
+    // no puzzle has ply<0 — but the null lets filterByPly's no-op
+    // fast path trigger when ALSO max is null.
+    function getActivePlyRange() {
+      var $pmin = $('#plyMin'), $pmax = $('#plyMax');
+      if (!$pmin.length || !$pmax.length) return { min: null, max: null };
+      var pmin = +$pmin.val();
+      var pmax = +$pmax.val();
+      var attrMin = +$pmin.attr('min');
+      var attrMax = +$pmin.attr('max');
+      var minActive = pmin > attrMin ? pmin : null;
+      var maxActive = pmax < attrMax ? pmax : null;
+      return { min: minActive, max: maxActive };
+    }
+
+    // Click-on-track behavior for ANY dual-range slider container. Default
+    // <input type=range> behavior of "click track to jump" is killed by our
+    // `pointer-events: none` on the inputs (necessary so both thumbs remain
+    // grabbable when stacked). We restore it here: a mousedown on any
+    // non-thumb part of the slider container moves the CLOSEST thumb to the
+    // click position, then enters a synthetic drag (document-level
     // mousemove/mouseup) so the user can keep refining without releasing.
+    //
+    // Generic over child input[type=range] elements: the container (e.g.
+    // #ratingRange, #plyRange) holds two range inputs in DOM order (min,
+    // max). No hard-coded IDs here — same handler binds to all dual-range
+    // containers. Each input has its own 'input' event handler bound
+    // separately (onRatingSliderInput, onPlySliderInput).
     //
     // Thumb-mousedowns (e.target is the input element, since the thumb
     // pseudo re-targets pointer events to its host input) fall through —
     // the native drag still owns them.
-    function onRatingTrackMousedown(e) {
+    function onDualRangeTrackMousedown(e) {
       // Native thumb drag: target is the input itself. Let it through.
       if (e.target && e.target.tagName === 'INPUT') return;
       // Left button only. e.button is undefined for synthesized iOS
@@ -2940,9 +3075,10 @@
       if (e.button !== undefined && e.button !== 0) return;
 
       var container = e.currentTarget;
-      var $rmin = $(container).find('#ratingMin');
-      var $rmax = $(container).find('#ratingMax');
-      if (!$rmin.length || !$rmax.length) return;
+      var $inputs = $(container).find('input[type=range]');
+      if ($inputs.length < 2) return;
+      var $rmin = $inputs.eq(0);
+      var $rmax = $inputs.eq(1);
 
       var rect = container.getBoundingClientRect();
       var attrMin = +$rmin.attr('min');
@@ -2981,7 +3117,8 @@
 
       // Apply the initial value and let the existing input handler do
       // its clamp + UI repaint dance. trigger('input') sets e.target to
-      // the input so onRatingSliderInput's e.target.id check works.
+      // the input so the per-slider input handler's e.target.id check
+      // works.
       if (+$active.val() !== v0) {
         $active.val(v0);
         $active.trigger('input');
@@ -5492,10 +5629,13 @@
       if (!lastMatches || !lastMatches.length) return;
       var rmin = +$('#ratingMin').val();
       var rmax = +$('#ratingMax').val();
+      var ply = getActivePlyRange();
       var s = Session.create({
         matches: lastMatches,
         ratingMin: rmin,
         ratingMax: rmax,
+        plyMin: ply.min,
+        plyMax: ply.max,
         isCompleted: Progress.isCompleted
       });
       if (s.complete) {
@@ -5530,9 +5670,12 @@
       // reflects the current truth.
       clearTrainingResume();
       refreshTrainingResumePill();
+      var ply = getActivePlyRange();
       var t = Session.createTraining({
         matches: lastMatches,
         rounds: getTrainingRounds(),
+        plyMin: ply.min,
+        plyMax: ply.max,
         isCompleted: Progress.isCompleted
       });
       if (t.complete) {
@@ -6066,7 +6209,7 @@
       try { return window.localStorage || null; } catch (e) { return null; }
     }
     function loadSettings() {
-      var defaults = { autoNext: false, trainingRanges: null };
+      var defaults = { autoNext: false, trainingRanges: null, plyRange: null };
       var s = _settingsStorage();
       if (!s) return defaults;
       var raw;
@@ -6081,8 +6224,21 @@
       // newer write doesn't carry forward fields it doesn't understand.
       return {
         autoNext: parsed.autoNext === true,
-        trainingRanges: validateTrainingRanges(parsed.trainingRanges)
+        trainingRanges: validateTrainingRanges(parsed.trainingRanges),
+        plyRange: validatePlyRange(parsed.plyRange)
       };
+    }
+    // Accept {min, max} where both are integers in [0, PLY_RANGE_MAX] and
+    // min ≤ max. Anything else → null (means "use defaults", i.e. full
+    // range). Same posture as validateTrainingRanges: a single bad field
+    // poisons the whole object and we fall back to a clean default.
+    function validatePlyRange(o) {
+      if (!o || typeof o !== 'object' || Array.isArray(o)) return null;
+      var min = o.min, max = o.max;
+      if (typeof min !== 'number' || !isFinite(min) || min < 0 || min > PLY_RANGE_MAX) return null;
+      if (typeof max !== 'number' || !isFinite(max) || max < 0 || max > PLY_RANGE_MAX) return null;
+      if (min > max) return null;
+      return { min: Math.floor(min), max: Math.floor(max) };
     }
     // Accept an array of {ratingMin, ratingMax, target?} rows only when it
     // has exactly TRAINING_ROUND_DEFAULTS.length entries (currently 3) and

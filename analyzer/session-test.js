@@ -85,6 +85,218 @@ section('Session.countUnsolved');
   check('missing predicate → all unsolved', Session.countUnsolved(MATCHES) === 7);
 }
 
+// ━━━ filterByPly ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+// Length-4 fixture: [id, rating, color, ply]. Tests below use this when
+// they need ply data; the legacy MATCHES fixture (length-2) stays untouched
+// so backward-compat behavior remains exercised by every other section.
+const MATCHES_PLY = [
+  ['p1', 1000, 'w', 3],
+  ['p2', 1200, 'b', 6],
+  ['p3', 1400, 'w', 9],
+  ['p4', 1600, 'b', 12],
+  ['p5', 1800, 'w', 18],
+  ['p6', 2000, 'b', 25],
+  ['p7', 2200, 'w', 40]
+];
+
+section('Session.filterByPly');
+{
+  const all = Session.filterByPly(MATCHES_PLY, null, null);
+  check('null bounds → all in', all.length === 7);
+  check('null bounds → returns a copy (not the same array)', all !== MATCHES_PLY);
+
+  const undef = Session.filterByPly(MATCHES_PLY, undefined, undefined);
+  check('undefined bounds → all in', undef.length === 7);
+
+  const tight = Session.filterByPly(MATCHES_PLY, 9, 18);
+  check('inclusive lower bound', tight[0][0] === 'p3');
+  check('inclusive upper bound', tight[tight.length - 1][0] === 'p5');
+  check('range count correct', tight.length === 3);
+
+  const empty = Session.filterByPly(MATCHES_PLY, 50, 80);
+  check('out-of-range → empty', empty.length === 0);
+
+  const oneSidedLow = Session.filterByPly(MATCHES_PLY, null, 10);
+  check('null lower → no lower limit', oneSidedLow.length === 3);   // p1,p2,p3
+
+  const oneSidedHigh = Session.filterByPly(MATCHES_PLY, 20, null);
+  check('null upper → no upper limit', oneSidedHigh.length === 2);  // p6,p7
+
+  // Missing / non-numeric ply tuples pass through (legacy length-3 entries).
+  const mixed = [
+    ['legacy3', 1500, 'w'],            // pre-ply build, length 3
+    ['legacy2', 1500],                 // legacy length 2 (older)
+    ['nullply', 1500, 'w', null],      // explicit null ply
+    ['plyok', 1500, 'w', 5]
+  ];
+  const mixedOut = Session.filterByPly(mixed, 0, 10);
+  check('legacy length-3 passes through', mixedOut.some(m => m[0] === 'legacy3'));
+  check('legacy length-2 passes through', mixedOut.some(m => m[0] === 'legacy2'));
+  check('null ply passes through',       mixedOut.some(m => m[0] === 'nullply'));
+  check('numeric ply still filtered',     mixedOut.some(m => m[0] === 'plyok'));
+
+  // Tight upper bound that would exclude the numeric one: legacy entries
+  // still pass through because we only filter when ply is numeric.
+  const mixedOut2 = Session.filterByPly(mixed, 0, 3);
+  check('out-of-range numeric dropped', !mixedOut2.some(m => m[0] === 'plyok'));
+  check('legacy still passes when numeric excluded',
+        mixedOut2.some(m => m[0] === 'legacy3') &&
+        mixedOut2.some(m => m[0] === 'legacy2') &&
+        mixedOut2.some(m => m[0] === 'nullply'));
+
+  // Defensive: malformed entries skipped, not crashing.
+  const dirty = [null, undefined, [], ['ok', 1500, 'w', 5]];
+  const dirtyOut = Session.filterByPly(dirty, 0, 80);
+  check('malformed entries skipped',
+        dirtyOut.length === 1 && dirtyOut[0][0] === 'ok');
+
+  // Does not mutate input.
+  const inputBefore = JSON.stringify(MATCHES_PLY);
+  Session.filterByPly(MATCHES_PLY, 5, 20);
+  check('does not mutate input', JSON.stringify(MATCHES_PLY) === inputBefore);
+}
+
+// ━━━ create with ply opts ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+section('Session.create — ply filter');
+{
+  // Tight ply window [9, 18] should yield p3,p4,p5 (regardless of rating).
+  const s = Session.create({
+    matches: MATCHES_PLY,
+    plyMin: 9,
+    plyMax: 18,
+    isCompleted: NEVER_COMPLETED
+  });
+  check('queue length matches ply-filtered count', s.queue.length === 3);
+  check('plyMin captured on state', s.plyMin === 9);
+  check('plyMax captured on state', s.plyMax === 18);
+  check('inRangeTotal reflects ply filter', s.inRangeTotal === 3);
+  const ids = s.queue.slice().sort();
+  check('queue contents correct', ids.join(',') === 'p3,p4,p5');
+}
+
+section('Session.create — ply + rating filters compose');
+{
+  // ply [0, 20] keeps p1..p5; rating [1300, 1900] keeps p3,p4,p5.
+  // Intersection: p3,p4,p5.
+  const s = Session.create({
+    matches: MATCHES_PLY,
+    plyMin: 0, plyMax: 20,
+    ratingMin: 1300, ratingMax: 1900,
+    isCompleted: NEVER_COMPLETED
+  });
+  check('intersection count', s.queue.length === 3);
+  const ids = s.queue.slice().sort();
+  check('intersection contents', ids.join(',') === 'p3,p4,p5');
+}
+
+section('Session.create — ply absent → no filter (back-compat)');
+{
+  // Legacy MATCHES (length-2) with no plyMin/plyMax → all unsolved in queue.
+  const s = Session.create({
+    matches: MATCHES,
+    isCompleted: NEVER_COMPLETED
+  });
+  check('legacy matches: full queue when no ply opts', s.queue.length === MATCHES.length);
+  check('plyMin null on returned state', s.plyMin === null);
+  check('plyMax null on returned state', s.plyMax === null);
+}
+
+section('Session.create — ply filter empty → complete=true');
+{
+  const s = Session.create({
+    matches: MATCHES_PLY,
+    plyMin: 100, plyMax: 200,
+    isCompleted: NEVER_COMPLETED
+  });
+  check('no matches → queue empty', s.queue.length === 0);
+  check('no matches → complete=true', s.complete === true);
+  check('inRangeTotal=0', s.inRangeTotal === 0);
+}
+
+// ━━━ createTraining with ply opts ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+section('Session.createTraining — ply filter applies to all rounds');
+{
+  // Ply window [0, 10] keeps p1,p2,p3 across all rounds.
+  // Rating buckets: Easy[1000,1399]→p1,p2; Medium[1400,1999]→p3.
+  // Hard[2000+] is empty after ply filter (p6@25, p7@40 both excluded).
+  const t = Session.createTraining({
+    matches: MATCHES_PLY,
+    plyMin: 0, plyMax: 10,
+    rounds: [
+      { label: 'Easy',   ratingMin: 1000, ratingMax: 1399, target: 5 },
+      { label: 'Medium', ratingMin: 1400, ratingMax: 1999, target: 5 },
+      { label: 'Hard',   ratingMin: 2000, ratingMax: null, target: 5 }
+    ],
+    isCompleted: NEVER_COMPLETED
+  });
+  check('total respects ply filter', t.total === 3);   // p1,p2,p3
+  check('round 0 (easy) keeps both in-ply', t.rounds[0].count === 2);
+  check('round 1 (medium) keeps the one in-ply', t.rounds[1].count === 1);
+  check('round 2 (hard) ply-filtered to zero', t.rounds[2].count === 0);
+  check('plyMin captured on state', t.plyMin === 0);
+  check('plyMax captured on state', t.plyMax === 10);
+  // inRangeTotal reflects the post-ply pool: distinct ids that landed in
+  // any rating bucket. p1,p2 in Easy; p3 in Medium. = 3.
+  check('inRangeTotal post-ply', t.inRangeTotal === 3);
+}
+
+section('Session.createTraining — short rounds when ply filter starves a bucket');
+{
+  // Spec: target=15 in Easy, but ply window [0,5] gives only p1@3 in
+  // Easy's rating bucket. Round delivers 1 puzzle (short), session does
+  // not error. Matches the existing "small unseen pools silently deliver
+  // short rounds" posture for previously-drilled puzzles.
+  const t = Session.createTraining({
+    matches: MATCHES_PLY,
+    plyMin: 0, plyMax: 5,
+    rounds: [
+      { label: 'Easy', ratingMin: 1000, ratingMax: 1399, target: 15 }
+    ],
+    isCompleted: NEVER_COMPLETED
+  });
+  check('short round delivered, no error', t.total === 1);
+  check('round count reflects shortfall', t.rounds[0].count === 1);
+  check('round target preserved (15)', t.rounds[0].target === 15);
+  check('not complete (1 puzzle in queue)', t.complete === false);
+}
+
+section('Session.createTraining — empty pool → complete=true');
+{
+  const t = Session.createTraining({
+    matches: MATCHES_PLY,
+    plyMin: 100, plyMax: 200,
+    rounds: [
+      { label: 'Easy', ratingMin: 0, ratingMax: 3500, target: 5 }
+    ],
+    isCompleted: NEVER_COMPLETED
+  });
+  check('empty pool → complete=true', t.complete === true);
+  check('total=0', t.total === 0);
+  check('round count=0', t.rounds[0].count === 0);
+}
+
+section('Session.createTraining — ply absent → no filter (back-compat)');
+{
+  // Legacy length-2 MATCHES + no ply opts → identical behavior to a
+  // pre-ply call. Sanity check that adding the new opts didn't change
+  // the legacy code path.
+  const t = Session.createTraining({
+    matches: MATCHES,
+    rounds: [
+      { label: 'Easy',   ratingMin: 1000, ratingMax: 1399, target: 5 },
+      { label: 'Medium', ratingMin: 1400, ratingMax: 1999, target: 5 },
+      { label: 'Hard',   ratingMin: 2000, ratingMax: null, target: 5 }
+    ],
+    isCompleted: NEVER_COMPLETED
+  });
+  check('all 7 puzzles queued (no ply filter)', t.total === 7);
+  check('plyMin null on returned state', t.plyMin === null);
+  check('plyMax null on returned state', t.plyMax === null);
+}
+
 // ━━━ create ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 section('Session.create — basic shape');
