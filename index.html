@@ -1349,7 +1349,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">ply-filter</span>
+    <span id="buildVersion">sw-controllerchange-reload</span>
     <button id="soundToggle" class="sound-toggle" type="button" aria-label="Toggle sound" title="Toggle sound effects">🔊</button>
     <!-- Stats drawer toggle (issue #9). Same lightweight aesthetic as the
          sound toggle — header real estate is tight, so it's icon-only. The
@@ -7917,6 +7917,40 @@
       var bv = document.getElementById('buildVersion');
       var v = bv ? (bv.textContent || '').trim() : '';
       var url = v ? ('sw.js?v=' + encodeURIComponent(v)) : 'sw.js';
+
+      // Auto-reload on SW upgrade. The race we're closing: an existing
+      // user with the OLD SW + OLD lib/* in cache hits a deploy. The new
+      // index.html is served network-first, so it carries new code that
+      // references new APIs (e.g. Session.filterByPly). But the same
+      // page-load fetches lib/session.js via the OLD SW's cache-first
+      // strategy, so it gets the OLD session.js — without those new APIs.
+      // Result: "Session.filterByPly is not a function" on first load
+      // after deploy.
+      //
+      // sw.js's install handler calls skipWaiting() and the activate
+      // handler calls clients.claim() — so once the new SW finishes
+      // installing in the background, it takes over the page mid-life
+      // and fires controllerchange. We hook that and reload, which
+      // re-fetches everything through the now-current SW (whose cache
+      // has the matching new lib/*). The race-window pageload is brief
+      // and the auto-reload heals it.
+      //
+      // GATE: only attach the listener if there's already a controller
+      // when we register. controllerchange ALSO fires on first-ever
+      // install (when controller goes from null → SW), and reloading
+      // there would be a pointless flash on every new user's first
+      // visit. controller-already-set means "this is an upgrade scenario
+      // for an existing user", which is exactly the case we want to heal.
+      var hasController = !!navigator.serviceWorker.controller;
+      if (hasController) {
+        var refreshing = false;
+        navigator.serviceWorker.addEventListener('controllerchange', function () {
+          if (refreshing) return;
+          refreshing = true;
+          window.location.reload();
+        });
+      }
+
       navigator.serviceWorker.register(url).catch(function (err) {
         // Soft failure — page still works, just no offline. Logged for
         // debugging; not surfaced in UI.
