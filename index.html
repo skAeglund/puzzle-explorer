@@ -1354,7 +1354,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">multi-rep-filter</span>
+    <span id="buildVersion">multi-rep-filter-audit</span>
     <button id="soundToggle" class="sound-toggle" type="button" aria-label="Toggle sound" title="Toggle sound effects">🔊</button>
     <!-- Stats drawer toggle (issue #9). Same lightweight aesthetic as the
          sound toggle — header real estate is tight, so it's icon-only. The
@@ -6708,6 +6708,11 @@
       // repertoires no longer exist (deleted on another device since the
       // last session here).
       activeRepertoireIds = loadActiveRepertoireIds();
+      // Re-render — init() called renderRepertoires() before setupSync, at
+      // which point activeRepertoireIds was still the default []. Now that
+      // the persisted selection is loaded, repaint pills with .active and
+      // unhide the active panel for returning users.
+      if (activeRepertoireIds.length > 0) renderRepertoires();
 
       // ─── DOM bindings ─────────────────────────────────────────────────
       $('#syncPill').on('click', function () {
