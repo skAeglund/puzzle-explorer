@@ -565,8 +565,25 @@ function runFilter(opts) {
   let metaOut = null;
   if (fs.existsSync(metaIn)) {
     const meta = JSON.parse(fs.readFileSync(metaIn, 'utf8'));
+    const filteredAt = new Date().toISOString();
     meta.filteredFrom = path.resolve(sourceDir);
-    meta.filteredAt = new Date().toISOString();
+    meta.filteredAt = filteredAt;
+    // Bump builtAt to filteredAt so the frontend's IDB shard cache sees a
+    // fresh build-stamp and wipes its cached shards. Without this, existing
+    // users keep serving stale shards from before the republish — the cache
+    // invalidation key (lib/cache.js → checkBuildVersion(meta.builtAt))
+    // would otherwise stay pinned to whatever build-index.js wrote, which
+    // doesn't change across filter re-runs.
+    //
+    // Preserve the original timestamp under a new field for future code
+    // that wants to know when the underlying PGN walk happened (vs. when
+    // the latest filter pass ran). Existing callers (dataset-info label
+    // at index.html:7886) already prefer `filteredAt` over `builtAt`, so
+    // this is safe.
+    if (meta.builtAt && !meta.buildIndexBuiltAt) {
+      meta.buildIndexBuiltAt = meta.builtAt;
+    }
+    meta.builtAt = filteredAt;
     meta.filterStats = {
       whitelistSize: hasWhitelist ? whitelistSet.size : null,
       ratingFloor: hasRating ? ratingFloor : null,

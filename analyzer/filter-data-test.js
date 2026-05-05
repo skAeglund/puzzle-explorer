@@ -168,6 +168,21 @@ section('runFilter end-to-end');
   check('e2e: meta.json copied',
     fs.existsSync(path.join(outDir, 'meta.json')));
 
+  // Cache invalidation contract — see lib/cache.js. Frontend's IDB shard
+  // cache wipes itself when meta.builtAt changes. filter-data.js MUST bump
+  // builtAt (to filteredAt) on every filter pass so existing users get
+  // fresh shards after a republish. The original build-index.js timestamp
+  // is preserved separately as buildIndexBuiltAt for any future caller
+  // that wants the underlying-PGN-walk timestamp.
+  const filteredMeta = JSON.parse(fs.readFileSync(path.join(outDir, 'meta.json'), 'utf8'));
+  check('e2e: meta.builtAt was bumped to filteredAt (cache invalidation)',
+    typeof filteredMeta.builtAt === 'string' &&
+    filteredMeta.builtAt === filteredMeta.filteredAt,
+    'builtAt=' + filteredMeta.builtAt + ' filteredAt=' + filteredMeta.filteredAt);
+  check('e2e: original builtAt preserved as buildIndexBuiltAt',
+    typeof filteredMeta.buildIndexBuiltAt === 'string' &&
+    filteredMeta.buildIndexBuiltAt !== filteredMeta.builtAt);
+
   // Source dir preserved (READ-ONLY contract)
   check('source: index dir untouched, both shards still present',
     fs.readdirSync(path.join(dataDir, 'index')).length === 2);
