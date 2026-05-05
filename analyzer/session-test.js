@@ -1645,6 +1645,254 @@ section('Session.endEarly: returns NEW state object (no input mutation)');
   check('result.rounds[0] is a different object', r.rounds[0] !== t.rounds[0]);
 }
 
+// ━━━ multi-rep round-robin draft ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+section('Session.createTraining: multi-rep — even split when pools are equal');
+{
+  // 6 puzzles per rep, all in easy band (1000-1400). Target 6 from a
+  // single round → 3 from each rep when both pools are balanced.
+  var matches = [];
+  var repsByPid = {};
+  for (var i = 0; i < 6; i++) {
+    var idA = 'a' + i; matches.push([idA, 1100 + i, 'w', 5]); repsByPid[idA] = ['rA'];
+    var idB = 'b' + i; matches.push([idB, 1100 + i, 'w', 5]); repsByPid[idB] = ['rB'];
+  }
+  var t = Session.createTraining({
+    matches: matches,
+    rounds: [{ label: 'Easy', ratingMin: 1000, ratingMax: 1400, target: 6 }],
+    isCompleted: function () { return false; },
+    rng: mulberry32(42),
+    multiRep: { repIds: ['rA', 'rB'], repsByPid: repsByPid }
+  });
+  check('total=6 (target met)', t.queue.length === 6);
+  var fromA = 0, fromB = 0;
+  for (var k = 0; k < t.queue.length; k++) {
+    if (t.queue[k][0] === 'a') fromA++;
+    else if (t.queue[k][0] === 'b') fromB++;
+  }
+  check('split is exactly 3+3', fromA === 3 && fromB === 3,
+        'got ' + fromA + ' from rA, ' + fromB + ' from rB');
+}
+
+section('Session.createTraining: multi-rep — degenerate to default when only 1 rep');
+{
+  // Single-rep multiRep should behave identically to no-multiRep
+  // (round-robin not engaged below 2 reps).
+  var matches = [];
+  var repsByPid = {};
+  for (var i = 0; i < 5; i++) {
+    var id = 'p' + i; matches.push([id, 1200, 'w', 5]); repsByPid[id] = ['rA'];
+  }
+  var withMulti = Session.createTraining({
+    matches: matches,
+    rounds: [{ label: 'Easy', ratingMin: 1000, ratingMax: 1400, target: 3 }],
+    isCompleted: function () { return false; },
+    rng: mulberry32(7),
+    multiRep: { repIds: ['rA'], repsByPid: repsByPid }
+  });
+  var noMulti = Session.createTraining({
+    matches: matches,
+    rounds: [{ label: 'Easy', ratingMin: 1000, ratingMax: 1400, target: 3 }],
+    isCompleted: function () { return false; },
+    rng: mulberry32(7)
+  });
+  check('1-rep multiRep yields same total as no-multiRep',
+        withMulti.queue.length === noMulti.queue.length);
+  // With identical RNG seeds the queues should be byte-identical.
+  var same = withMulti.queue.length === noMulti.queue.length;
+  for (var s = 0; s < withMulti.queue.length && same; s++) {
+    if (withMulti.queue[s] !== noMulti.queue[s]) same = false;
+  }
+  check('1-rep multiRep yields same queue order as no-multiRep with same seed', same);
+}
+
+section('Session.createTraining: multi-rep — graceful when one rep is short');
+{
+  // rA has 8 in-band puzzles, rB has only 2. Target 8.
+  // Round-robin: A B A B A B(empty) A A A A → expected 6 from A, 2 from B.
+  var matches = [];
+  var repsByPid = {};
+  for (var i = 0; i < 8; i++) {
+    var idA = 'a' + i; matches.push([idA, 1200, 'w', 5]); repsByPid[idA] = ['rA'];
+  }
+  for (var j = 0; j < 2; j++) {
+    var idB = 'b' + j; matches.push([idB, 1200, 'w', 5]); repsByPid[idB] = ['rB'];
+  }
+  var t = Session.createTraining({
+    matches: matches,
+    rounds: [{ label: 'Easy', ratingMin: 1000, ratingMax: 1400, target: 8 }],
+    isCompleted: function () { return false; },
+    rng: mulberry32(99),
+    multiRep: { repIds: ['rA', 'rB'], repsByPid: repsByPid }
+  });
+  check('drafts up to target=8', t.queue.length === 8);
+  var fromA = 0, fromB = 0;
+  for (var k = 0; k < t.queue.length; k++) {
+    if (t.queue[k][0] === 'a') fromA++;
+    else if (t.queue[k][0] === 'b') fromB++;
+  }
+  // rB only has 2 to give; rA fills the rest.
+  check('rB drafted exactly 2 (its full pool)', fromB === 2);
+  check('rA fills the rest (6)', fromA === 6);
+}
+
+section('Session.createTraining: multi-rep — total exhaustion below target');
+{
+  // Both reps combined have only 4 puzzles, target 10. Should draft all 4.
+  var matches = [
+    ['a1', 1200, 'w', 5], ['a2', 1200, 'w', 5],
+    ['b1', 1200, 'w', 5], ['b2', 1200, 'w', 5]
+  ];
+  var repsByPid = { a1: ['rA'], a2: ['rA'], b1: ['rB'], b2: ['rB'] };
+  var t = Session.createTraining({
+    matches: matches,
+    rounds: [{ label: 'Easy', ratingMin: 1000, ratingMax: 1400, target: 10 }],
+    isCompleted: function () { return false; },
+    rng: mulberry32(1),
+    multiRep: { repIds: ['rA', 'rB'], repsByPid: repsByPid }
+  });
+  check('total = pool size when target exceeds pool', t.queue.length === 4);
+  // Verify all 4 unique pids are present.
+  var ids = {};
+  for (var k = 0; k < t.queue.length; k++) ids[t.queue[k]] = true;
+  check('all 4 puzzles drafted (no duplicates)',
+        ids.a1 && ids.a2 && ids.b1 && ids.b2 && Object.keys(ids).length === 4);
+}
+
+section('Session.createTraining: multi-rep — shared puzzle counted once');
+{
+  // p1 lives in both rA and rB. Pool: 3 unique puzzles total.
+  // Target 3 → all 3 drafted; the shared one must not be double-counted.
+  var matches = [
+    ['p1', 1200, 'w', 5],   // shared
+    ['a1', 1200, 'w', 5],   // rA only
+    ['b1', 1200, 'w', 5]    // rB only
+  ];
+  var repsByPid = { p1: ['rA', 'rB'], a1: ['rA'], b1: ['rB'] };
+  var t = Session.createTraining({
+    matches: matches,
+    rounds: [{ label: 'Easy', ratingMin: 1000, ratingMax: 1400, target: 3 }],
+    isCompleted: function () { return false; },
+    rng: mulberry32(13),
+    multiRep: { repIds: ['rA', 'rB'], repsByPid: repsByPid }
+  });
+  check('drafted exactly 3 (no double-count of shared)', t.queue.length === 3);
+  var ids = {};
+  for (var k = 0; k < t.queue.length; k++) ids[t.queue[k]] = true;
+  check('all 3 unique puzzles present',
+        ids.p1 && ids.a1 && ids.b1 && Object.keys(ids).length === 3);
+}
+
+section('Session.createTraining: multi-rep — three reps balance across rounds');
+{
+  // 3 reps, 5 in-band puzzles each (15 total). Target 9.
+  // Round-robin: 3 from each.
+  var matches = [];
+  var repsByPid = {};
+  ['rA', 'rB', 'rC'].forEach(function (rid) {
+    for (var i = 0; i < 5; i++) {
+      var pid = rid + '_' + i;
+      matches.push([pid, 1200 + i * 10, 'w', 5]);
+      repsByPid[pid] = [rid];
+    }
+  });
+  var t = Session.createTraining({
+    matches: matches,
+    rounds: [{ label: 'Easy', ratingMin: 1000, ratingMax: 1400, target: 9 }],
+    isCompleted: function () { return false; },
+    rng: mulberry32(7),
+    multiRep: { repIds: ['rA', 'rB', 'rC'], repsByPid: repsByPid }
+  });
+  check('drafted target=9', t.queue.length === 9);
+  var counts = { rA: 0, rB: 0, rC: 0 };
+  for (var k = 0; k < t.queue.length; k++) {
+    var prefix = t.queue[k].split('_')[0];
+    counts[prefix]++;
+  }
+  check('rA contributed 3', counts.rA === 3, 'got ' + counts.rA);
+  check('rB contributed 3', counts.rB === 3, 'got ' + counts.rB);
+  check('rC contributed 3', counts.rC === 3, 'got ' + counts.rC);
+}
+
+section('Session.createTraining: multi-rep — round-robin carries across rounds');
+{
+  // Easy: 6/rep, target 6 → 3+3
+  // Medium: 4/rep, target 4 → 2+2
+  // Verify both rounds get round-robin'd, and earlier-round puzzles are
+  // not re-drafted in later rounds.
+  var matches = [];
+  var repsByPid = {};
+  for (var i = 0; i < 6; i++) {
+    matches.push(['a_e_' + i, 1100, 'w', 5]); repsByPid['a_e_' + i] = ['rA'];
+    matches.push(['b_e_' + i, 1100, 'w', 5]); repsByPid['b_e_' + i] = ['rB'];
+  }
+  for (var j = 0; j < 4; j++) {
+    matches.push(['a_m_' + j, 1500, 'w', 5]); repsByPid['a_m_' + j] = ['rA'];
+    matches.push(['b_m_' + j, 1500, 'w', 5]); repsByPid['b_m_' + j] = ['rB'];
+  }
+  var t = Session.createTraining({
+    matches: matches,
+    rounds: [
+      { label: 'Easy',   ratingMin: 1000, ratingMax: 1399, target: 6 },
+      { label: 'Medium', ratingMin: 1400, ratingMax: 1999, target: 4 }
+    ],
+    isCompleted: function () { return false; },
+    rng: mulberry32(31),
+    multiRep: { repIds: ['rA', 'rB'], repsByPid: repsByPid }
+  });
+  check('total = 6 + 4 = 10', t.queue.length === 10);
+  check('round 0 count = 6', t.rounds[0].count === 6);
+  check('round 1 count = 4', t.rounds[1].count === 4);
+
+  var easyA = 0, easyB = 0, medA = 0, medB = 0;
+  for (var k = 0; k < 6; k++) {
+    if (t.queue[k][0] === 'a') easyA++; else easyB++;
+  }
+  for (var m = 6; m < 10; m++) {
+    if (t.queue[m][0] === 'a') medA++; else medB++;
+  }
+  check('easy round split 3+3', easyA === 3 && easyB === 3);
+  check('medium round split 2+2', medA === 2 && medB === 2);
+}
+
+section('Session.createTraining: multi-rep — empty repIds → falls back to default');
+{
+  var matches = [];
+  for (var i = 0; i < 5; i++) matches.push(['p' + i, 1200, 'w', 5]);
+  var t = Session.createTraining({
+    matches: matches,
+    rounds: [{ label: 'Easy', ratingMin: 1000, ratingMax: 1400, target: 3 }],
+    isCompleted: function () { return false; },
+    rng: mulberry32(11),
+    multiRep: { repIds: [], repsByPid: {} }
+  });
+  // No round-robin engaged; just normal sample of 3.
+  check('falls back to default behavior — drafts target 3', t.queue.length === 3);
+}
+
+section('Session.createTraining: multi-rep — completed puzzles excluded');
+{
+  var matches = [];
+  var repsByPid = {};
+  for (var i = 0; i < 4; i++) {
+    var a = 'a' + i; matches.push([a, 1200, 'w', 5]); repsByPid[a] = ['rA'];
+    var b = 'b' + i; matches.push([b, 1200, 'w', 5]); repsByPid[b] = ['rB'];
+  }
+  // Mark a0, a1, b0 as completed → only a2, a3, b1, b2, b3 unsolved (5).
+  var done = { a0: 1, a1: 1, b0: 1 };
+  var t = Session.createTraining({
+    matches: matches,
+    rounds: [{ label: 'Easy', ratingMin: 1000, ratingMax: 1400, target: 5 }],
+    isCompleted: function (pid) { return !!done[pid]; },
+    rng: mulberry32(5),
+    multiRep: { repIds: ['rA', 'rB'], repsByPid: repsByPid }
+  });
+  check('drafted 5 unsolved', t.queue.length === 5);
+  for (var k = 0; k < t.queue.length; k++) {
+    check('queue[' + k + '] not in completed set', !done[t.queue[k]]);
+  }
+}
+
 // ─── summary ─────────────────────────────────────────────────────────────
 console.log('\n' + (fail === 0 ? '✓' : '✗') + ' ' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail === 0 ? 0 : 1);

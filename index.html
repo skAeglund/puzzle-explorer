@@ -629,6 +629,11 @@
        when a repertoire is selected. Clearly demarcates that the search
        button now searches the union and not the single position. */
     .repertoire-active { margin-top: 8px; padding: 8px 10px; border: 1px solid var(--accent); border-radius: 4px; background: var(--surface-2); }
+    /* Multi-rep mode: subtly differentiated border so the user can tell at
+       a glance they're filtering across N repertoires (vs. single-rep
+       focus). Uses a denser dashed accent — same color, different texture
+       — rather than a different hue so we don't introduce a new palette. */
+    .repertoire-active.multi { border-style: dashed; }
     .repertoire-active-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
     .repertoire-active-name { font-weight: 600; flex: 1 1 auto; min-width: 100px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .repertoire-active-count { font-family: var(--mono); font-size: 11px; color: var(--fg-dim); }
@@ -1349,7 +1354,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">puzzle-start-ply</span>
+    <span id="buildVersion">multi-rep-filter</span>
     <button id="soundToggle" class="sound-toggle" type="button" aria-label="Toggle sound" title="Toggle sound effects">🔊</button>
     <!-- Stats drawer toggle (issue #9). Same lightweight aesthetic as the
          sound toggle — header real estate is tight, so it's icon-only. The
@@ -2370,6 +2375,7 @@
       // user re-searches against the new FEN.
       $('#sessionPanel').prop('hidden', true);
       lastMatches = null;
+      lastMatchesRepsByPid = null;
     }
 
     // Toggle the FEN-paste section. Hidden by default — pasting raw FEN
@@ -2397,10 +2403,11 @@
         setStatus('lib/posKey.js failed to load — check the network tab.', 'error');
         return;
       }
-      // Repertoire mode: search the union across all FENs in the active
-      // repertoire. Single-position branch below remains the default.
-      if (activeRepertoireId) {
-        await searchPuzzlesForActiveRepertoire();
+      // Repertoire mode: search the union across all FENs in every active
+      // repertoire (1 or N). Single-position branch below remains the
+      // default when no repertoires are selected.
+      if (activeRepertoireIds.length > 0) {
+        await searchPuzzlesForActiveRepertoires();
         return;
       }
       var fen = chess.fen();
@@ -2460,65 +2467,85 @@
     }
 
     // ─── Repertoire-mode search ────────────────────────────────────────
-    // Fetch the unique shards covering all FENs in the active repertoire
+    // Fetch the unique shards covering all FENs in every active repertoire
     // in parallel, look up each FEN's matches in its shard, dedupe by
-    // puzzle id (puzzles can appear at multiple positions in the source
-    // game), apply the perspective filter PER ITEM (so each FEN's
-    // side-to-move determines what counts as "my color" for that FEN's
-    // puzzles), then render the union.
+    // puzzle id (puzzles can appear at multiple positions across the
+    // selected repertoires), apply the perspective filter PER ITEM (so
+    // each FEN's stored orientation determines what counts as "my color"
+    // for that FEN's puzzles), then render the union.
     //
-    // Per-item perspective filter rationale: if a repertoire mixes
-    // white-side and black-side study (e.g. white opening lines AND
-    // black defenses), a global searchOrientation toggle would be
-    // wrong-by-design. Each FEN already encodes its own side-to-move; we
-    // honor that. The "my color only" toggle gates the filter overall —
-    // turning it OFF returns all colors per item (same global
-    // semantics).
-    async function searchPuzzlesForActiveRepertoire() {
-      // Capture the active id so we can detect a mid-flight deactivation
-      // or switch (user clicks ×, picks a different repertoire, or a
-      // remote-side delete sync arrives during our awaits). Without this
-      // guard, results can paint into the UI after the user already
-      // moved on — surprising and bad.
-      var capturedId = activeRepertoireId;
-      var rep = Repertoires.get(capturedId);
-      if (!rep) {
-        // Active vanished underneath us. Fall back gracefully.
+    // Per-item perspective filter rationale: a single repertoire can mix
+    // white-side and black-side study, AND across multiple selected
+    // repertoires the mix is even more likely. A global searchOrientation
+    // toggle would be wrong-by-design. Each FEN already encodes its own
+    // saved orientation; we honor that. The "my color only" toggle gates
+    // the filter overall — turning it OFF returns all colors per item
+    // (same global semantics).
+    //
+    // Multi-rep tracking: we also build a parallel `pidToReps` map (pid →
+    // array of rep ids that contributed it). When 2+ reps are active and
+    // the user starts training, this map feeds Session.createTraining's
+    // round-robin draft so each round pulls roughly equal counts from
+    // each repertoire. Stored on `lastMatchesRepsByPid` for the training
+    // launch path to consume.
+    async function searchPuzzlesForActiveRepertoires() {
+      // Capture the active set so we can detect mid-flight changes (user
+      // toggles a pill on/off, deletes a rep, or a remote-side delete sync
+      // arrives during our awaits). Without this guard, results can paint
+      // into the UI after the user already moved on.
+      var capturedIds = activeRepertoireIds.slice();
+      var capturedKey = JSON.stringify(capturedIds);
+      function activeMatchesCaptured() {
+        return JSON.stringify(activeRepertoireIds) === capturedKey;
+      }
+
+      // Resolve to live repertoires; if any captured id has vanished
+      // (deleted on another device, syncing arrived between capture and
+      // here), we still proceed with whatever survives.
+      var activeReps = [];
+      for (var ai = 0; ai < capturedIds.length; ai++) {
+        var r = Repertoires.get(capturedIds[ai]);
+        if (r) activeReps.push(r);
+      }
+      if (!activeReps.length) {
+        // Nothing left to search. Clean up rather than spinning.
         deactivateRepertoire();
         return;
       }
-      if (!rep.items.length) {
-        renderResults([]);
-        setStatus('Repertoire "' + rep.name + '" has no positions yet. Set a position on the board, then click + Add current.', 'warn');
-        return;
-      }
-      // Compute (key, shard, item) triples for every item. Items with
-      // unparseable FENs are dropped with a console warning rather than
-      // failing the whole search.
+
+      // Compute (key, shard, item, repId) tuples for every item across all
+      // active repertoires. Items with unparseable FENs are dropped with a
+      // console warning rather than failing the whole search.
       var triples = [];
-      for (var i = 0; i < rep.items.length; i++) {
-        var it = rep.items[i];
-        var k;
-        try { k = fenPositionKey(it.fen); } catch (e) { k = ''; }
-        if (!k) {
-          if (typeof console !== 'undefined' && console.warn) {
-            console.warn('[repertoires] skipping unparseable FEN at index', i, it.fen);
+      for (var ri = 0; ri < activeReps.length; ri++) {
+        var rep = activeReps[ri];
+        var repId = rep.id;
+        for (var i = 0; i < rep.items.length; i++) {
+          var it = rep.items[i];
+          var k;
+          try { k = fenPositionKey(it.fen); } catch (e) { k = ''; }
+          if (!k) {
+            if (typeof console !== 'undefined' && console.warn) {
+              console.warn('[repertoires] skipping unparseable FEN in "' + rep.name + '" at index', i, it.fen);
+            }
+            continue;
           }
-          continue;
+          var sh;
+          try { sh = await shardIdAsync(k); } catch (e) {
+            setStatus('SHA-1 hashing not available (Web Crypto required, http context).', 'error');
+            return;
+          }
+          // Mid-flight bail — user changed the active set, abandon.
+          if (!activeMatchesCaptured()) return;
+          triples.push({ key: k, shard: sh, item: it, repId: repId });
         }
-        var sh;
-        try { sh = await shardIdAsync(k); } catch (e) {
-          setStatus('SHA-1 hashing not available (Web Crypto required, http context).', 'error');
-          return;
-        }
-        // Mid-flight deactivation / switch — bail without touching UI
-        // beyond what's already been done (status string is fine).
-        if (activeRepertoireId !== capturedId) return;
-        triples.push({ key: k, shard: sh, item: it });
       }
       if (!triples.length) {
         renderResults([]);
-        setStatus('No usable positions in repertoire "' + rep.name + '".', 'warn');
+        var emptyName = activeReps.length === 1 ? '"' + activeReps[0].name + '"' :
+          (activeReps.length + ' selected repertoires');
+        setStatus('No usable positions in ' + emptyName +
+                  '. Set a position on the board, then click + Add current.', 'warn');
         return;
       }
       // Unique shards across all items. Ordering doesn't matter since the
@@ -2526,19 +2553,26 @@
       var uniqueShards = {};
       for (var t = 0; t < triples.length; t++) uniqueShards[triples[t].shard] = true;
       var shardList = Object.keys(uniqueShards);
-      setStatus('Searching repertoire "' + rep.name + '" — fetching ' +
+      // Status preamble — different phrasing for single vs. multi.
+      var label;
+      if (activeReps.length === 1) {
+        label = '"' + activeReps[0].name + '"';
+      } else {
+        var names = activeReps.map(function (r) { return r.name; });
+        label = activeReps.length + ' repertoires (' + names.join(', ') + ')';
+      }
+      setStatus('Searching ' + label + ' — fetching ' +
                 shardList.length + ' shard' + (shardList.length === 1 ? '' : 's') + '…', 'info');
       try {
         // Parallel-fetch all unique shards. fetchIndexShardCached hits
         // IDB first, so re-running a search on a previously-loaded
-        // repertoire is local. 404s come back as {status: 404, json:
-        // null} — treat empty.
+        // selection is local. 404s come back as {status: 404, json: null}.
         var fetched = await Promise.all(shardList.map(function (s) {
           return fetchIndexShardCached(s).then(function (res) { return { shard: s, res: res }; });
         }));
         // Final mid-flight check before we touch the result list. After
         // this point, we're synchronous, so no further awaits can race.
-        if (activeRepertoireId !== capturedId) return;
+        if (!activeMatchesCaptured()) return;
         var byShard = {};
         var anyHit = false;
         for (var f = 0; f < fetched.length; f++) {
@@ -2559,8 +2593,14 @@
         // status messages report a number the user understands. A naive
         // `rawTotal += raw.length` would double-count a puzzle whose
         // source game passes through several positions in the
-        // repertoire (which is the common case for opening study).
+        // selection (which is the common case for opening study).
+        //
+        // Also build pidToReps: pid → [repId, ...]. A puzzle reachable
+        // through items from multiple repertoires accumulates all of
+        // them. Used by the training-launch path to feed Session.create-
+        // Training's round-robin draft.
         var unioned = Object.create(null);
+        var pidToReps = Object.create(null);
         var rawSeen = Object.create(null);
         for (var p = 0; p < triples.length; p++) {
           var tr = triples[p];
@@ -2591,7 +2631,7 @@
           }
           // Track every pid that surfaced (regardless of filter outcome)
           // so the unfiltered-unique count is correct across the
-          // repertoire.
+          // selection.
           for (var qq = 0; qq < raw.length; qq++) {
             var rmm = raw[qq];
             if (rmm && rmm[0]) rawSeen[rmm[0]] = true;
@@ -2600,8 +2640,17 @@
             var mm = keep[q];
             if (!mm || !mm[0]) continue;
             // Dedupe — first FEN wins. Subsequent matches against the
-            // same pid get dropped silently.
+            // same pid get dropped silently from `unioned`.
             if (!unioned[mm[0]]) unioned[mm[0]] = mm;
+            // For pidToReps, accumulate ALL contributing rep ids (a pid
+            // can come from multiple reps via different items). indexOf
+            // is fine for small N (single-digit reps in practice).
+            var arr = pidToReps[mm[0]];
+            if (!arr) {
+              arr = [];
+              pidToReps[mm[0]] = arr;
+            }
+            if (arr.indexOf(tr.repId) === -1) arr.push(tr.repId);
           }
         }
         var matches = [];
@@ -2613,6 +2662,11 @@
           if (Object.prototype.hasOwnProperty.call(rawSeen, rid)) rawUniqueCount++;
         }
         var filteredOutUnique = rawUniqueCount - matches.length;
+        // Stash the rep-attribution map for the training launch path.
+        // Always set (even in single-rep mode) so that any downstream
+        // consumer sees consistent state — but onStartTrainingClick only
+        // forwards multiRep when 2+ reps are active.
+        lastMatchesRepsByPid = pidToReps;
         renderResults(matches);
         configureSlider(matches);
         // Status. anyHit=false means every shard 404'd (small dataset
@@ -2621,21 +2675,21 @@
           ? ' (' + filteredOutUnique + ' hidden — wrong color)'
           : '';
         if (!anyHit) {
-          setStatus('No puzzles found across this repertoire. (None of the ' +
+          setStatus('No puzzles found across ' + label + '. (None of the ' +
                     shardList.length + ' shards are in the current dataset.)', 'info');
         } else if (matches.length === 0) {
           if (rawUniqueCount > 0 && matchOwnColorOnly) {
             setStatus(rawUniqueCount + ' puzzle' + (rawUniqueCount === 1 ? '' : 's') +
-              ' found across the repertoire, but none in your perspective. Uncheck "My color only" to see them.', 'info');
+              ' found across ' + label + ', but none in your perspective. Uncheck "My color only" to see them.', 'info');
           } else {
-            setStatus('No puzzles found across this repertoire.', 'info');
+            setStatus('No puzzles found across ' + label + '.', 'info');
           }
         } else if (matches.length > MAX_RESULTS) {
-          setStatus(matches.length + ' unique matches across "' + rep.name + '"' + filterNote +
+          setStatus(matches.length + ' unique matches across ' + label + filterNote +
             ' (showing first ' + MAX_RESULTS + ' by rating).', 'ok');
         } else {
           setStatus(matches.length + ' match' + (matches.length === 1 ? '' : 'es') +
-            ' found across "' + rep.name + '"' + filterNote + '.', 'ok');
+            ' found across ' + label + filterNote + '.', 'ok');
         }
       } catch (e) {
         setStatus('Fetch error: ' + e.message + '. Are you serving over http (not file://)? Is data/ generated?', 'error');
@@ -3910,6 +3964,7 @@
       $('#resultsMeta').prop('hidden', true);
       $('#sessionPanel').prop('hidden', true);
       lastMatches = null;
+      lastMatchesRepsByPid = null;
       setStatus('Position updated. Click Search.', 'info');
       return { ok: true, from: moveObj.from, to: moveObj.to };
     }
@@ -4174,6 +4229,7 @@
       $('#resultsMeta').prop('hidden', true);
       $('#sessionPanel').prop('hidden', true);
       lastMatches = null;
+      lastMatchesRepsByPid = null;
       setStatus('Undid last move. Click Search.', 'info');
     }
 
@@ -4204,6 +4260,7 @@
       $('#resultsMeta').prop('hidden', true);
       $('#sessionPanel').prop('hidden', true);
       lastMatches = null;
+      lastMatchesRepsByPid = null;
       setStatus('Reset to start position. Drag pieces or paste a FEN.', 'info');
     }
 
@@ -4226,6 +4283,7 @@
       $('#resultsMeta').prop('hidden', true);
       $('#sessionPanel').prop('hidden', true);
       lastMatches = null;
+      lastMatchesRepsByPid = null;
       setStatus('Flipped to ' + searchOrientation + '. Click Search' +
         (matchOwnColorOnly ? ' for puzzles where ' +
           (searchOrientation === 'white' ? 'white' : 'black') + ' moves.' : '.'),
@@ -4244,6 +4302,7 @@
       $('#resultsMeta').prop('hidden', true);
       $('#sessionPanel').prop('hidden', true);
       lastMatches = null;
+      lastMatchesRepsByPid = null;
       setStatus(matchOwnColorOnly
         ? 'Filtering to your color only. Click Search.'
         : 'Showing puzzles for both colors. Click Search.', 'info');
@@ -5681,12 +5740,26 @@
       clearTrainingResume();
       refreshTrainingResumePill();
       var ply = getActivePlyRange();
+      // When 2+ repertoires are active, pass a multiRep block so each
+      // training round draws roughly equal counts from each rep via
+      // round-robin draft. lastMatchesRepsByPid was populated during the
+      // most recent searchPuzzlesForActiveRepertoires call. Below 2 active
+      // reps, we leave multiRep null and createTraining falls through to
+      // its default uniform-random sample (existing behavior).
+      var multiRep = null;
+      if (activeRepertoireIds.length >= 2 && lastMatchesRepsByPid) {
+        multiRep = {
+          repIds: activeRepertoireIds.slice(),
+          repsByPid: lastMatchesRepsByPid
+        };
+      }
       var t = Session.createTraining({
         matches: lastMatches,
         rounds: getTrainingRounds(),
         plyMin: ply.min,
         plyMax: ply.max,
-        isCompleted: Progress.isCompleted
+        isCompleted: Progress.isCompleted,
+        multiRep: multiRep
       });
       if (t.complete) {
         // Defensive — button should be disabled in this state via
@@ -6576,11 +6649,33 @@
             // any subsequent search redraws it from fresh Progress.
             refreshReviewBadge();
             // Re-render the repertoires row so a remote-side create /
-            // rename / delete shows up without a page reload. If the
-            // active repertoire was deleted remotely, drop it.
+            // rename / delete shows up without a page reload. Filter the
+            // active set against live reps — any active id whose
+            // repertoire was deleted (or tombstoned) on another device
+            // gets dropped here, with the persisted slot updated to
+            // match. renderActiveRepertoire's resolve-loop also enforces
+            // this invariant on render, but pruning here makes the
+            // status of the next user action (e.g. searching) match
+            // what's actually possible.
             if (typeof renderRepertoires === 'function') {
-              if (activeRepertoireId && !Repertoires.get(activeRepertoireId)) {
-                deactivateRepertoire();
+              if (activeRepertoireIds.length) {
+                var stillLive = [];
+                for (var ii = 0; ii < activeRepertoireIds.length; ii++) {
+                  if (Repertoires.get(activeRepertoireIds[ii])) {
+                    stillLive.push(activeRepertoireIds[ii]);
+                  }
+                }
+                if (stillLive.length !== activeRepertoireIds.length) {
+                  activeRepertoireIds = stillLive;
+                  saveActiveRepertoireIds();
+                  // If everything got wiped, also reset the matches state —
+                  // mirrors deactivateRepertoire's cleanup.
+                  if (activeRepertoireIds.length === 0) {
+                    lastMatches = null;
+                    lastMatchesRepsByPid = null;
+                    renderResults([]);
+                  }
+                }
               }
               renderRepertoires();
             }
@@ -6606,6 +6701,13 @@
         // empty), but it's clearer to keep migration tied to the user-
         // initiated event.
       }
+      // Now that username is set on Repertoires, restore the active set
+      // from LS. Doing this AFTER setUsername means we read from the
+      // namespaced slot (per-user) when sync is logged in, or the plain
+      // slot when anonymous. loadActiveRepertoireIds drops any ids whose
+      // repertoires no longer exist (deleted on another device since the
+      // last session here).
+      activeRepertoireIds = loadActiveRepertoireIds();
 
       // ─── DOM bindings ─────────────────────────────────────────────────
       $('#syncPill').on('click', function () {
@@ -7583,16 +7685,76 @@
     }
 
     // ─── Repertoires UI (named multi-position groups) ──────────────────
-    // Layered on top of lib/repertoires.js. The active repertoire is
-    // tracked in memory only — page reload returns to single-position
-    // search mode by default. This keeps reload behavior predictable: if
-    // a user came back to the tab the next day they wouldn't expect to
-    // still be filtered to a 12-position Caro-Kann set.
+    // Layered on top of lib/repertoires.js. The active repertoire SET (one
+    // or more ids) drives both single- and multi-rep search modes; the user
+    // toggles individual pills on/off, and the union of all selected
+    // repertoires' FENs is what gets searched.
+    //
+    // The active set persists across reloads (per-username, mirrors the
+    // username-aware storage in Repertoires / Progress) so a user's chosen
+    // focus survives a page refresh. This is purely UI state — never synced
+    // to the gist (gist holds the repertoires themselves, not which ones
+    // any one device has selected; selecting on one device shouldn't change
+    // selection on another).
     //
     // Mutation paths funnel through repertoireMutated() which (a) calls
     // Sync.notifyMutation so the gist gets the change and (b) re-renders
     // the row + active control bar.
-    var activeRepertoireId = null;
+    var activeRepertoireIds = [];
+    // Parallel to lastMatches: maps pid → array of rep ids that contributed
+    // it during the most recent search. Populated by the multi-rep search
+    // path, used by onStartTrainingClick to pass `multiRep` through to
+    // Session.createTraining for round-robin balancing across rounds. Null
+    // outside repertoire mode (a normal single-position search doesn't
+    // populate this).
+    var lastMatchesRepsByPid = null;
+
+    var ACTIVE_REPS_STORAGE_KEY = 'puzzle_explorer_active_reps';
+    function _activeRepsStorageKey() {
+      // Mirror Repertoires.getActiveStorageKey: namespace by username when
+      // sync is logged in, plain key otherwise. Keeps two browsers logged
+      // in as different users from cross-contaminating their selections.
+      var u = (typeof Repertoires === 'object' && Repertoires &&
+               typeof Repertoires.getUsername === 'function')
+        ? Repertoires.getUsername() : '';
+      return u ? (ACTIVE_REPS_STORAGE_KEY + '_' + u) : ACTIVE_REPS_STORAGE_KEY;
+    }
+    function loadActiveRepertoireIds() {
+      // Read the persisted array, validate against current repertoires
+      // (drop ids that no longer exist or are tombstoned). Defensive read
+      // matches the lib/progress.js pattern: corrupt JSON or unexpected
+      // shape degrades to []. Never throws.
+      var raw;
+      try { raw = localStorage.getItem(_activeRepsStorageKey()); }
+      catch (e) { return []; }
+      if (!raw) return [];
+      var parsed;
+      try { parsed = JSON.parse(raw); } catch (e) { return []; }
+      if (!Array.isArray(parsed)) return [];
+      // Filter to live repertoire ids only; preserve the original ordering
+      // (which is the user's selection order — first-selected is "rep 0"
+      // in the round-robin draft).
+      var out = [];
+      for (var i = 0; i < parsed.length; i++) {
+        var id = parsed[i];
+        if (typeof id !== 'string' || !id) continue;
+        if (typeof Repertoires === 'object' && Repertoires && Repertoires.get(id)) {
+          if (out.indexOf(id) === -1) out.push(id);
+        }
+      }
+      return out;
+    }
+    function saveActiveRepertoireIds() {
+      try {
+        localStorage.setItem(_activeRepsStorageKey(), JSON.stringify(activeRepertoireIds));
+      } catch (e) {
+        // Quota / private mode — UI state isn't worth surfacing an error
+        // for. Worst case, the active set resets on next reload.
+        if (typeof console !== 'undefined' && console.warn) {
+          console.warn('[active-reps] save failed:', e && e.message);
+        }
+      }
+    }
 
     function repertoireMutated() {
       // Same posture as recordProgressMutation — graceful if Sync isn't
@@ -7613,6 +7775,9 @@
       // Hide the demo example-btn row whenever the user has at least one
       // repertoire — same self-healing logic as the old preset row.
       $('#examplesRow').prop('hidden', list.length > 0);
+      // Build a quick set for O(1) active lookup while rendering pills.
+      var activeSet = Object.create(null);
+      for (var a = 0; a < activeRepertoireIds.length; a++) activeSet[activeRepertoireIds[a]] = true;
       for (var i = 0; i < list.length; i++) {
         var r = list[i];
         var $pill = $('<button type="button" class="repertoire-pill"></button>')
@@ -7620,36 +7785,106 @@
           .attr('title', r.name + ' · ' + r.items.length + ' position' + (r.items.length === 1 ? '' : 's'));
         $pill.append($('<span class="repertoire-pill-name"></span>').text(r.name));
         $pill.append($('<span class="repertoire-pill-count"></span>').text('· ' + r.items.length));
-        if (r.id === activeRepertoireId) $pill.addClass('active');
+        if (activeSet[r.id]) $pill.addClass('active');
         $row.append($pill);
       }
       renderActiveRepertoire();
     }
 
-    // Render the active-repertoire control bar + items list. No-op when
-    // nothing's active. Called from renderRepertoires AND directly after
-    // any mutation that affects the active set (add/remove items,
-    // rename) — the pill row and the active panel can drift out of sync
-    // otherwise (rename changes the pill label but not the items list).
+    // Render the active-repertoire control bar.
+    //
+    // Three modes, driven by activeRepertoireIds.length:
+    //   0 active: panel hidden entirely (no repertoire mode at all).
+    //   1 active: full single-rep panel — name, item count, items list, and
+    //             the per-rep action row (+ Add current / Rename / Delete /
+    //             Exit ×). This is the original single-rep UX preserved.
+    //   2+ active: summary bar — joined names + total dedup'd-position count
+    //              + Clear all (×). Per-rep actions are hidden because they
+    //              all need a single target; the user must drop down to one
+    //              selection (click pills off until 1 remains) to use them.
+    //              The items list is hidden too — flattening N repertoires'
+    //              items into one list creates an awkward jumble that's
+    //              rarely what the user wants when in "combine these and
+    //              search" mode.
     function renderActiveRepertoire() {
       var $box = $('#repertoireActive');
-      if (!activeRepertoireId) { $box.prop('hidden', true); return; }
-      var rep = (typeof Repertoires === 'object' && Repertoires) ? Repertoires.get(activeRepertoireId) : null;
-      if (!rep) {
-        // Active repertoire vanished (deleted on another device, then
-        // synced over). Clean up and bail without crashing.
-        activeRepertoireId = null;
-        $box.prop('hidden', true);
+      if (!activeRepertoireIds.length) { $box.prop('hidden', true).removeClass('multi'); return; }
+
+      // Resolve to live repertoires; drop any that have vanished underneath
+      // us (deleted on another device, sync arrived). If the array changes
+      // shape from this filter, persist the new shape so reloads agree.
+      var liveReps = [];
+      for (var i = 0; i < activeRepertoireIds.length; i++) {
+        var rep = (typeof Repertoires === 'object' && Repertoires)
+          ? Repertoires.get(activeRepertoireIds[i]) : null;
+        if (rep) liveReps.push(rep);
+      }
+      if (liveReps.length !== activeRepertoireIds.length) {
+        activeRepertoireIds = liveReps.map(function (r) { return r.id; });
+        saveActiveRepertoireIds();
+      }
+      if (!liveReps.length) {
+        $box.prop('hidden', true).removeClass('multi');
         return;
       }
+
       $box.prop('hidden', false);
-      $('#repertoireActiveName').text(rep.name);
+      var multi = liveReps.length >= 2;
+      $box.toggleClass('multi', multi);
+
+      // Per-rep action buttons: only meaningful when exactly 1 is active.
+      // Hide them in multi-mode (and re-show in single-mode) so the multi
+      // bar isn't cluttered with controls that need a target they don't
+      // have.
+      $('#repertoireAddCurrentBtn, #repertoireRenameBtn, #repertoireDeleteBtn').prop('hidden', multi);
+      $('#repertoireItems').prop('hidden', multi);
+
+      if (multi) {
+        // Summary bar: joined names + total dedup'd position count. Names
+        // are joined with " · " and ellipsized via CSS if the row gets
+        // too long. The full list also goes in the title attr for hover.
+        var names = liveReps.map(function (r) { return r.name; });
+        var nameStr = names.join(' · ');
+        $('#repertoireActiveName').text(nameStr).attr('title', nameStr);
+
+        // Dedup positions across repertoires using fenPositionKey — the
+        // same canonicalization used everywhere else for position
+        // identity. A FEN that appears in two repertoires only counts as
+        // one "position" in the user-visible total. Using the canonical
+        // key means two FENs that differ only in halfmove/fullmove
+        // (which represent the same chess position) also collapse.
+        var keys = Object.create(null);
+        for (var j = 0; j < liveReps.length; j++) {
+          var items = liveReps[j].items || [];
+          for (var k = 0; k < items.length; k++) {
+            var key;
+            try { key = fenPositionKey(items[k].fen); } catch (e) { key = ''; }
+            if (key) keys[key] = true;
+          }
+        }
+        var dedupCount = 0;
+        for (var x in keys) {
+          if (Object.prototype.hasOwnProperty.call(keys, x)) dedupCount++;
+        }
+        $('#repertoireActiveCount').text(
+          dedupCount + ' position' + (dedupCount === 1 ? '' : 's') +
+          ' across ' + liveReps.length + ' repertoires');
+        // Items list isn't shown in multi-mode, but clear it so a later
+        // collapse to single doesn't briefly flash the previous-active's
+        // items before the next render fills in the right ones.
+        $('#repertoireItems').empty();
+        return;
+      }
+
+      // Single-rep mode (original behavior preserved verbatim below).
+      var rep = liveReps[0];
+      $('#repertoireActiveName').text(rep.name).attr('title', rep.name);
       $('#repertoireActiveCount').text(rep.items.length + ' position' + (rep.items.length === 1 ? '' : 's'));
       var $items = $('#repertoireItems').empty();
-      for (var i = 0; i < rep.items.length; i++) {
-        var item = rep.items[i];
+      for (var ii = 0; ii < rep.items.length; ii++) {
+        var item = rep.items[ii];
         var $li = $('<li></li>');
-        $li.append($('<span class="repertoire-item-num"></span>').text((i + 1) + '.'));
+        $li.append($('<span class="repertoire-item-num"></span>').text((ii + 1) + '.'));
         // Label preferred when present; fall back to a compact slice of
         // the FEN. The full FEN goes in the title attr for hover.
         var displayText = (typeof item.label === 'string' && item.label) ? item.label : item.fen;
@@ -7667,38 +7902,65 @@
       }
     }
 
-    // Activate / deactivate. Clicking the active pill again deactivates
-    // (matches "selecting the selected" filter UX patterns elsewhere).
+    // Toggle a single pill. Each click adds/removes that id from the
+    // active set; multi-select is the default model. The first id added
+    // becomes "rep 0" in the round-robin draft order, second id is "rep 1",
+    // etc. — preserving selection order keeps draft behavior predictable
+    // for the user (the rep they pick first gets first draft pick across
+    // sessions, until shuffle re-orders within a single session).
     function toggleRepertoireActive(id) {
-      if (activeRepertoireId === id) { deactivateRepertoire(); return; }
       var rep = Repertoires.get(id);
       if (!rep) {
         // Stale click against a now-deleted repertoire. Re-render to clear it.
         renderRepertoires();
         return;
       }
-      activeRepertoireId = id;
+      var idx = activeRepertoireIds.indexOf(id);
+      if (idx === -1) {
+        activeRepertoireIds.push(id);
+      } else {
+        activeRepertoireIds.splice(idx, 1);
+      }
+      saveActiveRepertoireIds();
       renderRepertoires();
-      // Reset any prior single-position results — the user is switching
-      // search modes and the old result list would be misleading. Empty
-      // matches state also disables the session/training Start buttons
-      // until a fresh repertoire search runs (configureSlider hides the
-      // panel when the list is empty).
+      // Reset any prior result list — the user just changed what's
+      // searched, the old results are misleading. Empty matches state
+      // also disables the session/training Start buttons until a fresh
+      // search runs.
       lastMatches = null;
+      lastMatchesRepsByPid = null;
       renderResults([]);
-      // Status hint so the user knows what to do next. Click Search to
-      // pull the union; we don't auto-fetch on activation since fetching
-      // can be many shards and the user may want to set a rating range
-      // first via filters / training-customize panel.
-      setStatus('Repertoire "' + rep.name + '" active. Click Search to find puzzles across ' +
-                rep.items.length + ' position' + (rep.items.length === 1 ? '' : 's') + '.',
-                rep.items.length > 0 ? 'info' : 'warn');
+      // Status hint scaled to the new active count.
+      if (activeRepertoireIds.length === 0) {
+        setStatus('Repertoire mode off. Set a single position and click Search.', 'info');
+      } else if (activeRepertoireIds.length === 1) {
+        var solo = Repertoires.get(activeRepertoireIds[0]);
+        if (solo) {
+          setStatus('Repertoire "' + solo.name + '" active. Click Search to find puzzles across ' +
+                    solo.items.length + ' position' + (solo.items.length === 1 ? '' : 's') + '.',
+                    solo.items.length > 0 ? 'info' : 'warn');
+        }
+      } else {
+        var names = [];
+        for (var i = 0; i < activeRepertoireIds.length; i++) {
+          var r = Repertoires.get(activeRepertoireIds[i]);
+          if (r) names.push(r.name);
+        }
+        setStatus(activeRepertoireIds.length + ' repertoires active (' +
+                  names.join(' · ') + '). Click Search to combine them.', 'info');
+      }
     }
 
+    // Clear the entire active set. Hooked to the × button (which doubles
+    // as "exit repertoire mode" in single-mode and "clear all" in multi-
+    // mode). Also called by code paths that need a hard reset (e.g. the
+    // last-active rep got deleted via the per-rep Delete button).
     function deactivateRepertoire() {
-      if (!activeRepertoireId) return;
-      activeRepertoireId = null;
+      if (!activeRepertoireIds.length) return;
+      activeRepertoireIds = [];
+      saveActiveRepertoireIds();
       lastMatches = null;
+      lastMatchesRepsByPid = null;
       renderResults([]);
       renderRepertoires();
       setStatus('Repertoire mode off. Set a single position and click Search.', 'info');
@@ -7733,18 +7995,27 @@
         setStatus('Could not create repertoire — browser storage may be full.', 'error');
         return;
       }
-      // Activate the new repertoire so the user can immediately start
-      // adding positions to it. Also re-renders the row.
-      activeRepertoireId = rep.id;
+      // Activate the new repertoire (alone) so the user can immediately
+      // start adding positions to it. Any previously-active reps are
+      // dropped — creating a new repertoire is a "focus on this new one"
+      // intent, and the per-rep "+ Add current" button is only visible
+      // when exactly one rep is active anyway.
+      activeRepertoireIds = [rep.id];
+      saveActiveRepertoireIds();
       renderRepertoires();
       lastMatches = null;
+      lastMatchesRepsByPid = null;
       renderResults([]);
       setStatus('Created "' + rep.name + '". Set a position on the board, then click + Add current.', 'ok');
       repertoireMutated();
     }
 
     function onAddCurrentToRepertoire() {
-      if (!activeRepertoireId) return;
+      // Only meaningful when exactly one repertoire is active — the button
+      // is hidden in multi-mode anyway, but defensive guard for anyone
+      // calling this programmatically.
+      if (activeRepertoireIds.length !== 1) return;
+      var soloId = activeRepertoireIds[0];
       if (!chess) {
         setStatus('Board not ready yet — try again in a moment.', 'warn');
         return;
@@ -7763,16 +8034,16 @@
         setStatus('Current position is invalid — cannot add.', 'error');
         return;
       }
-      var rep = Repertoires.get(activeRepertoireId);
+      var rep = Repertoires.get(soloId);
       if (!rep) {
         // Active was deleted underneath us. Clean up.
         deactivateRepertoire();
         return;
       }
-      var ok = Repertoires.addItem(activeRepertoireId, fen, { orientation: searchOrientation });
+      var ok = Repertoires.addItem(soloId, fen, { orientation: searchOrientation });
       if (!ok) {
         // Disambiguate dedup vs. quota / cap. Re-fetch and check size.
-        var after = Repertoires.get(activeRepertoireId);
+        var after = Repertoires.get(soloId);
         if (after && after.items.length === rep.items.length) {
           setStatus('This position is already in "' + rep.name + '".', 'info');
         } else {
@@ -7783,19 +8054,23 @@
       // renderRepertoires cascades to renderActiveRepertoire — single
       // call refreshes both the pill (count) and the items list.
       renderRepertoires();
-      var updated = Repertoires.get(activeRepertoireId);
+      var updated = Repertoires.get(soloId);
       setStatus('Added position to "' + rep.name + '" (' + updated.items.length + ' total).', 'ok');
       repertoireMutated();
     }
 
     function onRemoveRepertoireItem(fen) {
-      if (!activeRepertoireId || typeof fen !== 'string') return;
-      var rep = Repertoires.get(activeRepertoireId);
+      // Items list is only rendered in single-rep mode (multi-mode hides
+      // it), so this handler should always run with exactly 1 active.
+      // Bail defensively if invariant is somehow violated.
+      if (activeRepertoireIds.length !== 1 || typeof fen !== 'string') return;
+      var soloId = activeRepertoireIds[0];
+      var rep = Repertoires.get(soloId);
       if (!rep) { deactivateRepertoire(); return; }
       // No confirm — the action is per-item and easily redo-able by
       // clicking + Add current with the FEN reloaded. A confirm here would
       // be friction-without-payoff.
-      var ok = Repertoires.removeItem(activeRepertoireId, fen);
+      var ok = Repertoires.removeItem(soloId, fen);
       if (!ok) {
         setStatus('Could not remove position.', 'error');
         return;
@@ -7805,8 +8080,9 @@
     }
 
     function onRenameRepertoire() {
-      if (!activeRepertoireId) return;
-      var rep = Repertoires.get(activeRepertoireId);
+      if (activeRepertoireIds.length !== 1) return;
+      var soloId = activeRepertoireIds[0];
+      var rep = Repertoires.get(soloId);
       if (!rep) { deactivateRepertoire(); return; }
       var raw = window.prompt('Rename repertoire:', rep.name);
       if (raw === null) return;
@@ -7831,7 +8107,7 @@
           }
         }
       }
-      var ok = Repertoires.rename(activeRepertoireId, name);
+      var ok = Repertoires.rename(soloId, name);
       if (!ok) {
         setStatus('Could not rename repertoire.', 'error');
         return;
@@ -7842,8 +8118,9 @@
     }
 
     function onDeleteRepertoire() {
-      if (!activeRepertoireId) return;
-      var rep = Repertoires.get(activeRepertoireId);
+      if (activeRepertoireIds.length !== 1) return;
+      var soloId = activeRepertoireIds[0];
+      var rep = Repertoires.get(soloId);
       if (!rep) { deactivateRepertoire(); return; }
       // Confirm IS warranted here — deletion drops all items and will
       // sync to other devices. Tombstone makes recovery impossible
@@ -7851,14 +8128,16 @@
       var msg = 'Delete repertoire "' + rep.name + '" (' + rep.items.length + ' position' +
                 (rep.items.length === 1 ? '' : 's') + ')? This cannot be undone.';
       if (!window.confirm(msg)) return;
-      var ok = Repertoires['delete'](activeRepertoireId);
+      var ok = Repertoires['delete'](soloId);
       if (!ok) {
         setStatus('Could not delete repertoire.', 'error');
         return;
       }
       var deletedName = rep.name;
-      activeRepertoireId = null;
+      activeRepertoireIds = [];
+      saveActiveRepertoireIds();
       lastMatches = null;
+      lastMatchesRepsByPid = null;
       renderResults([]);
       renderRepertoires();
       setStatus('Deleted "' + deletedName + '".', 'info');
