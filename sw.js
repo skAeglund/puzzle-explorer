@@ -63,6 +63,7 @@ const APP_SHELL = [
   './lib/progress.js',
   './lib/repertoires.js',
   './lib/lichessStudy.js',
+  './lib/lichessAuth.js',
   './lib/sync.js',
   './lib/cache.js',
   './lib/vendor/jquery-3.7.1.min.js',

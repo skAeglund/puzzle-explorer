@@ -562,6 +562,45 @@
       color: var(--fg-dim);
     }
     .import-study-target strong { color: var(--fg); font-weight: 500; }
+    /* Auth status row. Compact, sits between target and URL input.
+       Two visual states:
+         disconnected — neutral border, "Connect to Lichess" link-button
+         connected    — accent-tinted left border, "Connected as <user>" + Disconnect */
+    .import-study-auth {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 6px 10px;
+      margin-bottom: 12px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      font-size: 12px;
+      color: var(--fg-dim);
+    }
+    .import-study-auth.connected {
+      border-left: 3px solid var(--accent);
+    }
+    .import-study-auth strong { color: var(--fg); font-weight: 500; }
+    .import-study-auth button {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--fg);
+      padding: 3px 8px;
+      font-size: 11px;
+      border-radius: 3px;
+      cursor: pointer;
+      transition: border-color 0.1s, color 0.1s;
+    }
+    .import-study-auth button:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+    .import-study-auth .auth-spinner {
+      font-size: 11px;
+      color: var(--fg-dim);
+    }
     .import-study-field {
       display: flex;
       flex-direction: column;
@@ -1572,7 +1611,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">lichess-study-import</span>
+    <span id="buildVersion">lichess-study-auth</span>
     <button id="soundToggle" class="sound-toggle" type="button" aria-label="Toggle sound" title="Toggle sound effects">🔊</button>
     <!-- Stats drawer toggle (issue #9). Same lightweight aesthetic as the
          sound toggle — header real estate is tight, so it's icon-only. The
@@ -1700,6 +1739,14 @@
     </header>
     <div class="modal-body">
       <p class="import-study-target" id="importStudyTarget"></p>
+
+      <!-- Auth status row. Public studies need no auth — this row only
+           matters for users importing from a private study. The default
+           view is a low-key prompt to connect; once connected, shows
+           "Connected as <username>" with a Disconnect link. Tucked above
+           the URL input so users see the path forward when a private-
+           study fetch returns 404. -->
+      <div class="import-study-auth" id="importStudyAuthRow"></div>
 
       <label class="import-study-field">
         <span class="import-study-label">Study URL or ID</span>
@@ -2037,6 +2084,13 @@
        chess-0.10.3.js but doesn't depend on Repertoires (the import flow
        wires them together at call time). -->
   <script src="lib/lichessStudy.js"></script>
+  <!-- OAuth 2.0 + PKCE for Lichess — used by the study import to access
+       PRIVATE studies. The public study PGN endpoint works without auth,
+       so this is purely additive: when an access token is present we add
+       Authorization: Bearer to study fetches, when it isn't we fall back
+       to public-only behavior. No deps; pure module that init() configures
+       at startup. -->
+  <script src="lib/lichessAuth.js"></script>
   <!-- Cross-device sync via private Gist. Loads after Progress (its hooks
        wrap Progress.exportData/importData at init time). -->
   <script src="lib/sync.js"></script>
@@ -2394,6 +2448,53 @@
       // sets `chess` to a fresh Chess() (start position) and installs the
       // drag/drop handlers used by the move builder.
       rebuildSearchBoard();
+
+      // Lichess OAuth init. Configure if available (LichessAuth is a soft
+      // dep — if its <script> failed to load, the import dialog still
+      // works for public studies). The redirect URI is the current page
+      // sans query/hash; Lichess will redirect back here with ?code=... on
+      // the auth roundtrip. Calling handleCallback() unconditionally is
+      // safe — when the URL has no ?code= it returns { status: 'no_callback' }
+      // and does nothing. The promise resolution path is fire-and-forget;
+      // by the time the user clicks "Import from study" the auth state
+      // (if any) is in localStorage and visible to the UI.
+      if (typeof LichessAuth === 'object' && LichessAuth) {
+        try {
+          var redirectUri = window.location.origin + window.location.pathname;
+          // clientId is shown to the user on Lichess's consent screen.
+          // Convention is to use a URL pointing to the app, so the user
+          // recognizes what they're authorizing — Lichess accepts any
+          // string but the URL form is most informative. We deliberately
+          // use the deployed app URL rather than the redirectUri (which
+          // varies in dev) so the consent screen always says the same
+          // thing in production.
+          LichessAuth.configure({
+            clientId: 'https://skaeglund.github.io/puzzle-explorer/',
+            redirectUri: redirectUri
+          });
+          LichessAuth.handleCallback().then(function (res) {
+            if (res.status === 'success') {
+              var who = res.username ? ' as ' + res.username : '';
+              setStatus('Connected to Lichess' + who + '.', 'ok');
+              if (typeof refreshImportStudyAuthRow === 'function') refreshImportStudyAuthRow();
+            } else if (res.status === 'denied') {
+              setStatus('Lichess connection cancelled.', 'info');
+            } else if (res.status === 'error') {
+              setStatus('Lichess auth error: ' + res.message, 'error');
+            }
+            // 'no_callback' is the common case — nothing to surface.
+          }).catch(function (e) {
+            if (typeof console !== 'undefined' && console.warn) {
+              console.warn('[lichess-auth] handleCallback threw:', e && e.message);
+            }
+          });
+        } catch (e) {
+          if (typeof console !== 'undefined' && console.warn) {
+            console.warn('[lichess-auth] configure failed:', e && e.message);
+          }
+        }
+      }
+
       $(window).on('resize', function () {
         if (board) board.resize();
         renderAnnotations();   // SVG follows the board's bounding box
@@ -2456,6 +2557,12 @@
       $('#importStudyFetchBtn').on('click', onImportStudyFetch);
       $('#importStudyAddBtn').on('click', performImportStudy);
       $('#importStudyChapters').on('change', 'input[type=checkbox]', onImportStudyChapterToggle);
+      // Connect/Disconnect buttons live inside the dynamically-rendered
+      // #importStudyAuthRow, so attach via delegation. The IDs are
+      // mutually exclusive (only one is in the DOM at a time depending
+      // on auth state), so the handlers don't fight each other.
+      $('#importStudyAuthRow').on('click', '#importStudyConnectBtn', onImportStudyConnectClick);
+      $('#importStudyAuthRow').on('click', '#importStudyDisconnectBtn', onImportStudyDisconnectClick);
       $('#importStudyPlyMin, #importStudyPlyMax').on('input change', function () {
         if (importStudyState && importStudyState.chapters) renderImportStudyPreview();
       });
@@ -8407,6 +8514,7 @@
         '</strong> &middot; <span class="repertoire-active-count">' +
         rep.items.length + ' position' + (rep.items.length === 1 ? '' : 's') +
         '</span>');
+      refreshImportStudyAuthRow();
       $('#importStudyInput').val('');
       $('#importStudyPlyMin').val('1');
       $('#importStudyPlyMax').val('30');
@@ -8420,6 +8528,57 @@
       $('#importStudyBackdrop, #importStudyModal').prop('hidden', false);
       // Defer focus so the show animation doesn't fight the focus ring.
       setTimeout(function () { $('#importStudyInput').trigger('focus'); }, 20);
+    }
+
+    // Renders the connect/connected status row inside the import modal.
+    // Called from openImportStudyDialog and after a successful auth
+    // callback (so a user who connects mid-import sees the UI update
+    // without re-opening the modal). Also called after sign-out.
+    //
+    // Hoisted so init()'s LichessAuth.handleCallback() success handler
+    // can call it before the modal has ever been opened — a no-op then,
+    // but harmless. (The modal's auth row #importStudyAuthRow isn't
+    // hidden, but the modal as a whole is, so updating it doesn't paint
+    // anything until the modal opens.)
+    function refreshImportStudyAuthRow() {
+      var $row = $('#importStudyAuthRow').empty().removeClass('connected');
+      if (typeof LichessAuth !== 'object' || !LichessAuth) {
+        // Lib failed to load. Show a non-actionable hint so the row's
+        // presence isn't a mystery if the user notices.
+        $row.append('<span>Public studies only (auth module unavailable).</span>');
+        return;
+      }
+      if (LichessAuth.isAuthenticated()) {
+        var user = LichessAuth.getUsername();
+        $row.addClass('connected')
+            .append('<span>Connected as <strong>' + escapeHtml(user || 'Lichess user') + '</strong> &middot; private studies enabled.</span>')
+            .append($('<button type="button" id="importStudyDisconnectBtn">Disconnect</button>'));
+      } else {
+        $row.append('<span>Public studies only. Connect to Lichess to import private studies.</span>')
+            .append($('<button type="button" id="importStudyConnectBtn">Connect to Lichess</button>'));
+      }
+    }
+
+    function onImportStudyConnectClick() {
+      if (typeof LichessAuth !== 'object' || !LichessAuth) return;
+      // The auth flow is a full-page redirect — the modal will not be
+      // open after the round trip. Surface a brief status so the user
+      // understands why they're being navigated away.
+      $('#importStudyAuthRow').html('<span class="auth-spinner">Redirecting to lichess.org…</span>');
+      LichessAuth.startAuthFlow().catch(function (e) {
+        $('#importStudyAuthRow').html('<span style="color: var(--error)">Auth failed: ' +
+          escapeHtml(e && e.message ? e.message : String(e)) + '</span>');
+      });
+    }
+
+    function onImportStudyDisconnectClick() {
+      if (typeof LichessAuth !== 'object' || !LichessAuth) return;
+      // signOut clears LS first then attempts revocation on the network
+      // — we don't await the network call, the local state is what
+      // matters for the UI.
+      LichessAuth.signOut();
+      refreshImportStudyAuthRow();
+      setStatus('Disconnected from Lichess.', 'info');
     }
 
     function closeImportStudyDialog() {
@@ -8472,14 +8631,41 @@
         return;
       }
       try {
-        var res = await fetch(url, { credentials: 'omit' });
+        // Add Bearer token when authenticated. The Authorization header is
+        // additive — Lichess accepts unauthenticated requests for public
+        // studies, so leaving it off is the right behavior when the user
+        // hasn't connected.
+        var fetchOpts = { credentials: 'omit' };
+        if (typeof LichessAuth === 'object' && LichessAuth && LichessAuth.isAuthenticated()) {
+          fetchOpts.headers = LichessAuth.authHeader();
+        }
+        var res = await fetch(url, fetchOpts);
         // The user may have closed the modal during the fetch; if so, drop
         // the result on the floor — don't touch state or DOM.
         if (!importStudyState) return;
         if (!res.ok) {
-          // Common cases: 404 = study not found / private; 429 = rate limit.
+          // Common cases: 404 = study not found / private; 429 = rate limit;
+          // 401 = token expired / invalid.
           var msg = 'Lichess returned ' + res.status + ' ' + res.statusText + '.';
-          if (res.status === 404) msg += ' The study may be private or the ID is wrong.';
+          if (res.status === 404) {
+            // Distinct hints for connected vs unconnected: when not
+            // authenticated, a 404 is more often "private study, need
+            // to log in" than "wrong ID".
+            if (typeof LichessAuth === 'object' && LichessAuth && LichessAuth.isAuthenticated()) {
+              msg += ' The study may not exist or you may not have access.';
+            } else {
+              msg += ' The study may be private — connect to Lichess to access private studies.';
+            }
+          }
+          if (res.status === 401) {
+            // Token rejected. Clear it so the next fetch path retries
+            // unauthenticated, and prompt the user to reconnect.
+            if (typeof LichessAuth === 'object' && LichessAuth) {
+              LichessAuth.signOut();
+              refreshImportStudyAuthRow();
+            }
+            msg += ' Your Lichess connection expired or was revoked — please reconnect.';
+          }
           if (res.status === 429) msg += ' Rate-limited — wait a moment and retry.';
           $('#importStudyFetchStatus').addClass('error').text(msg);
           $btn.prop('disabled', false);
