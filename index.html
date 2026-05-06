@@ -486,6 +486,224 @@
         grid-template-columns: repeat(2, 1fr);
       }
     }
+    /* ─── Generic center-modal pattern ──────────────────────────────────
+       Used by the Lichess study import dialog. The stats drawer is right-
+       slide; this is center because the import flow is a focused
+       transactional task (input → preview → confirm), not a reference
+       drawer the user keeps open while doing other things. */
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.55);
+      z-index: 30;
+      animation: modalBackdropFadeIn 0.15s ease-out;
+    }
+    @keyframes modalBackdropFadeIn {
+      from { opacity: 0; }
+      to   { opacity: 1; }
+    }
+    .modal-dialog {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: min(540px, 92vw);
+      max-height: 86vh;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+      z-index: 31;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      animation: modalDialogIn 0.16s ease-out;
+    }
+    @keyframes modalDialogIn {
+      from { opacity: 0; transform: translate(-50%, -48%); }
+      to   { opacity: 1; transform: translate(-50%, -50%); }
+    }
+    .modal-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 16px 10px;
+      border-bottom: 1px solid var(--border);
+    }
+    .modal-header h2 {
+      margin: 0;
+      font-size: 15px;
+      font-weight: 500;
+      letter-spacing: 0.04em;
+      color: var(--fg);
+    }
+    .modal-close {
+      background: transparent;
+      border: none;
+      cursor: pointer;
+      color: var(--fg-dim);
+      font-size: 16px;
+      line-height: 1;
+      padding: 4px 8px;
+      border-radius: 3px;
+      transition: color 0.1s, background 0.1s;
+    }
+    .modal-close:hover { color: var(--fg); background: var(--border); }
+    .modal-close:focus-visible { outline: 2px solid var(--accent-hover); outline-offset: 2px; }
+    .modal-body {
+      flex: 1 1 auto;
+      overflow-y: auto;
+      padding: 14px 16px 18px;
+    }
+    /* ─── Import-study modal specifics ────────────────────────────────── */
+    .import-study-target {
+      margin: 0 0 12px;
+      font-size: 12px;
+      color: var(--fg-dim);
+    }
+    .import-study-target strong { color: var(--fg); font-weight: 500; }
+    .import-study-field {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      margin-bottom: 12px;
+    }
+    .import-study-label {
+      font-size: 12px;
+      color: var(--fg-dim);
+      letter-spacing: 0.03em;
+    }
+    .import-study-field input[type="text"] {
+      width: 100%;
+      padding: 7px 10px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      color: var(--fg);
+      font-family: var(--mono);
+      font-size: 13px;
+    }
+    .import-study-field input[type="text"]:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+    .import-study-row {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-bottom: 12px;
+    }
+    .import-study-fieldset {
+      flex: 1 1 220px;
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      padding: 6px 10px 8px;
+      margin: 0;
+    }
+    .import-study-fieldset legend {
+      font-size: 11px;
+      color: var(--fg-dim);
+      padding: 0 4px;
+      letter-spacing: 0.04em;
+    }
+    .import-study-fieldset label {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 13px;
+      padding: 2px 0;
+      cursor: pointer;
+    }
+    .import-study-fieldset input[type="radio"] { margin: 0; }
+    .import-study-ply-input {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .import-study-ply-input span {
+      flex: 0 0 auto;
+      font-size: 12px;
+      color: var(--fg-dim);
+    }
+    .import-study-ply-input input[type="number"] {
+      flex: 1 1 60px;
+      width: 60px;
+      padding: 4px 6px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      color: var(--fg);
+      font-family: var(--mono);
+      font-size: 13px;
+    }
+    .import-study-actions {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .import-study-actions-confirm {
+      margin-top: 12px;
+    }
+    .import-study-status {
+      font-size: 12px;
+      color: var(--fg-dim);
+    }
+    .import-study-status.error { color: var(--error); }
+    .import-study-status.ok    { color: var(--ok); }
+    .import-study-preview {
+      margin-top: 14px;
+      padding-top: 12px;
+      border-top: 1px solid var(--border);
+    }
+    .import-study-summary {
+      font-size: 13px;
+      color: var(--fg);
+      margin-bottom: 8px;
+    }
+    .import-study-summary strong { color: var(--accent); font-weight: 500; }
+    .import-study-chapters {
+      list-style: none;
+      padding: 0;
+      margin: 0 0 8px;
+      max-height: 220px;
+      overflow-y: auto;
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      background: var(--surface-2);
+    }
+    .import-study-chapter {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 10px;
+      font-size: 12px;
+      border-bottom: 1px solid var(--border);
+    }
+    .import-study-chapter:last-child { border-bottom: none; }
+    .import-study-chapter-name {
+      flex: 1 1 auto;
+      color: var(--fg);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .import-study-chapter-meta {
+      flex: 0 0 auto;
+      font-size: 11px;
+      color: var(--fg-dim);
+    }
+    .import-study-chapter-meta.warn { color: var(--warn); }
+    .import-study-result {
+      margin-top: 12px;
+      padding: 8px 10px;
+      background: var(--surface-2);
+      border-radius: 3px;
+      font-size: 12px;
+    }
+    .import-study-result.ok    { border-left: 3px solid var(--ok); }
+    .import-study-result.warn  { border-left: 3px solid var(--warn); }
+    .import-study-result.error { border-left: 3px solid var(--error); }
     /* Board wrapper — establishes a positioned context for the
        annotation SVG to overlay. Width matches the previous standalone
        #board so the board+SVG share the same bounding box. */
@@ -1354,7 +1572,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">multi-rep-filter-audit</span>
+    <span id="buildVersion">lichess-study-import</span>
     <button id="soundToggle" class="sound-toggle" type="button" aria-label="Toggle sound" title="Toggle sound effects">🔊</button>
     <!-- Stats drawer toggle (issue #9). Same lightweight aesthetic as the
          sound toggle — header real estate is tight, so it's icon-only. The
@@ -1467,6 +1685,64 @@
     </div>
   </aside>
 
+  <!-- ─── Lichess study import modal ───────────────────────────────────────
+       Center-positioned dialog (vs. the stats drawer's right-side slide-in
+       — different shape, different visual signal: the drawer is reference,
+       this is a focused task). Opens from "Import from study" in the
+       active-repertoire bar. Form on top, result panel below; the result
+       panel only renders after a successful fetch. ESC and backdrop click
+       close. -->
+  <div id="importStudyBackdrop" class="modal-backdrop" hidden></div>
+  <div id="importStudyModal" class="modal-dialog import-study-modal" hidden role="dialog" aria-modal="true" aria-labelledby="importStudyTitle">
+    <header class="modal-header">
+      <h2 id="importStudyTitle">Import from Lichess study</h2>
+      <button id="importStudyCloseBtn" class="modal-close" type="button" aria-label="Close">✕</button>
+    </header>
+    <div class="modal-body">
+      <p class="import-study-target" id="importStudyTarget"></p>
+
+      <label class="import-study-field">
+        <span class="import-study-label">Study URL or ID</span>
+        <input type="text" id="importStudyInput" placeholder="https://lichess.org/study/abcd1234 or abcd1234" autocomplete="off" spellcheck="false">
+      </label>
+
+      <div class="import-study-row">
+        <fieldset class="import-study-fieldset">
+          <legend>Your color</legend>
+          <label><input type="radio" name="importStudyColor" value="auto" checked> Auto (per-chapter)</label>
+          <label><input type="radio" name="importStudyColor" value="w"> White</label>
+          <label><input type="radio" name="importStudyColor" value="b"> Black</label>
+        </fieldset>
+        <fieldset class="import-study-fieldset">
+          <legend>Ply range</legend>
+          <label class="import-study-ply-input">
+            <span>Min</span>
+            <input type="number" id="importStudyPlyMin" min="1" max="200" step="1" value="1">
+          </label>
+          <label class="import-study-ply-input">
+            <span>Max</span>
+            <input type="number" id="importStudyPlyMax" min="1" max="200" step="1" value="30">
+          </label>
+        </fieldset>
+      </div>
+
+      <div class="import-study-actions">
+        <button id="importStudyFetchBtn" type="button" class="primary">Fetch &amp; preview</button>
+        <span id="importStudyFetchStatus" class="import-study-status" hidden></span>
+      </div>
+
+      <div id="importStudyPreview" class="import-study-preview" hidden>
+        <div class="import-study-summary" id="importStudySummary"></div>
+        <ol class="import-study-chapters" id="importStudyChapters"></ol>
+        <div class="import-study-actions import-study-actions-confirm">
+          <button id="importStudyAddBtn" type="button" class="primary">Add positions</button>
+          <button id="importStudyCancelBtn" type="button">Cancel</button>
+        </div>
+        <div id="importStudyResult" class="import-study-result" hidden></div>
+      </div>
+    </div>
+  </div>
+
   <main>
     <!-- The board + annotation SVG share a positioned container so the
          SVG can be pinned to the board's exact rect. The SVG is a sibling
@@ -1536,6 +1812,7 @@
             <span class="repertoire-active-name" id="repertoireActiveName"></span>
             <span class="repertoire-active-count" id="repertoireActiveCount"></span>
             <button id="repertoireAddCurrentBtn" type="button" title="Add the position currently on the board to this repertoire">+ Add current</button>
+            <button id="repertoireImportStudyBtn" type="button" title="Import positions from a Lichess study">Import from study</button>
             <button id="repertoireRenameBtn" type="button" title="Rename this repertoire">Rename</button>
             <button id="repertoireDeleteBtn" type="button" class="ghost-danger" title="Delete this repertoire">Delete</button>
             <button id="repertoireExitBtn" type="button" class="repertoire-exit" title="Exit repertoire mode" aria-label="Exit repertoire mode">×</button>
@@ -1755,6 +2032,11 @@
        Loads after posKey (uses fenPositionKey for item dedup) and before
        sync (sync.merge handles a `repertoires` branch alongside positions). -->
   <script src="lib/repertoires.js"></script>
+  <!-- Lichess study PGN parser + walker. Uses the page's existing Chess
+       constructor (chess.js v0.10) for SAN replay; loads after vendor's
+       chess-0.10.3.js but doesn't depend on Repertoires (the import flow
+       wires them together at call time). -->
+  <script src="lib/lichessStudy.js"></script>
   <!-- Cross-device sync via private Gist. Loads after Progress (its hooks
        wrap Progress.exportData/importData at init time). -->
   <script src="lib/sync.js"></script>
@@ -2139,6 +2421,7 @@
       });
       $('#repertoireExitBtn').on('click', deactivateRepertoire);
       $('#repertoireAddCurrentBtn').on('click', onAddCurrentToRepertoire);
+      $('#repertoireImportStudyBtn').on('click', openImportStudyDialog);
       $('#repertoireRenameBtn').on('click', onRenameRepertoire);
       $('#repertoireDeleteBtn').on('click', onDeleteRepertoire);
       // Item rows: load (puts FEN on the position-builder board) + remove.
@@ -2159,6 +2442,37 @@
         e.stopPropagation();
         var fen = $(this).attr('data-fen');
         if (fen) onRemoveRepertoireItem(fen);
+      });
+
+      // Import-study modal. Most handlers attach to specific element IDs
+      // (the modal lives in static markup) — close/cancel/backdrop all
+      // share closeImportStudyDialog. The chapter-checkbox change is
+      // delegated since chapter rows are rebuilt on every preview render.
+      // Ply and color inputs trigger a live re-walk so the user sees
+      // counts shift as they tune the filter.
+      $('#importStudyCloseBtn').on('click', closeImportStudyDialog);
+      $('#importStudyCancelBtn').on('click', closeImportStudyDialog);
+      $('#importStudyBackdrop').on('click', closeImportStudyDialog);
+      $('#importStudyFetchBtn').on('click', onImportStudyFetch);
+      $('#importStudyAddBtn').on('click', performImportStudy);
+      $('#importStudyChapters').on('change', 'input[type=checkbox]', onImportStudyChapterToggle);
+      $('#importStudyPlyMin, #importStudyPlyMax').on('input change', function () {
+        if (importStudyState && importStudyState.chapters) renderImportStudyPreview();
+      });
+      $('input[name=importStudyColor]').on('change', function () {
+        if (importStudyState && importStudyState.chapters) renderImportStudyPreview();
+      });
+      // ESC closes the modal. Only act when the modal is actually visible —
+      // ESC also deselects squares and exits drill mode elsewhere, and we
+      // don't want to compete with those.
+      $(document).on('keydown.importStudy', function (e) {
+        if (e.key === 'Escape' && !$('#importStudyModal').prop('hidden')) {
+          closeImportStudyDialog();
+        }
+      });
+      // Enter in the URL field triggers fetch.
+      $('#importStudyInput').on('keydown', function (e) {
+        if (e.key === 'Enter') { e.preventDefault(); onImportStudyFetch(); }
       });
 
       // Move-builder buttons.
@@ -7841,7 +8155,7 @@
       // Hide them in multi-mode (and re-show in single-mode) so the multi
       // bar isn't cluttered with controls that need a target they don't
       // have.
-      $('#repertoireAddCurrentBtn, #repertoireRenameBtn, #repertoireDeleteBtn').prop('hidden', multi);
+      $('#repertoireAddCurrentBtn, #repertoireImportStudyBtn, #repertoireRenameBtn, #repertoireDeleteBtn').prop('hidden', multi);
       $('#repertoireItems').prop('hidden', multi);
 
       if (multi) {
@@ -8063,6 +8377,328 @@
       setStatus('Added position to "' + rep.name + '" (' + updated.items.length + ' total).', 'ok');
       repertoireMutated();
     }
+
+    // ─── Lichess study import ──────────────────────────────────────────
+    // Per-modal-session state. Cleared on every open and on close. We hold
+    // the parsed chapters so re-walking with new ply/color settings is
+    // instant (no second fetch). chapterEnabled[i] mirrors the per-chapter
+    // checkbox in the preview list.
+    var importStudyState = null;
+
+    function openImportStudyDialog() {
+      if (activeRepertoireIds.length !== 1) {
+        setStatus('Activate a single repertoire first.', 'info');
+        return;
+      }
+      var soloId = activeRepertoireIds[0];
+      var rep = Repertoires.get(soloId);
+      if (!rep) { deactivateRepertoire(); return; }
+      // Fresh state every open. Don't carry over a previous session's
+      // parsed chapters — the user may have meant a different study, and
+      // stale state crossed with stale UI is a confusing failure mode.
+      importStudyState = {
+        repertoireId: soloId,
+        repertoireName: rep.name,
+        chapters: null,
+        chapterEnabled: null,
+        lastWalk: null
+      };
+      $('#importStudyTarget').html('Adding to <strong>' + escapeHtml(rep.name) +
+        '</strong> &middot; <span class="repertoire-active-count">' +
+        rep.items.length + ' position' + (rep.items.length === 1 ? '' : 's') +
+        '</span>');
+      $('#importStudyInput').val('');
+      $('#importStudyPlyMin').val('1');
+      $('#importStudyPlyMax').val('30');
+      $('input[name=importStudyColor][value=auto]').prop('checked', true);
+      $('#importStudyFetchStatus').hide().removeClass('error ok').text('');
+      $('#importStudyPreview').prop('hidden', true);
+      $('#importStudyResult').prop('hidden', true).removeClass('ok warn error').text('');
+      $('#importStudyChapters').empty();
+      $('#importStudySummary').text('');
+      $('#importStudyAddBtn').prop('disabled', false);
+      $('#importStudyBackdrop, #importStudyModal').prop('hidden', false);
+      // Defer focus so the show animation doesn't fight the focus ring.
+      setTimeout(function () { $('#importStudyInput').trigger('focus'); }, 20);
+    }
+
+    function closeImportStudyDialog() {
+      $('#importStudyBackdrop, #importStudyModal').prop('hidden', true);
+      importStudyState = null;
+    }
+
+    // Tiny escape utility for user-supplied strings rendered into the
+    // preview list (chapter names from study PGN). Lichess sanitizes its
+    // own output, but we treat it as untrusted anyway — defense in depth.
+    function escapeHtml(s) {
+      if (typeof s !== 'string') return '';
+      return s.replace(/[&<>"']/g, function (c) {
+        return c === '&' ? '&amp;'
+             : c === '<' ? '&lt;'
+             : c === '>' ? '&gt;'
+             : c === '"' ? '&quot;'
+             :              '&#39;';
+      });
+    }
+
+    function readImportStudyOpts() {
+      var color = $('input[name=importStudyColor]:checked').val() || 'auto';
+      var plyMinRaw = parseInt($('#importStudyPlyMin').val(), 10);
+      var plyMaxRaw = parseInt($('#importStudyPlyMax').val(), 10);
+      var plyMin = (isFinite(plyMinRaw) && plyMinRaw > 0) ? plyMinRaw : 1;
+      var plyMax = (isFinite(plyMaxRaw) && plyMaxRaw >= plyMin) ? plyMaxRaw : 200;
+      return { color: color, plyMin: plyMin, plyMax: plyMax };
+    }
+
+    async function onImportStudyFetch() {
+      if (!importStudyState) return;
+      var raw = ($('#importStudyInput').val() || '').trim();
+      var studyId = LichessStudy.extractStudyId(raw);
+      if (!studyId) {
+        $('#importStudyFetchStatus').addClass('error').removeClass('ok')
+          .text('Could not read a study ID from that input.').show();
+        return;
+      }
+      var $btn = $('#importStudyFetchBtn');
+      $btn.prop('disabled', true);
+      $('#importStudyFetchStatus').removeClass('error ok')
+        .text('Fetching from lichess.org…').show();
+      $('#importStudyPreview').prop('hidden', true);
+      var url;
+      try { url = LichessStudy.studyPgnUrl(studyId); }
+      catch (e) {
+        $('#importStudyFetchStatus').addClass('error').text('Invalid study ID.');
+        $btn.prop('disabled', false);
+        return;
+      }
+      try {
+        var res = await fetch(url, { credentials: 'omit' });
+        // The user may have closed the modal during the fetch; if so, drop
+        // the result on the floor — don't touch state or DOM.
+        if (!importStudyState) return;
+        if (!res.ok) {
+          // Common cases: 404 = study not found / private; 429 = rate limit.
+          var msg = 'Lichess returned ' + res.status + ' ' + res.statusText + '.';
+          if (res.status === 404) msg += ' The study may be private or the ID is wrong.';
+          if (res.status === 429) msg += ' Rate-limited — wait a moment and retry.';
+          $('#importStudyFetchStatus').addClass('error').text(msg);
+          $btn.prop('disabled', false);
+          return;
+        }
+        var text = await res.text();
+        if (!importStudyState) return; // closed during text() readout
+        var chapters = LichessStudy.parseStudyPgn(text);
+        if (!chapters.length) {
+          $('#importStudyFetchStatus').addClass('error')
+            .text('Study has no chapters (or the PGN was empty).');
+          $btn.prop('disabled', false);
+          return;
+        }
+        importStudyState.chapters = chapters;
+        importStudyState.chapterEnabled = chapters.map(function () { return true; });
+        $('#importStudyFetchStatus').addClass('ok').removeClass('error')
+          .text('Fetched ' + chapters.length + ' chapter' + (chapters.length === 1 ? '' : 's') + '.');
+        renderImportStudyPreview();
+      } catch (err) {
+        // Network failure or CORS-rejection (shouldn't happen for the study
+        // PGN endpoint, but the user could be offline or behind a captive
+        // portal). Surface a friendly message rather than the raw error.
+        // If the modal was closed during the fetch, don't touch the DOM.
+        if (!importStudyState) return;
+        var detail = (err && err.message) ? err.message : String(err);
+        $('#importStudyFetchStatus').addClass('error')
+          .text('Network error: ' + detail);
+      } finally {
+        $btn.prop('disabled', false);
+      }
+    }
+
+    function renderImportStudyPreview() {
+      if (!importStudyState || !importStudyState.chapters) return;
+      var opts = readImportStudyOpts();
+      var walkOpts = {
+        Chess: window.Chess,
+        userColor: opts.color,
+        plyMin: opts.plyMin,
+        plyMax: opts.plyMax,
+        chapterFilter: function (ch) {
+          return importStudyState.chapterEnabled[ch.index] !== false;
+        }
+      };
+      var walked;
+      try {
+        walked = LichessStudy.walkStudy(importStudyState.chapters, walkOpts);
+      } catch (e) {
+        $('#importStudyFetchStatus').addClass('error')
+          .text('Walk failed: ' + (e && e.message ? e.message : e));
+        return;
+      }
+      importStudyState.lastWalk = walked;
+
+      // Per-chapter rows. Each row has a checkbox driving chapterEnabled[i]
+      // and shows the resolved color + emitted-FEN count for the current
+      // ply/color settings. Skipped chapters render greyed.
+      var $list = $('#importStudyChapters').empty();
+      for (var i = 0; i < walked.chapters.length; i++) {
+        var entry = walked.chapters[i];
+        var ch = entry.chapter;
+        var enabled = importStudyState.chapterEnabled[ch.index] !== false;
+        var name = ch.chapterName || ch.studyName || ('Chapter ' + (ch.index + 1));
+        var meta;
+        if (!enabled) {
+          meta = '<span class="import-study-chapter-meta">excluded</span>';
+        } else if (entry.errors.length) {
+          meta = '<span class="import-study-chapter-meta warn">' +
+                  entry.fens.length + ' fen' + (entry.fens.length === 1 ? '' : 's') +
+                  ', ' + entry.errors.length + ' parse error' +
+                  (entry.errors.length === 1 ? '' : 's') + '</span>';
+        } else {
+          meta = '<span class="import-study-chapter-meta">' +
+                  (entry.color === 'b' ? '♚ ' : '♔ ') +
+                  entry.fens.length + ' fen' + (entry.fens.length === 1 ? '' : 's') +
+                  '</span>';
+        }
+        var $row = $('<li class="import-study-chapter"></li>')
+          .append($('<input type="checkbox">')
+            .prop('checked', enabled)
+            .attr('data-ch-index', ch.index))
+          .append('<span class="import-study-chapter-name">' + escapeHtml(name) + '</span>')
+          .append(meta);
+        $list.append($row);
+      }
+
+      // Summary row above the list. Dedup walker output by fenPositionKey
+      // to get a realistic "will-be-added" count: the walker emits one
+      // entry per visit (so the same opening transposition shows up in
+      // multiple chapters), but the actual import goes through addItem's
+      // posKey dedup. Showing the raw totalFens would overstate what the
+      // user sees in their repertoire after import. We don't subtract
+      // existing-repertoire dedup here — that needs an extra pass and
+      // is implicit in the "after dedup against existing repertoire"
+      // wording.
+      var rep = Repertoires.get(importStudyState.repertoireId);
+      var maxItems = Repertoires.MAX_ITEMS_PER_REPERTOIRE;
+      var capRoom = rep ? Math.max(0, maxItems - rep.items.length) : 0;
+      var uniqKeys = Object.create(null);
+      var uniqueCount = 0;
+      for (var ci = 0; ci < walked.chapters.length; ci++) {
+        var chEntry = walked.chapters[ci];
+        if (chEntry.skipped) continue;
+        for (var fi = 0; fi < chEntry.fens.length; fi++) {
+          var k;
+          try { k = fenPositionKey(chEntry.fens[fi].fen); }
+          catch (e) { k = ''; }
+          if (k && !uniqKeys[k]) { uniqKeys[k] = 1; uniqueCount++; }
+        }
+      }
+      var summary = '<strong>' + uniqueCount + '</strong> unique position' +
+        (uniqueCount === 1 ? '' : 's') +
+        ' to add (after dedup against existing repertoire and ' + maxItems + '-item cap).';
+      if (walked.totalErrors) {
+        summary += ' <span class="import-study-chapter-meta warn">' +
+                   walked.totalErrors + ' parse error' +
+                   (walked.totalErrors === 1 ? '' : 's') + '</span>';
+      }
+      if (uniqueCount > capRoom) {
+        summary += ' <span class="import-study-chapter-meta warn">Repertoire has room for only ' +
+                   capRoom + ' more — overflow will be dropped.</span>';
+      }
+      $('#importStudySummary').html(summary);
+      $('#importStudyAddBtn').prop('disabled', uniqueCount === 0);
+      $('#importStudyResult').prop('hidden', true).removeClass('ok warn error').text('');
+      $('#importStudyPreview').prop('hidden', false);
+    }
+
+    function onImportStudyChapterToggle(ev) {
+      if (!importStudyState || !importStudyState.chapters) return;
+      var idx = parseInt($(ev.target).attr('data-ch-index'), 10);
+      if (!isFinite(idx)) return;
+      importStudyState.chapterEnabled[idx] = $(ev.target).is(':checked');
+      renderImportStudyPreview();
+    }
+
+    function performImportStudy() {
+      if (!importStudyState || !importStudyState.lastWalk) return;
+      var rep = Repertoires.get(importStudyState.repertoireId);
+      if (!rep) {
+        $('#importStudyResult').addClass('error').removeClass('ok warn')
+          .text('The active repertoire was deleted underneath us. Aborting.')
+          .prop('hidden', false);
+        return;
+      }
+      var added = 0;
+      var dedup = 0;
+      var capped = 0;
+      var failed = 0;
+      var walked = importStudyState.lastWalk;
+      var maxItems = Repertoires.MAX_ITEMS_PER_REPERTOIRE;
+
+      // Iterate per-chapter so we can use chapter name as the item label,
+      // which makes the items list useful instead of an ocean of FENs.
+      for (var ci = 0; ci < walked.chapters.length; ci++) {
+        var entry = walked.chapters[ci];
+        if (entry.skipped) continue;
+        var label = entry.chapter.chapterName || entry.chapter.studyName || '';
+        var ori = (entry.color === 'b') ? 'black' : 'white';
+        for (var fi = 0; fi < entry.fens.length; fi++) {
+          var fen = entry.fens[fi].fen;
+          // Re-fetch rep each iteration so the items.length cap check
+          // reflects what we've already added in this loop. addItem itself
+          // does the same internally, but we need to disambiguate dedup
+          // (returned false because the posKey was already present) from
+          // cap (returned false because items.length >= maxItems) for our
+          // user-facing summary. Cheaper: track count locally.
+          var beforeRep = Repertoires.get(importStudyState.repertoireId);
+          if (!beforeRep) { failed++; continue; }
+          if (beforeRep.items.length >= maxItems) { capped++; continue; }
+          var ok = Repertoires.addItem(importStudyState.repertoireId, fen, {
+            orientation: ori,
+            label: label
+          });
+          if (ok) {
+            added++;
+          } else {
+            // addItem returns false for dedup, invalid FEN, or save failure.
+            // After the cap check above, dedup is by far the most likely;
+            // a save failure is rare (LS quota) and would cascade across
+            // every subsequent attempt.
+            var afterRep = Repertoires.get(importStudyState.repertoireId);
+            if (afterRep && afterRep.items.length === beforeRep.items.length) {
+              dedup++;
+            } else {
+              failed++;
+            }
+          }
+        }
+      }
+
+      var cls = (failed > 0 || capped > 0) ? 'warn' : 'ok';
+      var parts = ['Added <strong>' + added + '</strong>'];
+      if (dedup)  parts.push(dedup + ' already in repertoire');
+      if (capped) parts.push(capped + ' skipped (' + maxItems + '-item cap)');
+      if (failed) parts.push(failed + ' failed');
+      $('#importStudyResult').removeClass('ok warn error').addClass(cls)
+        .html(parts.join(' &middot; '))
+        .prop('hidden', false);
+      $('#importStudyAddBtn').prop('disabled', true);
+
+      if (added > 0) {
+        renderRepertoires();
+        repertoireMutated();
+        // Also update the modal's target line so the user sees the new
+        // count without closing.
+        var refreshed = Repertoires.get(importStudyState.repertoireId);
+        if (refreshed) {
+          $('#importStudyTarget').html('Adding to <strong>' +
+            escapeHtml(refreshed.name) + '</strong> &middot; <span class="repertoire-active-count">' +
+            refreshed.items.length + ' position' + (refreshed.items.length === 1 ? '' : 's') +
+            '</span>');
+        }
+      }
+    }
+
+    // Bind import-study modal events. These are wired in init() alongside
+    // the rest of the repertoire bindings — see the bindings block there.
 
     function onRemoveRepertoireItem(fen) {
       // Items list is only rendered in single-rep mode (multi-mode hides

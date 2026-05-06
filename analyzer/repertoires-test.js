@@ -274,6 +274,8 @@ check('removeItem advances lastSeen', new Date(t3).getTime() > new Date(t2).getT
 
 section('soft cap on items per repertoire');
 fresh();
+check('MAX_ITEMS_PER_REPERTOIRE exposed on api', typeof Repertoires.MAX_ITEMS_PER_REPERTOIRE === 'number');
+check('MAX_ITEMS_PER_REPERTOIRE is 2000', Repertoires.MAX_ITEMS_PER_REPERTOIRE === 2000);
 // Build a unique-FEN factory by varying the en-passant + halfmove fields,
 // which DON'T survive fenPositionKey canonicalization. We need actually-
 // distinct positions for dedup not to fire — synthesize with different
@@ -282,9 +284,10 @@ var capRep = Repertoires.create('Cap');
 // Push exactly MAX_ITEMS_PER_REPERTOIRE distinct items by placing a single
 // pawn on different squares — produces 64 unique positions, more than
 // enough to validate the cap path without hitting it. Use the cap value
-// from module config indirectly by checking that 500 items is the cap.
-// Instead of synthesizing 500 FENs, monkey-patch the cap by directly
-// stuffing items via importData and verifying addItem refuses.
+// from module config indirectly by checking that the cap (currently 2000)
+// is enforced.
+// Instead of synthesizing thousands of FENs, monkey-patch the cap by
+// directly stuffing items via importData and verifying addItem refuses.
 var stuffed = {};
 stuffed[capRep.id] = {
   id: capRep.id,
@@ -293,22 +296,16 @@ stuffed[capRep.id] = {
   createdAt: capRep.createdAt,
   lastSeen: capRep.lastSeen
 };
-for (var i = 0; i < 500; i++) {
-  // Synthesize unique FENs by varying side-to-move and fullmove number;
-  // posKey treats stm-differing FENs as distinct keys.
-  var fakeFen = (i % 2 === 0 ? 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w' : '8/8/8/8/8/8/8/RNBQKBNR b') + ' KQkq - 0 ' + (i + 1);
-  // Avoid duplicates within our synthesized batch by also tweaking the
-  // piece position when needed; a simpler approach: just use the loop
-  // index to vary a tag we know posKey ignores would defeat the purpose.
-  // The cap check only counts items, so what's already in the array
-  // matters. Use distinct strings — even if some collide canonically,
+var CAP = 2000;
+for (var i = 0; i < CAP; i++) {
+  // Synthesize unique strings — even if some collide canonically,
   // _validateEntry stores them and addItem checks count first.
   stuffed[capRep.id].items.push({ fen: 'fen_' + i + '/8/8/8/8/8/8/8 w - - 0 1' });
 }
 Repertoires.importData(stuffed);
-check('500 items present after import', Repertoires.get(capRep.id).items.length === 500);
-check('501st addItem refused (cap)', Repertoires.addItem(capRep.id, FEN_START) === false);
-check('count unchanged after refused add', Repertoires.get(capRep.id).items.length === 500);
+check(CAP + ' items present after import', Repertoires.get(capRep.id).items.length === CAP);
+check('cap+1 addItem refused (cap)', Repertoires.addItem(capRep.id, FEN_START) === false);
+check('count unchanged after refused add', Repertoires.get(capRep.id).items.length === CAP);
 
 // ─── summary ─────────────────────────────────────────────────────────────
 console.log('\n' + (fail ? '✗' : '✓') + ' ' + pass + ' passed, ' + fail + ' failed');
