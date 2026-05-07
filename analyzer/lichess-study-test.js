@@ -374,6 +374,130 @@ result = LichessStudy.walkChapter(
 );
 check('e4 + d4 emitted despite annotations', result.fens.length === 2 && result.errors.length === 0);
 
+// ─── branchStart tracking ────────────────────────────────────────────────
+section('walkChapter — branchStart on mainline emissions');
+result = LichessStudy.walkChapter(
+  { moveText: '1. e4 c6 2. d4 d5 *', startFen: null },
+  { Chess: Chess, userColor: 'w' }
+);
+check('all mainline emissions have branchStart=null',
+  result.fens.every(function (f) { return f.branchStart === null; }),
+  'got branchStarts ' + JSON.stringify(result.fens.map(function (f) { return f.branchStart; })));
+
+section('walkChapter — branchStart on top-level variation');
+// Mainline 4 plies; variation at ply 5 (white's 3rd move). The 3.Nd2
+// variation's branchStart should be 4 (sanLine had [e4,c6,d4,d5] when
+// the variation entered).
+result = LichessStudy.walkChapter(
+  { moveText: '1. e4 c6 2. d4 d5 3. Nc3 (3. Nd2 dxe4 4. Nxe4) dxe4 *', startFen: null },
+  { Chess: Chess, userColor: 'w' }
+);
+const mainlineFens = result.fens.filter(function (f) { return f.branchStart === null; });
+const variationFens = result.fens.filter(function (f) { return f.branchStart !== null; });
+check('mainline emissions branchStart=null',
+  mainlineFens.length === 3 && mainlineFens.every(function (f) { return f.branchStart === null; }),
+  'mainlineFens count=' + mainlineFens.length);
+check('variation emissions branchStart=4',
+  variationFens.length === 2 && variationFens.every(function (f) { return f.branchStart === 4; }),
+  'variation branchStarts=' + JSON.stringify(variationFens.map(function (f) { return f.branchStart; })));
+
+section('walkChapter — branchStart on nested variation (preserves outermost)');
+// Nested: 1.e4 c6 (1...e5 2.Nf3 (2.Nc3 d6) Nc6) 2.d4
+// Walking as white. Top-level variation enters at sanLine length 1 (after
+// e4). Nested variation does NOT change branchStart.
+result = LichessStudy.walkChapter(
+  { moveText: '1. e4 c6 (1... e5 2. Nf3 (2. Nc3 d6) Nc6) 2. d4 *', startFen: null },
+  { Chess: Chess, userColor: 'w' }
+);
+// White-POV emissions:
+//   e4   (mainline, branchStart=null)
+//   Nf3  (depth-1 var, branchStart=1)
+//   Nc3  (depth-2 var, branchStart=1)
+//   d4   (mainline, branchStart=null)
+const branchStarts = result.fens.map(function (f) {
+  return { line: f.sanLine.join(' '), bs: f.branchStart };
+});
+check('mainline e4 branchStart=null', branchStarts.find(function (b) { return b.line === 'e4'; }).bs === null);
+check('depth-1 variation Nf3 branchStart=1',
+  branchStarts.find(function (b) { return b.line === 'e4 e5 Nf3'; }).bs === 1);
+check('depth-2 variation Nc3 branchStart=1 (NOT 3)',
+  branchStarts.find(function (b) { return b.line === 'e4 e5 Nc3'; }).bs === 1,
+  'all branchStarts: ' + JSON.stringify(branchStarts));
+check('mainline d4 branchStart=null',
+  branchStarts.find(function (b) { return b.line === 'e4 c6 d4'; }).bs === null);
+
+section('walkChapter — branchStart after sister variation closes');
+// 1.e4 (1.d4) (1.c4) e5 — three variations at the same branch point.
+// The two variations should both have branchStart=0; the close of the
+// first must restore to null; entering the second must re-set to 0.
+result = LichessStudy.walkChapter(
+  { moveText: '1. e4 (1. d4) (1. c4) 1... e5 *', startFen: null },
+  { Chess: Chess, userColor: 'w' }
+);
+const sisterBranches = result.fens.map(function (f) {
+  return { line: f.sanLine.join(' '), bs: f.branchStart };
+});
+check('mainline e4 branchStart=null',
+  sisterBranches.find(function (b) { return b.line === 'e4'; }).bs === null);
+check('sister d4 branchStart=0',
+  sisterBranches.find(function (b) { return b.line === 'd4'; }).bs === 0);
+check('sister c4 branchStart=0',
+  sisterBranches.find(function (b) { return b.line === 'c4'; }).bs === 0,
+  'all branchStarts: ' + JSON.stringify(sisterBranches));
+
+// ─── formatSanSequence ───────────────────────────────────────────────────
+section('formatSanSequence');
+check('empty array → empty string', LichessStudy.formatSanSequence([], 1) === '');
+check('non-array → empty string', LichessStudy.formatSanSequence(null, 1) === '');
+check('white-only first move',
+  LichessStudy.formatSanSequence(['e4'], 1) === '1.e4');
+check('white + black pair',
+  LichessStudy.formatSanSequence(['e4', 'c6'], 1) === '1.e4 c6');
+check('multi-move mainline',
+  LichessStudy.formatSanSequence(['e4', 'c6', 'd4', 'd5'], 1) === '1.e4 c6 2.d4 d5');
+check('starting at white move 3 (ply 5)',
+  LichessStudy.formatSanSequence(['Nd2', 'dxe4', 'Nxe4'], 5) === '3.Nd2 dxe4 4.Nxe4');
+check('first move is black (uses 1...e5 form)',
+  LichessStudy.formatSanSequence(['e5'], 2) === '1...e5');
+check('black-first then continuation',
+  LichessStudy.formatSanSequence(['e5', 'Nf3', 'Nc6'], 2) === '1...e5 2.Nf3 Nc6');
+check('black-first deep into game',
+  LichessStudy.formatSanSequence(['c6'], 12) === '6...c6');
+check('castling renders correctly',
+  LichessStudy.formatSanSequence(['O-O', 'O-O'], 9) === '5.O-O O-O');
+check('check + mate suffixes preserved',
+  LichessStudy.formatSanSequence(['Qh5+', 'Qxh5#'], 7) === '4.Qh5+ Qxh5#');
+check('startPly fallback when undefined',
+  LichessStudy.formatSanSequence(['e4'], undefined) === '1.e4');
+check('startPly fallback when 0 or negative',
+  LichessStudy.formatSanSequence(['e4'], 0) === '1.e4' &&
+  LichessStudy.formatSanSequence(['e4'], -5) === '1.e4');
+
+section('formatSanSequence — used to derive variation labels');
+// Pull it together: walker emits branchStart, caller derives label.
+// The "key moves" of a variation = sanLine.slice(branchStart) formatted
+// starting at ply (branchStart + 1).
+function deriveLabel(record) {
+  if (record.branchStart === null) {
+    return LichessStudy.formatSanSequence(record.sanLine, 1);
+  }
+  return LichessStudy.formatSanSequence(
+    record.sanLine.slice(record.branchStart),
+    record.branchStart + 1
+  );
+}
+result = LichessStudy.walkChapter(
+  { moveText: '1. e4 c6 2. d4 d5 3. Nc3 (3. Nd2 dxe4 4. Nxe4) (3. e5 Bf5) dxe4 *', startFen: null },
+  { Chess: Chess, userColor: 'b' }
+);
+const labels = result.fens.map(deriveLabel);
+check('black-POV mainline ply-2 label = 1.e4 c6',
+  labels.indexOf('1.e4 c6') >= 0, 'labels: ' + JSON.stringify(labels));
+check('black-POV variation 3.Nd2 dxe4 label = 3.Nd2 dxe4',
+  labels.indexOf('3.Nd2 dxe4') >= 0, 'labels: ' + JSON.stringify(labels));
+check('black-POV variation 3.e5 Bf5 label = 3.e5 Bf5',
+  labels.indexOf('3.e5 Bf5') >= 0, 'labels: ' + JSON.stringify(labels));
+
 // ─── walkStudy ───────────────────────────────────────────────────────────
 section('walkStudy — auto color from Orientation');
 const study2 = LichessStudy.parseStudyPgn(STUDY_BASIC);

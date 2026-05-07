@@ -1611,7 +1611,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">lichess-study-auth</span>
+    <span id="buildVersion">study-import-key-move-labels</span>
     <button id="soundToggle" class="sound-toggle" type="button" aria-label="Toggle sound" title="Toggle sound effects">🔊</button>
     <!-- Stats drawer toggle (issue #9). Same lightweight aesthetic as the
          sound toggle — header real estate is tight, so it's icon-only. The
@@ -8819,15 +8819,34 @@
       var walked = importStudyState.lastWalk;
       var maxItems = Repertoires.MAX_ITEMS_PER_REPERTOIRE;
 
-      // Iterate per-chapter so we can use chapter name as the item label,
-      // which makes the items list useful instead of an ocean of FENs.
+      // Iterate per-chapter to access chapter-level metadata (orientation),
+      // then derive a per-position label from the walker's branchStart +
+      // sanLine. The label format mirrors PGN move notation:
+      //   mainline:  "1.e4 c6 2.d4 d5"
+      //   variation: "3.Nd2 dxe4 4.Nxe4"   (truncated to moves after divergence)
+      //   black-first variation: "1...e5 2.Nc3 d6"
+      // This makes the items list usefully distinguish lines within a
+      // chapter — chapter name alone collapsed mainlines and variations
+      // into one indistinguishable label.
       for (var ci = 0; ci < walked.chapters.length; ci++) {
         var entry = walked.chapters[ci];
         if (entry.skipped) continue;
-        var label = entry.chapter.chapterName || entry.chapter.studyName || '';
         var ori = (entry.color === 'b') ? 'black' : 'white';
         for (var fi = 0; fi < entry.fens.length; fi++) {
-          var fen = entry.fens[fi].fen;
+          var rec = entry.fens[fi];
+          var fen = rec.fen;
+          // Build the label from the walker's branchStart marker. null
+          // means mainline (label is the full move sequence); otherwise
+          // slice from the divergence index, with ply offset to match.
+          var label;
+          if (rec.branchStart === null || rec.branchStart === undefined) {
+            label = LichessStudy.formatSanSequence(rec.sanLine, 1);
+          } else {
+            label = LichessStudy.formatSanSequence(
+              rec.sanLine.slice(rec.branchStart),
+              rec.branchStart + 1
+            );
+          }
           // Re-fetch rep each iteration so the items.length cap check
           // reflects what we've already added in this loop. addItem itself
           // does the same internally, but we need to disambiguate dedup
