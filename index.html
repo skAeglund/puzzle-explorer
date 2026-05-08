@@ -1611,7 +1611,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">study-import-key-move-labels</span>
+    <span id="buildVersion">accept-any-mate</span>
     <button id="soundToggle" class="sound-toggle" type="button" aria-label="Toggle sound" title="Toggle sound effects">🔊</button>
     <!-- Stats drawer toggle (issue #9). Same lightweight aesthetic as the
          sound toggle — header real estate is tight, so it's icon-only. The
@@ -4267,10 +4267,15 @@
       // against the solveStartedAt baseline set in enterDrillMode. Pass
       // `userSan` (issue #10) so the state machine can append it to
       // sanHistory on the success path — drill.js doesn't have a
-      // chess.js handle, so we feed the SAN through opts.
+      // chess.js handle, so we feed the SAN through opts. Same posture
+      // for `isCheckmate`: chess.js has just applied the move (chess.in_checkmate
+      // returns true if the just-played move delivered mate) and the
+      // state machine uses it to accept any-mate completions even when
+      // the UCI doesn't match the canonical solution line.
       var result = Drill.attemptUserMove(drillState, uci, {
         now: new Date(),
-        userSan: moveObj.san
+        userSan: moveObj.san,
+        isCheckmate: chess.in_checkmate()
       });
       drillState = result.state;
 

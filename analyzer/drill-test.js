@@ -479,6 +479,101 @@ section('Drill.sanHistory — backward-compat: legacy callers without userSan');
   check('input s0 untouched after apply',    s0.sanHistory.length === 0);
 }
 
+section('Drill.attemptUserMove — alt-mate: any checkmate completes the puzzle');
+{
+  // Per Lichess puzzle docs the canonical rule is that all player moves
+  // are "only moves" except on the final move, where any checkmate is
+  // accepted. We extend that to ANY ply: once mate is delivered the
+  // game is over regardless of which line was canonical, so a faster
+  // mid-puzzle mate also counts. drill.js doesn't have chess.js, so the
+  // UI passes opts.isCheckmate based on chess.in_checkmate() post-move.
+  // The state machine doesn't validate move legality (caller's job) —
+  // any UCI string drives the path here.
+
+  // Single-move mateIn1 puzzle, alternative mate UCI (not c6g2).
+  let s = Drill.start(PUZZLE_1);
+  let r = Drill.attemptUserMove(s, 'c6c2', { isCheckmate: true });
+  check('alt-mate at last ply → result=complete',  r.result === 'complete');
+  check('alt-mate has no opp reply',               r.opponentReply === null);
+  check('alt-mate state.complete=true',            r.state.complete === true);
+  check('alt-mate idx jumps past end',             r.state.currentMoveIdx === s.solutionUci.length);
+  check('alt-mate clean → toRecord=easy',          r.toRecord === FSRS.GRADE.easy);
+  check('alt-mate gradeRecorded=easy',             r.state.gradeRecorded === FSRS.GRADE.easy);
+  check('alt-mate wrongAttempts NOT incremented',  r.state.wrongAttempts === 0);
+
+  // Multi-move puzzle, alt-mate found at move 0 (skips remaining solution).
+  let s3 = Drill.start(PUZZLE_3);
+  let r3 = Drill.attemptUserMove(s3, 'd1d8', { isCheckmate: true });
+  check('mid-puzzle alt-mate → result=complete',   r3.result === 'complete');
+  check('mid-puzzle alt-mate idx=length',          r3.state.currentMoveIdx === 3);
+  check('mid-puzzle alt-mate has no opp reply',    r3.opponentReply === null);
+  check('mid-puzzle alt-mate state complete',      r3.state.complete === true);
+
+  // SAN appended on alt-mate path — same contract as the canonical
+  // success path.
+  let rSan = Drill.attemptUserMove(s, 'c6c2', { isCheckmate: true, userSan: 'Qc2#' });
+  check('alt-mate appends userSan',                rSan.state.sanHistory.length === 1);
+  check('alt-mate sanHistory[0] === userSan',      rSan.state.sanHistory[0] === 'Qc2#');
+
+  // Hint-then-alt-mate: existing hintUsed flag still penalizes.
+  let sH = Drill.start(PUZZLE_1);
+  sH = Drill.requestHint(sH).state;
+  let rH = Drill.attemptUserMove(sH, 'c6c2', { isCheckmate: true });
+  check('hint-then-alt-mate → toRecord=hard',      rH.toRecord === FSRS.GRADE.hard);
+  check('hint-then-alt-mate gradeRecorded=hard',   rH.state.gradeRecorded === FSRS.GRADE.hard);
+
+  // Wrong-then-alt-mate: Again was already locked on the first wrong
+  // (canonical first-wrong-locks-Again rule). The eventual alt-mate
+  // completes the puzzle but does NOT re-record — toRecord=null and
+  // gradeRecorded stays at Again. Caller MUST NOT double-record.
+  let sW = Drill.start(PUZZLE_3);
+  let rW1 = Drill.attemptUserMove(sW, 'a1a1');                  // wrong, no mate
+  check('first wrong → result=wrong',              rW1.result === 'wrong');
+  check('first wrong locks Again',                 rW1.toRecord === FSRS.GRADE.again);
+  let rW2 = Drill.attemptUserMove(rW1.state, 'd1d8', { isCheckmate: true });
+  check('after-wrong alt-mate → result=complete',  rW2.result === 'complete');
+  check('after-wrong alt-mate toRecord=null',      rW2.toRecord === null);
+  check('after-wrong alt-mate stays Again',        rW2.state.gradeRecorded === FSRS.GRADE.again);
+  check('after-wrong wrongAttempts not bumped again', rW2.state.wrongAttempts === 1);
+}
+
+section('Drill.attemptUserMove — alt-mate: regression guards (false / missing flag)');
+{
+  // Missing flag, false flag, empty opts, no opts — all hit the legacy
+  // wrong path. This locks the backward-compat contract: callers that
+  // don't pass isCheckmate (legacy code, tests above this section) keep
+  // the original wrong-move behavior.
+  let s = Drill.start(PUZZLE_1);
+
+  let rNoFlag  = Drill.attemptUserMove(s, 'c6c2');
+  check('no opts → wrong path',                    rNoFlag.result === 'wrong');
+  check('no opts → wrongAttempts=1',               rNoFlag.state.wrongAttempts === 1);
+
+  let rEmpty   = Drill.attemptUserMove(s, 'c6c2', {});
+  check('empty opts → wrong path',                 rEmpty.result === 'wrong');
+
+  let rFalse   = Drill.attemptUserMove(s, 'c6c2', { isCheckmate: false });
+  check('isCheckmate=false → wrong path',          rFalse.result === 'wrong');
+
+  let rUndef   = Drill.attemptUserMove(s, 'c6c2', { isCheckmate: undefined });
+  check('isCheckmate=undefined → wrong path',      rUndef.result === 'wrong');
+
+  // Canonical match still wins via the normal path even with
+  // isCheckmate=true (flag is harmless — UCI matches expected, never
+  // hits the alt-mate branch). Locks the "flag passes through cleanly"
+  // contract from the UI side.
+  let rMatch = Drill.attemptUserMove(s, 'c6g2', { isCheckmate: true });
+  check('canonical match + flag → result=complete', rMatch.result === 'complete');
+  check('canonical match + flag → toRecord=easy',   rMatch.toRecord === FSRS.GRADE.easy);
+
+  // Already-complete short-circuits regardless of isCheckmate.
+  let sDone = Drill.attemptUserMove(s, 'c6g2').state;
+  let rDone = Drill.attemptUserMove(sDone, 'b1b1', { isCheckmate: true });
+  check('already-complete + alt-mate → already_complete',
+        rDone.result === 'already_complete');
+  check('already-complete + alt-mate → toRecord=null', rDone.toRecord === null);
+}
+
 // ━━━ PROGRESS storage ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 function freshStorage() {
