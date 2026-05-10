@@ -1575,6 +1575,10 @@
     .completion-text.ok    { color: var(--ok); }
     .completion-text.warn  { color: var(--warn); }
     .completion-text.error { color: var(--error); }
+    /* Keyboard-mode pre-grade prompt color. Reuses --fg (default body
+       text) so the prompt reads as informational, not as a graded
+       outcome — kb mode defers grading to the user's keypress. */
+    .completion-text.info  { color: var(--fg); }
 
     /* Big CTA — taller padding, slightly bigger font. Used for the
        Next-puzzle button inside the completion strip. */
@@ -1611,7 +1615,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">accept-any-mate</span>
+    <span id="buildVersion">keyboard-mode</span>
     <button id="soundToggle" class="sound-toggle" type="button" aria-label="Toggle sound" title="Toggle sound effects">🔊</button>
     <!-- Stats drawer toggle (issue #9). Same lightweight aesthetic as the
          sound toggle — header real estate is tight, so it's icon-only. The
@@ -1958,6 +1962,23 @@
     </div>
 
     <div id="sessionPanel" class="panel" hidden>
+      <!-- Keyboard / no-mouse mode toggle. When ON, random sessions and
+           training sessions accept input from a 3-key surface (Bluetooth
+           ring or keyboard) instead of the mouse: Key 2 / MediaPlayPause
+           plays the next correct user move, Key 1 / MediaTrackNext marks
+           the puzzle as known (no SRS card unless hint was used), Key 4 /
+           MediaTrackPrevious marks it as failed. Volume-up requests a
+           hint where the OS surfaces it. Single-drill clicks and SRS
+           review queue are NOT affected — only random session + training.
+           Auto-next becomes implicit (the grade key advances).
+           Setting persists in localStorage. Wrapper uses .row for
+           consistent flex spacing with the Start session / Start training
+           rows below; row.search-row's zero-top-margin override doesn't
+           apply here so the natural 8px sits above. -->
+      <div class="row" style="margin-top: 0;">
+        <button id="keyboardModeBtn" type="button"
+                title="When ON, random sessions and training accept 3-key input (digit ring 1/2/4 or media ring prev/play/next): play correct move, mark known, mark failed. Single-drill and SRS review keep mouse input.">☐ Keyboard mode</button>
+      </div>
       <!-- Puzzle start ply (source-game halfmove count where the puzzle
            begins) range. Applies to BOTH "Start session" and "Start
            training" — it's a global pre-filter on the position pool.
@@ -2097,6 +2118,9 @@
   <!-- IndexedDB shard cache (independent leaf module; safe to load last) -->
   <script src="lib/cache.js"></script>
   <script src="lib/sound.js"></script>
+  <!-- No-mouse drill mode: pure key→action mapper. Independent leaf
+       module (no FSRS / chess.js dependency); safe to load anywhere. -->
+  <script src="lib/keyboardMode.js"></script>
 
   <script>
   'use strict';
@@ -2335,6 +2359,22 @@
     // by enterDrillMode AND on Back / cancel paths so a manual Next or a
     // navigation never inherits a stale "fast" flag.
     var autoNextInFlight = false;
+    // Keyboard / no-mouse mode: persisted toggle on the session panel.
+    // When ON and the active session is a random session ('search') or a
+    // training session, all mouse input on the board is suppressed and
+    // the user drills via the digit ring (1=success / 2=advance / 4=fail)
+    // or media ring (prev=fail / play-pause=advance / next=success).
+    // Single-drill clicks and SRS review queue intentionally bypass —
+    // single-drill is a "click the row, study one puzzle" gesture
+    // (mouse is already in play), and review answers to the SRS contract
+    // (auto-grading the user's manual call wouldn't honor the real
+    // attempt). isKeyboardModeActive() does both checks (toggle + session
+    // kind) in one place; keyboardCompletionPending tracks the post-
+    // completion "waiting for the user to grade" state so handleCompletion
+    // can render the correct status text and the keydown handler knows
+    // to accept Key 1/4 (vs ignoring them mid-puzzle).
+    var keyboardModeEnabled = false;     // populated from localStorage on init
+    var keyboardCompletionPending = false; // set true in handleCompletion when in kb mode
     // Practice mode: when true, the current drill is a re-attempt of a
     // puzzle the user already completed — Progress / SRS state and
     // trainingOutcomes do NOT update on this run. Set by onTryAgainClick
@@ -2598,6 +2638,7 @@
       $('#tryAgainBtn').on('click', onTryAgainClick);
       $('#prevPuzzleBtn').on('click', onPrevPuzzleClick);
       $('#autoNextBtn').on('click', onAutoNextToggleClick);
+      $('#keyboardModeBtn').on('click', onKeyboardModeToggleClick);
       // Move-strip click delegation: clicking a SAN with data-ply rewinds
       // the displayed view to that ply. Delegated because the strip is
       // re-rendered every move (updateMoveStripDisplay rebuilds children
@@ -2719,6 +2760,77 @@
         // backdrop intercepts board clicks) and the user is mid-decision —
         // nav'ing the board behind it would scramble the visual context.
         if (pendingPromotion) return;
+
+        // ─── keyboard mode (no-mouse) routing ─────────────────────────
+        // Runs BEFORE the move-strip nav switch so a kb-bound key never
+        // double-handles. Only one of {advance, mark_success, mark_fail,
+        // hint} fires per keypress; arrow keys / Home / End fall through
+        // to the strip nav untouched (they don't classify in KEY_MAP).
+        //
+        // Activation has two arms:
+        //   - isKeyboardModeActive(): toggle on AND eligible session.
+        //     Drives in-progress kb input (Key 2 advance, hint).
+        //   - keyboardCompletionPending: handleCompletion armed this
+        //     when kb was active. Survives a toggle-off so the user can
+        //     still finish grading via Key 1 / Key 4 instead of being
+        //     stranded with the Next button hidden.
+        // Toggle off + pending: only Key 1 / 4 do anything useful (Key
+        // 2's "advance the puzzle" is meaningless after completion); the
+        // mark-success/fail branches gate on the pending flag, advance
+        // gates on !drillState.complete, so the routing self-narrows to
+        // the right verbs in each state.
+        if (isKeyboardModeActive() || keyboardCompletionPending) {
+          var kbAction = KeyboardMode.classifyKey(e.key);
+          if (kbAction !== null) {
+            // Pre-puzzle blunder intro: ignore all kb keys for the
+            // duration of the 700ms wait + animation. Spec is explicit:
+            // "Ignore press during blunder intro." introTimeout is the
+            // signal — set when the wait starts, cleared when the move
+            // animates. Once the animation begins, introTimeout is null
+            // and the user CAN start pressing keys. The first Key 2
+            // arrives ~700-900ms after the puzzle loaded, which is fine.
+            if (introTimeout !== null) { e.preventDefault(); return; }
+            // Show-solution autoplay shouldn't normally engage in kb
+            // mode (the show-solution button isn't bound to a key) but
+            // a stray click via mouse could trigger it. Bail to avoid
+            // racing the autoplay's setTimeout chain.
+            if (solutionAutoplayActive) { e.preventDefault(); return; }
+            e.preventDefault();
+            switch (kbAction) {
+              case KeyboardMode.ACTION.advance:
+                // Mid-puzzle: play next correct move. At completion:
+                // intentionally a no-op — the spec puts grading on
+                // Key 1 / Key 4, not Key 2. (Mashing Key 2 expecting
+                // it to also advance would silently skip grading.)
+                if (!drillState.complete) playNextSolutionMove();
+                break;
+              case KeyboardMode.ACTION.markSuccess:
+                // Only valid at completion. Mid-puzzle Key 1/4 are
+                // ignored per the design — the user hasn't finished
+                // yet, no grade to record.
+                if (keyboardCompletionPending) keyboardGradeAndAdvance(true);
+                break;
+              case KeyboardMode.ACTION.markFail:
+                if (keyboardCompletionPending) keyboardGradeAndAdvance(false);
+                break;
+              case KeyboardMode.ACTION.hint:
+                // Hint reveals from-square only (one-level cap, same as
+                // the Hint button). Ignored at completion. AudioVolumeUp
+                // is usually swallowed by the OS; this binding only fires
+                // on rigs that surface the key — see lib/keyboardMode.js
+                // header for the caveat.
+                if (!drillState.complete) onHintClick();
+                break;
+              default: /* nothing */
+            }
+            return;
+          }
+          // Key was unbound — fall through to the strip nav switch
+          // below. ArrowLeft/Right/Home/End still navigate the move
+          // strip even in kb mode; the user can review past plies
+          // without leaving kb mode.
+        }
+
         // Strip is hidden until at least one move has been played; before
         // that there's nothing to navigate, so silently no-op.
         if (!drillState.sanHistory || drillState.sanHistory.length === 0) return;
@@ -2739,6 +2851,11 @@
       // so updateAutoNextBtn can sync the glyph immediately.
       autoNextEnabled = loadSettings().autoNext;
       updateAutoNextBtn();
+      // Keyboard mode toggle: paint the glyph + label off the loaded value.
+      // Same pattern as autoNext; keyboardModeEnabled is the in-memory
+      // mirror that the keydown router and isKeyboardModeActive() check.
+      keyboardModeEnabled = loadSettings().keyboardMode;
+      updateKeyboardModeBtn();
       // Restore the saved ply range, if any. The slider markup ships
       // with [0, 80] (= no filter); a saved partial range overlays
       // those values. updatePlyRangeUI then paints the fill overlay
@@ -3862,13 +3979,19 @@
       // destroyBoard() already wipes the board DOM (so square-correct /
       // square-wrong-x classes vanish with it), but be explicit.
       $('#completionStrip').prop('hidden', true);
-      $('#completionText').removeClass('ok warn error').text('');
+      $('#completionText').removeClass('ok warn error info').text('');
       $('#nextPuzzleBtn').prop({ disabled: true, hidden: true });
       $('#tryAgainBtn').prop('hidden', true);
       // Practice mode resets to false on EVERY enterDrillMode call. The
       // Try-again handler explicitly sets it back to true AFTER calling
       // enterDrillMode, so practice is opt-in per attempt.
       isPracticing = false;
+      // Keyboard mode: a new puzzle can't be in the post-completion
+      // grading state. Clear here so the keydown router accepts Key 2
+      // (advance) again from the first move and so a stale flag from a
+      // bailed-out completion (body fetch failure mid-grade, etc.)
+      // doesn't poison the new drill.
+      keyboardCompletionPending = false;
       // Training-only post-session UI: hide on every new drill. They only
       // belong on the session-complete state, which is per-session not
       // per-puzzle. (Going Next from session-complete into a Retry session,
@@ -4098,6 +4221,12 @@
       // Drill mode (existing behavior): user's color only, while it's
       // their turn, and only before completion.
       if (!drillState || drillState.complete) return false;
+      // Keyboard mode: input is keys-only for eligible sessions. Block
+      // drag at the source — onDragStart returning false also suppresses
+      // chessboard.js's drag-source highlight, so users get a clean
+      // "nothing happens" rather than a half-grabbed piece. Click-to-move
+      // is gated separately in onBoardMouseDown.
+      if (isKeyboardModeActive()) return false;
       // Review nav: while looking at a past ply, the board shows a
       // historical position but the live `chess` instance is at the END
       // of the played sequence. Allowing a drag here would either feed
@@ -5337,6 +5466,17 @@
       // also makes executePremove no-op, but we want to clear the highlight
       // visuals too.
       clearPremove();
+      // Keyboard mode (no-mouse) defers all grading to the user's grade
+      // key (1=success, 4=fail, or media-next/prev). Skip the auto SRS
+      // write here, skip the trainingOutcomes update, skip auto-next
+      // scheduling. The Next button stays hidden so a stray click can't
+      // bypass grading. keyboardCompletionPending arms the Key 1/4
+      // handlers; cleared by keyboardGradeAndAdvance or by the next
+      // enterDrillMode. isPracticing trumps kb mode (re-runs are
+      // study-only and never write SRS, regardless of input mode) — fall
+      // through to the normal path so the practice messaging still
+      // renders correctly.
+      var kbActive = isKeyboardModeActive() && !isPracticing;
       // SRS-gating: only put a puzzle in the review queue if the user
       // demonstrably needed help on it. Per project rule: wrong attempt
       // OR hint used = SRS; clean first attempt = noted as seen, not
@@ -5349,7 +5489,8 @@
         || alreadyScheduled;
       // Practice attempts: skip SRS + outcomes updates entirely. The first
       // attempt already determined the grade; re-runs are study-only.
-      if (!isPracticing && result.toRecord !== null) {
+      // Keyboard mode: defer until grade key — see kbActive above.
+      if (!isPracticing && !kbActive && result.toRecord !== null) {
         if (needsSrs) {
           Progress.recordReview(pid, result.toRecord);
         } else {
@@ -5373,7 +5514,9 @@
       // grades, not just failures, so the stats line can show the full
       // breakdown (clean / hint / failed). Practice attempts bypass this
       // too — they don't move the stats either way.
-      if (!isPracticing && sessionState && sessionState.kind === 'training' && trainingOutcomes) {
+      // Keyboard mode also defers — keyboardGradeAndAdvance does the
+      // outcomes write with the user-supplied grade.
+      if (!isPracticing && !kbActive && sessionState && sessionState.kind === 'training' && trainingOutcomes) {
         trainingOutcomes[pid] = {
           grade: grade,
           hintUsed: !!drillState.hintUsed,
@@ -5400,10 +5543,23 @@
       // tailor the message: "added to review queue" vs "not added".
       // Practice attempts never write SRS, so wroteSrs is always false
       // for them — the message variants below collapse to a short form
-      // without the SRS tail.
-      var wroteSrs = !isPracticing && result.toRecord !== null && needsSrs;
+      // without the SRS tail. Keyboard mode also leaves wroteSrs=false
+      // here — the SRS write happens later in keyboardGradeAndAdvance.
+      var wroteSrs = !isPracticing && !kbActive && result.toRecord !== null && needsSrs;
       var msg, kind;
-      if (grade === FSRS.GRADE.again) {
+      if (kbActive) {
+        // Keyboard-mode completion: pre-grade. The user hasn't told us
+        // whether they knew it yet — Key 1 / MediaTrackNext = success,
+        // Key 4 / MediaTrackPrevious = failed. avgStr is meaningless
+        // here (the puzzle was auto-played by Key 2 presses, so per-
+        // move time reflects the user's grading speed, not their
+        // thinking time) so it's omitted from the prompt. Hint state
+        // is surfaced so the user understands their "success" press
+        // will record Hard rather than Easy.
+        var hintHint = drillState.hintUsed ? ' (hint used → Hard)' : '';
+        msg = '✓ Press 1/⏭ to mark known' + hintHint + ', 4/⏮ to mark failed.';
+        kind = 'info';
+      } else if (grade === FSRS.GRADE.again) {
         // Practice failure: short message, no "added to review queue"
         // (which would be inaccurate — the first attempt already added it,
         // this re-run didn't). First-attempt failure: full message.
@@ -5443,7 +5599,7 @@
       // the result text. The #status bar gets a forward-looking hint
       // ("click Next" / "click Back") so it stays useful, not redundant.
       $('#completionText')
-        .removeClass('ok warn error')
+        .removeClass('ok warn error info')
         .addClass(kind)
         .text(msg);
       $('#completionStrip').prop('hidden', false);
@@ -5453,25 +5609,44 @@
       // on the result — failed runs get "Try again" (redemption framing),
       // any successful solve (clean or with-hint) gets "Solve again"
       // (practice framing). Same button id either way; just label changes.
-      var tryAgainText = (grade === FSRS.GRADE.again) ? 'Try again' : 'Solve again';
-      $('#tryAgainBtn').text(tryAgainText).prop('hidden', false);
+      // In keyboard mode the puzzle isn't graded yet, so the "failure"
+      // framing wouldn't be accurate; default to neutral "Solve again".
+      // Hidden in kb mode regardless — re-drilling via mouse defeats the
+      // mode's whole point and a keyboard surface for it would need
+      // another binding the user didn't ask for.
+      var tryAgainText = (!kbActive && grade === FSRS.GRADE.again) ? 'Try again' : 'Solve again';
+      $('#tryAgainBtn').text(tryAgainText).prop('hidden', kbActive);
       if (sessionState) {
-        $('#nextPuzzleBtn').prop({ disabled: false, hidden: false }).focus();
-        var exitLabel = (sessionState.kind === 'review')   ? 'Exit review'
-                      : (sessionState.kind === 'training') ? 'Exit training'
-                      :                                      'Exit session';
-        setStatus('Click Next puzzle to continue, or ' + exitLabel + ' to stop.', 'info');
-        // Auto-next: schedule a programmatic Next-click after a brief delay,
-        // BUT only when (a) the toggle is on, (b) the user solved without
-        // errors (Again means they're more likely to want to study the
-        // mistake), and (c) there's actually a next puzzle in the queue.
-        // The last-puzzle case falls through to manual-Next so the user
-        // sees the session-complete state intentionally rather than auto-
-        // sliding into it. setStatus is overridden by scheduleAutoNext.
-        if (autoNextEnabled
-            && grade !== FSRS.GRADE.again
-            && sessionState.cursor + 1 < sessionState.queue.length) {
-          scheduleAutoNext();
+        if (kbActive) {
+          // Keyboard mode: arm the grade-pending flag and hide the mouse-
+          // driven controls. The keydown router (gated on
+          // keyboardCompletionPending) accepts Key 1 / Key 4 from here on
+          // until either keyboardGradeAndAdvance fires, the user toggles
+          // kb mode off, or enterDrillMode resets the flag for the next
+          // puzzle. Auto-next is irrelevant — Key 1/4 is the advance.
+          keyboardCompletionPending = true;
+          $('#nextPuzzleBtn').prop({ disabled: true, hidden: true });
+          $('#autoNextBtn').prop('hidden', true);
+          var exitLabelKb = (sessionState.kind === 'training') ? 'Exit training' : 'Exit session';
+          setStatus('Press 1 / ⏭ for known, 4 / ⏮ for failed. Back to ' + exitLabelKb + '.', 'info');
+        } else {
+          $('#nextPuzzleBtn').prop({ disabled: false, hidden: false }).focus();
+          var exitLabel = (sessionState.kind === 'review')   ? 'Exit review'
+                        : (sessionState.kind === 'training') ? 'Exit training'
+                        :                                      'Exit session';
+          setStatus('Click Next puzzle to continue, or ' + exitLabel + ' to stop.', 'info');
+          // Auto-next: schedule a programmatic Next-click after a brief delay,
+          // BUT only when (a) the toggle is on, (b) the user solved without
+          // errors (Again means they're more likely to want to study the
+          // mistake), and (c) there's actually a next puzzle in the queue.
+          // The last-puzzle case falls through to manual-Next so the user
+          // sees the session-complete state intentionally rather than auto-
+          // sliding into it. setStatus is overridden by scheduleAutoNext.
+          if (autoNextEnabled
+              && grade !== FSRS.GRADE.again
+              && sessionState.cursor + 1 < sessionState.queue.length) {
+            scheduleAutoNext();
+          }
         }
       } else {
         $('#nextPuzzleBtn').prop({ disabled: true, hidden: true });
@@ -5778,6 +5953,12 @@
       // reset keeps the invariant tidy.
       autoNextInFlight = false;
       isPracticing = false;
+      // Keyboard mode: drop any pending-grade flag so a stale "waiting
+      // for Key 1 / 4" survives Back. enterDrillMode also clears this on
+      // re-entry, but Back may transition to search mode without an
+      // immediate enterDrillMode (e.g. Back-to-results from a session-
+      // complete state) — explicit clear here keeps the flag honest.
+      keyboardCompletionPending = false;
       mode = 'search';
       $('#drillPanel').prop('hidden', true);
       $('#completionStrip').prop('hidden', true);
@@ -6670,6 +6851,213 @@
       $('#autoNextBtn').text((autoNextEnabled ? '☑' : '☐') + ' Auto-next');
     }
 
+    // Keyboard mode toggle. Persists to settings, repaints the glyph.
+    // No "mid-puzzle effect" subtlety like auto-next: keyboard mode
+    // changes input semantics globally, but its enforcement points
+    // (isKeyboardModeActive in onDragStart, the keydown router, etc.)
+    // re-read the flag every event, so toggling mid-drill does take
+    // effect immediately. The user might briefly see a half-state
+    // (drag now allowed but the chessboard is mid-animation), but no
+    // crash and no data corruption — drill state is owned by the
+    // pure state machine.
+    function onKeyboardModeToggleClick() {
+      keyboardModeEnabled = !keyboardModeEnabled;
+      saveSettings({ keyboardMode: keyboardModeEnabled });
+      updateKeyboardModeBtn();
+      // Toggling OFF mid-completion-pending is the awkward case: handleCompletion
+      // hid the Next button + autoNextBtn, so a naive clear of
+      // keyboardCompletionPending here would strand the user with no way
+      // to advance (kb routing dead, Next hidden). Instead we leave the
+      // flag set; the keydown router accepts Key 1 / Key 4 from the
+      // pending-flag fallback below until the user grades. If they want
+      // to advance via mouse instead, Back exits cleanly.
+      // Toggling OFF mid-puzzle (not pending): kb routing turns off, but
+      // chessboard.js drag is already enabled (onDragStart re-checks the
+      // flag every event) — user takes over with mouse on the next move.
+    }
+
+    function updateKeyboardModeBtn() {
+      $('#keyboardModeBtn').text((keyboardModeEnabled ? '☑' : '☐') + ' Keyboard mode');
+    }
+
+    // True iff the toggle is on AND the active session is one of the
+    // two eligible kinds (random session or training). Single-drill
+    // (no sessionState) and review queue intentionally bypass — see
+    // the keyboardModeEnabled declaration comment for the reasoning.
+    // Read at every input event, so toggling mid-drill or transitioning
+    // between session kinds is reflected immediately.
+    function isKeyboardModeActive() {
+      if (!keyboardModeEnabled) return false;
+      if (!sessionState) return false;
+      var kind = sessionState.kind;
+      return kind === 'search' || kind === 'training';
+    }
+
+    // ─── keyboard mode actions ──────────────────────────────────────────
+    // playNextSolutionMove — Key 2 / MediaPlayPause. Auto-plays the next
+    // canonical user move. Routes through commitDrillMove for parity with
+    // the drag/click paths: same chess.js execution, same sound, same
+    // sanHistory append, same opp-reply scheduling, same completion
+    // detection. drillState's solutionUci[currentMoveIdx] is guaranteed
+    // to be a legal move (analyzer validated it during build), so we
+    // don't need a try/catch around chess.move here — commitDrillMove
+    // handles its own safety net.
+    //
+    // Returns true iff a move was played, false if the call was rejected
+    // (no drill, intro running, opp's turn, etc.). The keydown router
+    // doesn't act on the return value; it exists for future tooling /
+    // debugging.
+    function playNextSolutionMove() {
+      if (!drillState || drillState.complete) return false;
+      // During the pre-puzzle blunder intro, the user can't move yet —
+      // chess.turn is the opponent's color. Block at the keydown router
+      // (introTimeout check), but defensive double-gate here in case a
+      // future caller bypasses the router.
+      if (introTimeout !== null) return false;
+      // Show-solution autoplay: solutionAutoplayActive runs the full
+      // remaining sequence on its own setTimeout chain. A Key 2 press
+      // mid-autoplay would race the autoplay's internal loop and step
+      // forward twice. Bail.
+      if (solutionAutoplayActive) return false;
+      // Promotion picker shouldn't be open in kb mode (we never open it
+      // — promotion piece is taken from the solution UCI directly), but
+      // defensive in case a stale picker survived a mode swap.
+      if (pendingPromotion) return false;
+      // Review nav: the user is browsing past plies. Same posture as
+      // onDragStart's review-nav guard.
+      if (isDrillReviewing()) return false;
+      // It must be the user's turn. During the 400ms opp-reply delay
+      // chess.turn is the opponent's color and the next user move
+      // hasn't been "due" yet — the opp-reply timer will play the opp's
+      // move first. Bailing here keeps the timing intact.
+      if (chess.turn() !== Drill.userColor(drillState)) return false;
+      var expected = drillState.solutionUci[drillState.currentMoveIdx];
+      if (typeof expected !== 'string' || expected.length < 4) return false;
+      var from = expected.slice(0, 2);
+      var to   = expected.slice(2, 4);
+      // Promotion piece is the optional 5th UCI char (q/r/b/n). Letting
+      // commitDrillMove default to 'q' on null would be wrong for under-
+      // promotions in the canonical solution, so pass the explicit char
+      // when present.
+      var promo = (expected.length >= 5) ? expected[4] : undefined;
+      var r = commitDrillMove(from, to, promo);
+      // commitDrillMove animates via board.position only on the click
+      // path (drag has chessboard.js's snap animation). Kb-mode hits
+      // neither — chess.js advanced silently while the visual board is
+      // still showing the prior position. Sync the board to chess.fen
+      // and re-paint highlights, mirroring what onSnapEnd would do for
+      // a drag. Skip when the move was rejected (r.ok === false).
+      //
+      // Then schedule the opp reply if commitDrillMove queued one
+      // (continue + complete-with-opp branches both set pendingOppReply).
+      // Without this, the opp's move never plays in kb mode — drag flow
+      // gets it from onSnapEnd, click flow gets it from the click handler
+      // tail, and the kb flow has neither callback. Same call shape as
+      // the click path: synchronous, right after the animated board.position.
+      // Safe when pendingOppReply is null (scheduleOppReplyIfPending
+      // early-returns).
+      if (r && r.ok && !r.wrong && r.from && r.to) {
+        // Non-animated update would be jarring (move teleports). Animated
+        // update gives the user a visual "this is the move that was
+        // played" cue, matching the drag path. applyLastMoveAndCheckDeferred
+        // re-paints highlights post-animation — same pattern as onSnapEnd.
+        if (board) board.position(chess.fen());
+        applyLastMoveAndCheckDeferred(r.from, r.to);
+        // lastSuccessfulUserMove was set by commitDrillMove; null it so
+        // a subsequent unrelated onSnapEnd doesn't re-paint stale coords
+        // (mirrors the click-path tail).
+        lastSuccessfulUserMove = null;
+        scheduleOppReplyIfPending();
+      }
+      return !!(r && r.ok && !r.wrong);
+    }
+
+    // keyboardGradeAndAdvance — Key 1 (success) / Key 4 (fail). Runs the
+    // SRS write that handleCompletion deferred when keyboardCompletionPending
+    // was armed, then advances the session. Mirrors the existing
+    // handleCompletion grading split:
+    //   - success + no hint  → markSeen (no SRS card; matches the
+    //                          "clean first-attempt skips review queue"
+    //                          rule). UNLESS the puzzle already has an
+    //                          SRS card OR this is a re-drill of an
+    //                          already-scheduled card, in which case
+    //                          recordReview(Easy) keeps the schedule
+    //                          alive.
+    //   - success + hint     → recordReview(Hard). Hint always graduates
+    //                          to a review card (matches the existing
+    //                          gradeForAttempt cap).
+    //   - fail               → recordReview(Again). Always SRS, regardless
+    //                          of hint state — Key 4 is the user's
+    //                          explicit "I got it wrong" call.
+    //
+    // Async because advanceSessionAndDrill awaits a body fetch. Reuses
+    // the sessionLoading guard to prevent double-fires (e.g. user
+    // mashing Key 1 + Key 4 in quick succession).
+    async function keyboardGradeAndAdvance(success) {
+      if (!keyboardCompletionPending) return;
+      if (sessionLoading) return;
+      if (!drillState || !drillState.complete) return;
+      if (!sessionState) return;
+      // Practice attempts shouldn't reach here — handleCompletion sets
+      // keyboardCompletionPending only when !isPracticing. Defensive
+      // gate in case a future caller flips the flag manually.
+      if (isPracticing) { keyboardCompletionPending = false; return; }
+      // Disarm immediately so a second key press while we await the
+      // body fetch doesn't double-record.
+      keyboardCompletionPending = false;
+      var pid = drillState.puzzleId;
+      var hintUsed = !!drillState.hintUsed;
+      var grade;
+      if (!success) {
+        grade = FSRS.GRADE.again;
+      } else if (hintUsed) {
+        grade = FSRS.GRADE.hard;
+      } else {
+        grade = FSRS.GRADE.easy;
+      }
+      // SRS write. Again ALWAYS records (the user explicitly graded it
+      // failed); success + hint records (Hard); success + no hint either
+      // markSeen (clean first-attempt skip) or recordReview(Easy) when
+      // the card already exists.
+      if (grade === FSRS.GRADE.again) {
+        Progress.recordReview(pid, grade);
+      } else if (grade === FSRS.GRADE.hard) {
+        Progress.recordReview(pid, grade);
+      } else {
+        // success + no hint
+        if (Progress.hasSrsCard(pid)) {
+          Progress.recordReview(pid, FSRS.GRADE.easy);
+        } else {
+          Progress.markSeen(pid);
+        }
+      }
+      recordProgressMutation();
+      refreshReviewBadge();
+      // Training outcomes — handleCompletion deferred this for kb mode.
+      // Use the kb-supplied grade so the post-session stats line counts
+      // accurately (failed/hint/clean buckets in renderTrainingPostCompletion).
+      if (sessionState.kind === 'training' && trainingOutcomes) {
+        trainingOutcomes[pid] = {
+          grade: grade,
+          hintUsed: hintUsed,
+          wrongAttempts: drillState.wrongAttempts | 0,
+          rating: (drillPuzzle && typeof drillPuzzle.rating === 'number') ? drillPuzzle.rating : null
+        };
+        renderTrainingStatsStrip();
+        saveTrainingResume();
+      }
+      // Advance the session. Same path the auto-next + manual Next
+      // both use; sessionLoading guard prevents reentry while the body
+      // fetch is in flight. enterDrillMode (called inside) clears
+      // keyboardCompletionPending for the new puzzle.
+      sessionLoading = true;
+      try {
+        await advanceSessionAndDrill();
+      } finally {
+        sessionLoading = false;
+      }
+    }
+
     function scheduleAutoNext() {
       // Caller (handleCompletion) verified: in session, grade != Again,
       // there's a next puzzle in the queue. Job here is just timer +
@@ -6718,7 +7106,7 @@
       try { return window.localStorage || null; } catch (e) { return null; }
     }
     function loadSettings() {
-      var defaults = { autoNext: false, trainingRanges: null, plyRange: null };
+      var defaults = { autoNext: false, keyboardMode: false, trainingRanges: null, plyRange: null };
       var s = _settingsStorage();
       if (!s) return defaults;
       var raw;
@@ -6733,6 +7121,10 @@
       // newer write doesn't carry forward fields it doesn't understand.
       return {
         autoNext: parsed.autoNext === true,
+        // Same `=== true` posture as autoNext: anything other than the
+        // boolean literal true falls back to false. Keeps a corrupt
+        // string/object from accidentally enabling the mode.
+        keyboardMode: parsed.keyboardMode === true,
         trainingRanges: validateTrainingRanges(parsed.trainingRanges),
         plyRange: validatePlyRange(parsed.plyRange)
       };
@@ -7858,6 +8250,12 @@
         // refusing the initial selection. Mirrors onDragStart's review
         // guard exactly.
         if (isDrillReviewing()) return;
+        // Keyboard mode (mirrors onDragStart). Block the click before
+        // any selection paint or attemptMove dispatch — drill input is
+        // keys-only for this session. Right-click annotations and
+        // navigation keys still work; this gate is left-click only by
+        // virtue of arriving after the e.button===2 branch above.
+        if (isKeyboardModeActive()) return;
         // Pre-move: chess.turn is opp's during the reply window, but we
         // want clicks to land so the user can queue. inPremoveWindow gates
         // for picker / autoplay / intro / completion already.
