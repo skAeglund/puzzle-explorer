@@ -1893,6 +1893,250 @@ section('Session.createTraining: multi-rep — completed puzzles excluded');
   }
 }
 
+// ━━━ Session.removeAt ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+section('Session.removeAt: out-of-range idx is a no-op');
+{
+  const s = Session.createFromIds(['a', 'b', 'c']);
+  check('negative idx returns same state', Session.removeAt(s, -1) === s);
+  check('idx == length returns same state', Session.removeAt(s, 3) === s);
+  check('idx > length returns same state', Session.removeAt(s, 99) === s);
+  check('non-number idx returns same state', Session.removeAt(s, 'x') === s);
+  check('null state throws', (function () {
+    try { Session.removeAt(null, 0); return false; }
+    catch (e) { return true; }
+  })());
+}
+
+section('Session.removeAt: search-queue, cursor BEFORE idx');
+{
+  // Drilling puzzle at cursor=1 (= "b"). Orphan is at idx=2 (= "c").
+  // After remove: queue [a, b, d], cursor=1 unchanged, total decremented.
+  const s0 = Session.createFromIds(['a', 'b', 'c', 'd']);
+  const s1 = Session._assign(s0, { cursor: 1 });
+  const s2 = Session.removeAt(s1, 2);
+  check('queue spliced',  s2.queue.join(',') === 'a,b,d');
+  check('cursor unchanged', s2.cursor === 1);
+  check('total decremented', s2.total === 3);
+  check('not complete',  s2.complete === false);
+  check('input not mutated', s1.queue.length === 4);
+}
+
+section('Session.removeAt: search-queue, cursor AT idx (orphan-skip flow)');
+{
+  // The advance landed on cursor=1 (= "b"), drill discovered it's an
+  // orphan. removeAt(s, 1) is called. queue becomes [a, c, d]; cursor
+  // shifts back to 0 so a SUBSEQUENT advance() lands on the new queue[1]
+  // (= "c", which used to be queue[2]).
+  const s0 = Session.createFromIds(['a', 'b', 'c', 'd']);
+  const s1 = Session._assign(s0, { cursor: 1 });
+  const s2 = Session.removeAt(s1, 1);
+  check('queue spliced',  s2.queue.join(',') === 'a,c,d');
+  check('cursor shifted back', s2.cursor === 0);
+  check('total decremented', s2.total === 3);
+  // Verify the orphan-skip handshake: advance() after removeAt should
+  // land on the puzzle that came AFTER the orphan in the original queue.
+  const adv = Session.advance(s2);
+  check('next advance lands on post-orphan id', adv.puzzleId === 'c');
+  check('next advance cursor == 1', adv.state.cursor === 1);
+}
+
+section('Session.removeAt: retreat-skip handshake (cursor points at pre-orphan id)');
+{
+  // The user was looking at "c" (cursor=2), clicked Prev. Session.retreat
+  // moved cursor 2→1 ("b"). Drill found "b" is orphan. removeAt(s, 1):
+  // queue [a, c]; cursor=0. THE RETREAT FLOW DOES NOT call retreat() again
+  // — instead it drills queue[sessionState.cursor], which should be "a"
+  // (the puzzle before "b" in the original). This test pins down that
+  // contract so a future refactor doesn't regress the retreat skip path.
+  const s0 = Session.createFromIds(['a', 'b', 'c']);
+  // Simulate the post-retreat state (cursor was 2, then moved to 1 by retreat).
+  const sAfterRetreat = Session._assign(s0, { cursor: 1 });
+  const sAfterSplice = Session.removeAt(sAfterRetreat, 1);
+  check('queue spliced',  sAfterSplice.queue.join(',') === 'a,c');
+  check('cursor at 0',    sAfterSplice.cursor === 0);
+  check('cursor points at pre-orphan id',
+    sAfterSplice.queue[sAfterSplice.cursor] === 'a');
+  // Chained orphan-skip: if "a" is ALSO orphan, splice again. queue=[c],
+  // cursor=-1, signaling "no more previous puzzles to retreat to."
+  const sAllOrphan = Session.removeAt(sAfterSplice, 0);
+  check('chained splice: queue [c]', sAllOrphan.queue.join(',') === 'c');
+  check('chained splice: cursor -1 (at start)', sAllOrphan.cursor === -1);
+}
+
+section('Session.removeAt: search-queue, cursor AFTER idx');
+{
+  // Drilling cursor=2 ("c"). Orphan is at idx=0 ("a"). After remove:
+  // queue [b, c, d], cursor=1 (shifted back to keep pointing at "c").
+  const s0 = Session.createFromIds(['a', 'b', 'c', 'd']);
+  const s1 = Session._assign(s0, { cursor: 2 });
+  const s2 = Session.removeAt(s1, 0);
+  check('queue spliced',  s2.queue.join(',') === 'b,c,d');
+  check('cursor shifted back', s2.cursor === 1);
+  check('still pointing at "c"', s2.queue[s2.cursor] === 'c');
+}
+
+section('Session.removeAt: remove last item from queue → exhaustion');
+{
+  // queue [a, b], cursor on the last item which is orphan. After removeAt,
+  // queue becomes [a], cursor=0 — but wait, original cursor was 1 (>= 1),
+  // so it shifts back to 0. Not "complete" yet — we're sitting on the
+  // visible last item. Then advance() exhausts cleanly.
+  const s0 = Session.createFromIds(['a', 'b']);
+  const s1 = Session._assign(s0, { cursor: 1 });
+  const s2 = Session.removeAt(s1, 1);
+  check('queue spliced',  s2.queue.join(',') === 'a');
+  check('cursor shifted to 0', s2.cursor === 0);
+  // Next advance: cursor 0 → 1, queue.length 1 → exhausted.
+  const adv = Session.advance(s2);
+  check('subsequent advance exhausts', adv.exhausted === true);
+}
+
+section('Session.removeAt: empty-queue result is complete');
+{
+  const s0 = Session.createFromIds(['solo']);
+  const s1 = Session._assign(s0, { cursor: 0 });
+  const s2 = Session.removeAt(s1, 0);
+  check('queue empty',     s2.queue.length === 0);
+  check('complete true',   s2.complete === true);
+  check('cursor clamped to -1', s2.cursor === -1);
+  check('total zero', s2.total === 0);
+}
+
+section('Session.removeAt: total cannot go negative');
+{
+  // Defensive — a hand-crafted state with total=0 (queue still has items
+  // for whatever reason) shouldn't end up with total=-1.
+  const s0 = Session.createFromIds(['a']);
+  const s1 = Session._assign(s0, { total: 0 });
+  const s2 = Session.removeAt(s1, 0);
+  check('total clamped at 0', s2.total === 0);
+}
+
+section('Session.removeAt: training rounds — remove FROM the round');
+{
+  // Construct a training-shape state by hand (createTraining is heavier
+  // than needed and depends on matches data; removeAt only cares about
+  // the rounds array shape).
+  // queue: e1 e2 e3 m1 m2 h1
+  // rounds: Easy [0..3) count=3, Medium [3..5) count=2, Hard [5..6) count=1
+  const s = {
+    kind: 'training',
+    queue: ['e1', 'e2', 'e3', 'm1', 'm2', 'h1'],
+    rounds: [
+      { label: 'Easy',   target: 3, count: 3, startIndex: 0, ratingMin: 800,  ratingMax: 1399 },
+      { label: 'Medium', target: 2, count: 2, startIndex: 3, ratingMin: 1400, ratingMax: 1999 },
+      { label: 'Hard',   target: 1, count: 1, startIndex: 5, ratingMin: 2000, ratingMax: null }
+    ],
+    cursor: 3, // sitting on m1
+    total: 6,
+    complete: false
+  };
+  // Remove m1 (idx=3, inside Medium round).
+  const r = Session.removeAt(s, 3);
+  check('queue spliced',         r.queue.join(',') === 'e1,e2,e3,m2,h1');
+  check('Easy count unchanged',  r.rounds[0].count === 3);
+  check('Easy startIndex unchanged', r.rounds[0].startIndex === 0);
+  check('Medium count down',     r.rounds[1].count === 1);
+  check('Medium startIndex unchanged', r.rounds[1].startIndex === 3);
+  check('Hard count unchanged',  r.rounds[2].count === 1);
+  check('Hard startIndex shifts', r.rounds[2].startIndex === 4);
+  check('total decremented',     r.total === 5);
+
+  // Orphan-skip handshake: the loop calls advance() right after removeAt,
+  // which bumps cursor 2 → 3, landing on m2 (the puzzle that came after
+  // the orphan in the original queue). THAT state is what the user sees,
+  // not the interim post-removeAt one. trainingRound should report Medium.
+  const adv = Session.advance(r);
+  check('advance lands on m2',           adv.puzzleId === 'm2');
+  check('advance cursor == 3',           adv.state.cursor === 3);
+  const tr = Session.trainingRound(adv.state);
+  check('trainingRound returns object',  tr !== null);
+  check('in Medium round after advance', tr.label === 'Medium');
+  check('Medium currentInRound == totalInRound (1/1)',
+    tr.currentInRound === 1 && tr.totalInRound === 1);
+}
+
+section('Session.removeAt: training rounds — remove BEFORE the cursor');
+{
+  // Same training shape, but remove e1 (idx=0) while cursor is at m1 (3).
+  // Cursor shifts back to 2. Easy round count drops; Medium/Hard startIndex
+  // both shift left by one.
+  const s = {
+    kind: 'training',
+    queue: ['e1', 'e2', 'e3', 'm1', 'm2', 'h1'],
+    rounds: [
+      { label: 'Easy',   target: 3, count: 3, startIndex: 0, ratingMin: 800,  ratingMax: 1399 },
+      { label: 'Medium', target: 2, count: 2, startIndex: 3, ratingMin: 1400, ratingMax: 1999 },
+      { label: 'Hard',   target: 1, count: 1, startIndex: 5, ratingMin: 2000, ratingMax: null }
+    ],
+    cursor: 3,
+    total: 6,
+    complete: false
+  };
+  const r = Session.removeAt(s, 0);
+  check('queue spliced',     r.queue.join(',') === 'e2,e3,m1,m2,h1');
+  check('cursor shifted',    r.cursor === 2);
+  check('Easy count down',   r.rounds[0].count === 2);
+  check('Medium shifts',     r.rounds[1].startIndex === 2);
+  check('Hard shifts',       r.rounds[2].startIndex === 4);
+  check('queue[cursor] still m1', r.queue[r.cursor] === 'm1');
+}
+
+section('Session.removeAt: training rounds — remove the only item in a round');
+{
+  // Hard round has count=1, startIndex=5. Removing h1 should leave the
+  // Hard round with count=0 (an "empty round" — trainingRound skips
+  // these for the roundNumber display).
+  const s = {
+    kind: 'training',
+    queue: ['e1', 'e2', 'e3', 'm1', 'm2', 'h1'],
+    rounds: [
+      { label: 'Easy',   target: 3, count: 3, startIndex: 0, ratingMin: 800,  ratingMax: 1399 },
+      { label: 'Medium', target: 2, count: 2, startIndex: 3, ratingMin: 1400, ratingMax: 1999 },
+      { label: 'Hard',   target: 1, count: 1, startIndex: 5, ratingMin: 2000, ratingMax: null }
+    ],
+    cursor: 5,
+    total: 6,
+    complete: false
+  };
+  const r = Session.removeAt(s, 5);
+  check('queue spliced',           r.queue.join(',') === 'e1,e2,e3,m1,m2');
+  check('Hard count = 0',          r.rounds[2].count === 0);
+  // cursor was 5 (>= 5), shifts to 4. queue.length now 5 → cursor 4 still
+  // valid (last index). NOT exhausted yet.
+  check('cursor = 4',              r.cursor === 4);
+  check('not complete',            r.complete === false);
+  // trainingRound on the result: with the orphan removed and cursor at
+  // 4 (= m2), we're back in Medium. roundCount should drop to 2.
+  const tr = Session.trainingRound(r);
+  check('trainingRound back to Medium', tr.label === 'Medium');
+  check('roundCount drops to 2 (Hard now empty)', tr.roundCount === 2);
+}
+
+section('Session.removeAt: input state is not mutated');
+{
+  const s0 = Session.createFromIds(['a', 'b', 'c']);
+  const s1 = Session._assign(s0, { cursor: 1 });
+  const originalQueueRef = s1.queue;
+  const originalCursor = s1.cursor;
+  const originalTotal = s1.total;
+  Session.removeAt(s1, 1);
+  check('input queue array not mutated', s1.queue === originalQueueRef && s1.queue.length === 3);
+  check('input cursor not mutated',  s1.cursor === originalCursor);
+  check('input total not mutated',   s1.total  === originalTotal);
+}
+
+section('Session.removeAt: review-queue (kind:review) preserves kind');
+{
+  const s0 = Session.createFromIds(['r1', 'r2', 'r3'], { kind: 'review' });
+  const s1 = Session._assign(s0, { cursor: 1 });
+  const r = Session.removeAt(s1, 1);
+  check('kind preserved', r.kind === 'review');
+  check('queue spliced',  r.queue.join(',') === 'r1,r3');
+  check('cursor shifted', r.cursor === 0);
+}
+
 // ─── summary ─────────────────────────────────────────────────────────────
 console.log('\n' + (fail === 0 ? '✓' : '✗') + ' ' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail === 0 ? 0 : 1);

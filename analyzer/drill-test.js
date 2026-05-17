@@ -1092,6 +1092,141 @@ section('Integration: drilling SAME puzzle twice grades both times');
   check('second drill increments reps', reps2 > reps1, `reps1=${reps1} reps2=${reps2}`);
 }
 
+// ━━━ PROGRESS.forget — orphan tombstones ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+section('Progress.forget: tombstones an existing entry');
+{
+  freshStorage();
+  Progress.recordReview('ghost', FSRS.GRADE.easy);
+  check('pre: hasSrsCard true', Progress.hasSrsCard('ghost') === true);
+  check('pre: isCompleted true', Progress.isCompleted('ghost') === true);
+
+  const ok = Progress.forget('ghost', new Date('2026-05-01T12:00:00Z'));
+  check('forget returns true', ok === true);
+
+  const entry = Progress.getEntry('ghost');
+  check('tombstone entry exists', entry !== null && typeof entry === 'object');
+  check('tombstone has deleted:true', entry.deleted === true);
+  check('tombstone has lastSeen ISO', /^\d{4}-\d{2}-\d{2}T/.test(entry.lastSeen));
+  check('tombstone has no .srs', entry.srs === undefined);
+  check('tombstone has no .completed', entry.completed === undefined);
+
+  // Public predicates should all return false on tombstones — review queue
+  // and result-list ✓ Done badge both depend on this.
+  check('post: hasSrsCard false',  Progress.hasSrsCard('ghost')  === false);
+  check('post: isCompleted false', Progress.isCompleted('ghost') === false);
+  check('post: isDue false',       Progress.isDue('ghost')       === false);
+}
+
+section('Progress.forget: idempotent (re-forget bumps lastSeen)');
+{
+  freshStorage();
+  Progress.recordReview('ghost', FSRS.GRADE.easy);
+  Progress.forget('ghost', new Date('2026-05-01T12:00:00Z'));
+  const t1 = Progress.getEntry('ghost').lastSeen;
+  Progress.forget('ghost', new Date('2026-05-02T12:00:00Z'));
+  const t2 = Progress.getEntry('ghost').lastSeen;
+  check('first lastSeen captured', t1 === '2026-05-01T12:00:00.000Z');
+  check('second forget bumps lastSeen', t2 === '2026-05-02T12:00:00.000Z');
+  check('still tombstoned', Progress.getEntry('ghost').deleted === true);
+}
+
+section('Progress.forget: no-op on unknown id');
+{
+  freshStorage();
+  const ok = Progress.forget('never-seen');
+  check('returns true (no-op success)', ok === true);
+  // Should NOT have created a phantom tombstone entry.
+  check('did not create entry', Progress.getEntry('never-seen') === null);
+}
+
+section('Progress.forget: invalid id rejected');
+{
+  freshStorage();
+  check('null id → false',       Progress.forget(null)      === false);
+  check('undefined id → false',  Progress.forget(undefined) === false);
+  check('empty string → false',  Progress.forget('')        === false);
+  check('non-string → false',    Progress.forget(123)       === false);
+}
+
+section('Progress.forget: bad `now` arg falls back to current time');
+{
+  freshStorage();
+  Progress.recordReview('a', FSRS.GRADE.easy);
+  let threw = false;
+  try { Progress.forget('a', 'not-a-date'); } catch (e) { threw = true; }
+  check('string-now: does not throw', !threw);
+  check('string-now: lastSeen still ISO',
+    /^\d{4}-\d{2}-\d{2}T/.test(Progress.getEntry('a').lastSeen));
+
+  freshStorage();
+  Progress.recordReview('b', FSRS.GRADE.easy);
+  threw = false;
+  try { Progress.forget('b', new Date('garbage')); } catch (e) { threw = true; }
+  check('Invalid-Date-now: does not throw', !threw);
+  check('Invalid-Date-now: lastSeen still ISO',
+    /^\d{4}-\d{2}-\d{2}T/.test(Progress.getEntry('b').lastSeen));
+}
+
+section('Progress.forget: never-reviewed (markSeen-only) entry can also be tombstoned');
+{
+  freshStorage();
+  Progress.markSeen('clean');
+  check('pre: completed true (markSeen)', Progress.isCompleted('clean') === true);
+  Progress.forget('clean');
+  check('post: completed false',  Progress.isCompleted('clean') === false);
+  check('post: entry tombstoned', Progress.getEntry('clean').deleted === true);
+}
+
+section('Progress.forget: stats skip tombstones');
+{
+  freshStorage();
+  Progress.recordReview('live1', FSRS.GRADE.easy);
+  Progress.recordReview('live2', FSRS.GRADE.easy);
+  Progress.recordReview('dead',  FSRS.GRADE.again);
+  const beforeStats = Progress.stats();
+  check('pre: total = 3',     beforeStats.total === 3);
+  check('pre: completed = 3', beforeStats.completed === 3);
+  Progress.forget('dead');
+  const afterStats = Progress.stats();
+  check('post: total = 2',     afterStats.total === 2);
+  check('post: completed = 2', afterStats.completed === 2);
+  // Tombstones shouldn't count toward state buckets either.
+  const sumStates = afterStats.states.new + afterStats.states.learning +
+                    afterStats.states.review + afterStats.states.relearning;
+  check('state buckets sum to total', sumStates === 2);
+}
+
+section('Progress.forget: tombstone is NOT a review event (streak untouched)');
+{
+  freshStorage();
+  const day1 = new Date('2026-05-01T12:00:00');
+  Progress.recordReview('a', FSRS.GRADE.easy, day1);
+  const streakBefore = Progress.stats(day1).currentStreak;
+  Progress.forget('a', new Date('2026-05-03T12:00:00')); // gap-day forget
+  // The forget itself shouldn't bump or reset streak meta — streak only
+  // moves on real review events per the existing spec.
+  const streakAfter = Progress.stats(new Date('2026-05-03T12:00:00')).currentStreak;
+  check('streak meta unchanged by forget',
+    streakBefore === 1 && (streakAfter === 0 || streakAfter === 1),
+    `before=${streakBefore} after=${streakAfter}`);
+}
+
+section('Progress.forget: tombstoned id stays out of the due queue');
+{
+  freshStorage();
+  // Schedule "ghost" with a far-back due date so it would otherwise be due.
+  Progress.recordReview('ghost', FSRS.GRADE.again,
+    new Date('2025-01-01T12:00:00Z'));
+  const todayStr = FSRS.localDateString(new Date());
+  check('pre: ghost is due', Progress.isDue('ghost', todayStr) === true);
+  Progress.forget('ghost');
+  check('post: ghost not due', Progress.isDue('ghost', todayStr) === false);
+  // Stats due count also drops.
+  const s = Progress.stats();
+  check('stats.due excludes tombstoned', s.due === 0);
+}
+
 // ─── summary ─────────────────────────────────────────────────────────────
 console.log('\n' + (fail === 0 ? '✓' : '✗') + ' ' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail === 0 ? 0 : 1);

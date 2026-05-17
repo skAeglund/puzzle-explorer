@@ -1615,7 +1615,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">keyboard-mode</span>
+    <span id="buildVersion">orphan-skip</span>
     <button id="soundToggle" class="sound-toggle" type="button" aria-label="Toggle sound" title="Toggle sound effects">🔊</button>
     <!-- Stats drawer toggle (issue #9). Same lightweight aesthetic as the
          sound toggle — header real estate is tight, so it's icon-only. The
@@ -2691,9 +2691,19 @@
       // on the container — see onDualRangeTrackMousedown for the dance.
       $('#ratingRange').on('mousedown', onDualRangeTrackMousedown);
       $('#plyRange').on('mousedown', onDualRangeTrackMousedown);
-      $('#results').on('click', 'li[data-puzzle-id]', function () {
+      $('#results').on('click', 'li[data-puzzle-id]', async function () {
         var pid = $(this).attr('data-puzzle-id');
-        if (pid) startDrillByPuzzleId(pid);
+        if (!pid) return;
+        var result = await startDrillByPuzzleId(pid);
+        // Orphan: tombstone so the stale ✓ Done badge drops and the puzzle
+        // doesn't haunt the review queue or sync. Re-render the result list
+        // in place so the badge change is visible without forcing a back.
+        if (!result.ok && result.orphan) {
+          try { Progress.forget(pid); } catch (e) { /* ignore */ }
+          recordProgressMutation();
+          refreshReviewBadge();
+          if (lastMatches && lastMatches.length) renderResults(lastMatches);
+        }
       });
 
       // Click-to-move: capture-phase mousedown so we can intercept the click
@@ -3754,9 +3764,28 @@
     // Body shards are keyed by SHA-1 prefix of puzzleId (per build-index.js
     // shardId(body.id)). Same hashing as positions, just over a different
     // input. ndjson: one body per line, no ordering guarantee.
-    // Returns true on successful enterDrillMode, false on any failure.
-    // The session flow uses this to detect body-fetch failures and bail
-    // out cleanly. Row-click callers can ignore the return value.
+    //
+    // Return shape: { ok, orphan }
+    //   { ok: true,  orphan: false } — drill started successfully
+    //   { ok: false, orphan: true  } — puzzle missing/malformed in its body
+    //                                  shard. The id is no longer drillable
+    //                                  in this dataset (typically: progress
+    //                                  was recorded under a build whose
+    //                                  filter thresholds the published set
+    //                                  no longer covers). Caller should
+    //                                  tombstone the id via Progress.forget
+    //                                  and either skip-and-continue (session
+    //                                  flows) or re-render the result list
+    //                                  to drop the stale ✓ Done badge.
+    //   { ok: false, orphan: false } — infrastructure failure (HTTP error
+    //                                  on the shard fetch, Web Crypto
+    //                                  unavailable, etc). NOT a per-puzzle
+    //                                  problem; retrying the same id later
+    //                                  might succeed. Callers bail out
+    //                                  cleanly without touching Progress.
+    //
+    // Row-click callers can still ignore the return value entirely — the
+    // status message already conveys success/failure.
     async function startDrillByPuzzleId(puzzleId) {
       setStatus('Loading puzzle ' + puzzleId + '…', 'info');
       var bodyShard;
@@ -3764,7 +3793,7 @@
         bodyShard = await shardIdAsync(puzzleId);
       } catch (e) {
         setStatus('SHA-1 hashing not available (Web Crypto required, http context).', 'error');
-        return false;
+        return { ok: false, orphan: false };
       }
       try {
         var fetchResult = await fetchBodyShardCached(bodyShard);
@@ -3780,24 +3809,28 @@
           if (obj && obj.id === puzzleId) { puzzle = obj; break; }
         }
         if (!puzzle) {
-          setStatus('Puzzle ' + puzzleId + ' not found in body shard ' + bodyShard + '.', 'error');
-          return false;
+          setStatus('Puzzle ' + puzzleId + ' not found in body shard ' + bodyShard + ' — likely filtered out of the published set.', 'error');
+          return { ok: false, orphan: true };
         }
         if (!puzzle.fen || !Array.isArray(puzzle.moves) || puzzle.moves.length === 0) {
           setStatus('Puzzle ' + puzzleId + ' body is malformed (missing fen/moves).', 'error');
-          return false;
+          // Malformed body → same posture as not-found: the id is unreachable
+          // in this dataset, tombstone it and move on.
+          return { ok: false, orphan: true };
         }
         enterDrillMode(puzzle);
-        return true;
+        return { ok: true, orphan: false };
       } catch (e) {
         // Preserve the existing distinction between HTTP errors (we know
         // the shard URL was reached but rejected) and other failures.
+        // Both are infrastructure-level — NOT per-puzzle — so we return
+        // orphan:false to keep Progress untouched.
         if (e && e.status) {
           setStatus('Body shard ' + bodyShard + ' fetch failed (HTTP ' + e.status + ').', 'error');
         } else {
           setStatus('Body fetch error: ' + (e && e.message ? e.message : 'unknown'), 'error');
         }
-        return false;
+        return { ok: false, orphan: false };
       }
     }
 
@@ -6487,50 +6520,112 @@
       }
     }
 
+    // Max number of consecutive orphaned puzzles we'll skip in one
+    // advance/retreat before bailing out. If the user genuinely has 10+
+    // orphans clustered in their queue, something larger is wrong (whole
+    // shard missing, dataset re-filtered, etc) and bailing prompts a
+    // clearer diagnosis than silently grinding through every orphan.
+    var MAX_ORPHAN_SKIPS = 10;
+
     async function advanceSessionAndDrill() {
-      var r = Session.advance(sessionState);
-      sessionState = r.state;
-      if (r.exhausted) {
-        onSessionComplete();
-        return;
+      // Loop until we either land on a drillable puzzle, exhaust the queue,
+      // hit a non-orphan failure, or skip too many orphans in a row. Each
+      // iteration advances by one; orphan-skip splices the orphan and
+      // tombstones it via Progress.forget, then retries from the same
+      // cursor index (which now points at the next-but-one puzzle in the
+      // pre-splice numbering).
+      for (var skipCount = 0; skipCount < MAX_ORPHAN_SKIPS; skipCount++) {
+        // Back-click-during-drill race: onBackClick nulls sessionState
+        // out from under us. Bail silently if that happened mid-loop —
+        // the user has already navigated away, no UI cleanup needed.
+        if (!sessionState) return;
+        var r = Session.advance(sessionState);
+        sessionState = r.state;
+        if (r.exhausted) {
+          // Special case: a session that exhausted ENTIRELY by orphan-skipping
+          // never showed the user a real puzzle. Don't run onSessionComplete —
+          // the completion banner ("8 puzzles cleared") would lie. Instead
+          // bail with a status. trainingOutcomes/etc cleanup mirrors the
+          // non-orphan bail-out below.
+          if (skipCount > 0 && (!sessionState.queue || sessionState.queue.length === 0)) {
+            var wasReviewExh = (sessionState && sessionState.kind === 'review');
+            sessionState = null;
+            trainingOutcomes = null;
+            autoNextInFlight = false;
+            isPracticing = false;
+            clearTrainingResume();
+            $('#trainingStats').prop('hidden', true).empty();
+            $('#retryFailedBtn').prop('hidden', true).removeData('failedItems');
+            $('#sameAgainBtn').prop('hidden', true);
+            $('#endTrainingBtn').prop('hidden', true);
+            $('#sessionProgress').prop('hidden', true);
+            $('#completionStrip').prop('hidden', true);
+            $('#tryAgainBtn').prop('hidden', true);
+            $('#nextPuzzleBtn').prop('hidden', true);
+            $('#prevPuzzleBtn').prop('hidden', true);
+            $('#autoNextBtn').prop('hidden', true);
+            $('#backBtn').addClass('primary').text(wasReviewExh ? 'Done' : 'Back to results');
+            setStatus('No reachable puzzles in this queue — the scheduled puzzles are no longer in the published set.', 'error');
+            refreshReviewBadge(); // tombstones changed the due count
+            return;
+          }
+          onSessionComplete();
+          return;
+        }
+        var result = await startDrillByPuzzleId(r.puzzleId);
+        if (result.ok) {
+          // Persist for resume (issue #1). saveTrainingResume self-routes:
+          // non-training and complete states no-op-then-clear. Called after
+          // the await so we only save once the drill is actually showing.
+          saveTrainingResume();
+          if (skipCount > 0) {
+            // We skipped some orphans on the way here; refresh the badge so
+            // the header count reflects the tombstones. (Drill landed
+            // successfully so we don't override the drill's status.)
+            refreshReviewBadge();
+          }
+          return;
+        }
+        if (!result.orphan) {
+          // Infrastructure failure (HTTP / crypto / parse). Don't tombstone —
+          // retrying later might succeed. Bail the session cleanly.
+          break;
+        }
+        // Orphan: tombstone the id so it doesn't haunt future sessions,
+        // splice it out of the in-flight queue so retreat/advance don't
+        // re-hit it, and loop to try the next puzzle. The splice keeps
+        // cursor consistent — see Session.removeAt's contract.
+        try { Progress.forget(r.puzzleId); } catch (e) { /* ignore */ }
+        recordProgressMutation();
+        sessionState = Session.removeAt(sessionState, sessionState.cursor);
       }
-      var ok = await startDrillByPuzzleId(r.puzzleId);
-      if (!ok) {
-        // Body fetch / parse failed; status already set by startDrill.
-        // Bail out of the session — re-trying the same id won't help
-        // and re-advancing would silently skip a puzzle. Restore the
-        // single-puzzle Back button styling so the user sees a clear
-        // exit (the previous puzzle's board may still be visible).
-        var wasReview = (sessionState && sessionState.kind === 'review');
-        sessionState = null;
-        // Clear training-only UI on the way out (mirror onBackClick).
-        // enterDrillMode normally hides these, but if startDrillByPuzzleId
-        // failed BEFORE reaching enterDrillMode they could still be visible
-        // from a prior session-complete state (e.g. user clicked Retry,
-        // body fetch failed before any new puzzle painted).
-        trainingOutcomes = null;
-        autoNextInFlight = false;
-        isPracticing = false;
-        clearTrainingResume();   // saved id is unrecoverable; don't tempt re-resume
-        $('#trainingStats').prop('hidden', true).empty();
-        $('#retryFailedBtn').prop('hidden', true).removeData('failedItems');
-        $('#sameAgainBtn').prop('hidden', true);
-        $('#endTrainingBtn').prop('hidden', true);
-        $('#sessionProgress').prop('hidden', true);
-        $('#completionStrip').prop('hidden', true);
-        $('#tryAgainBtn').prop('hidden', true);
-        $('#nextPuzzleBtn').prop('hidden', true);
-        $('#prevPuzzleBtn').prop('hidden', true);
-        $('#autoNextBtn').prop('hidden', true);
-        // In review mode there's no result list to return to — Back
-        // closes the drill panel and drops the user at search-mode home.
-        $('#backBtn').addClass('primary').text(wasReview ? 'Done' : 'Back to results');
-        return;
-      }
-      // Persist for resume (issue #1). saveTrainingResume self-routes:
-      // non-training and complete states no-op-then-clear. Called after
-      // the await so we only save once the drill is actually showing.
-      saveTrainingResume();
+      // Either non-orphan failure, or we hit MAX_ORPHAN_SKIPS. Bail.
+      var wasReview = (sessionState && sessionState.kind === 'review');
+      sessionState = null;
+      // Clear training-only UI on the way out (mirror onBackClick).
+      // enterDrillMode normally hides these, but if startDrillByPuzzleId
+      // failed BEFORE reaching enterDrillMode they could still be visible
+      // from a prior session-complete state (e.g. user clicked Retry,
+      // body fetch failed before any new puzzle painted).
+      trainingOutcomes = null;
+      autoNextInFlight = false;
+      isPracticing = false;
+      clearTrainingResume();   // saved id is unrecoverable; don't tempt re-resume
+      $('#trainingStats').prop('hidden', true).empty();
+      $('#retryFailedBtn').prop('hidden', true).removeData('failedItems');
+      $('#sameAgainBtn').prop('hidden', true);
+      $('#endTrainingBtn').prop('hidden', true);
+      $('#sessionProgress').prop('hidden', true);
+      $('#completionStrip').prop('hidden', true);
+      $('#tryAgainBtn').prop('hidden', true);
+      $('#nextPuzzleBtn').prop('hidden', true);
+      $('#prevPuzzleBtn').prop('hidden', true);
+      $('#autoNextBtn').prop('hidden', true);
+      // In review mode there's no result list to return to — Back
+      // closes the drill panel and drops the user at search-mode home.
+      $('#backBtn').addClass('primary').text(wasReview ? 'Done' : 'Back to results');
+      // Refresh review badge if we tombstoned anything along the way.
+      refreshReviewBadge();
     }
 
     // Previous-puzzle: rewind the session cursor and drill the prior id.
@@ -6563,38 +6658,72 @@
     }
 
     async function retreatSessionAndDrill() {
-      var r = Session.retreat(sessionState);
-      sessionState = r.state;
-      // Defensive: r.puzzleId is null when retreat had nowhere to go.
-      // The onPrevPuzzleClick guard catches this above, so we shouldn't
-      // see it here, but bail gracefully if we do.
-      if (!r.puzzleId) return;
-      var ok = await startDrillByPuzzleId(r.puzzleId);
-      if (!ok) {
-        // Mirror advanceSessionAndDrill's bail-out: body fetch / parse
-        // failed for an id that came out of our own queue. Drop session
-        // state and restore single-puzzle Back styling.
-        var wasReview = (sessionState && sessionState.kind === 'review');
-        sessionState = null;
-        trainingOutcomes = null;
-        autoNextInFlight = false;
-        isPracticing = false;
-        clearTrainingResume();
-        $('#trainingStats').prop('hidden', true).empty();
-        $('#retryFailedBtn').prop('hidden', true).removeData('failedItems');
-        $('#sameAgainBtn').prop('hidden', true);
-        $('#endTrainingBtn').prop('hidden', true);
-        $('#sessionProgress').prop('hidden', true);
-        $('#completionStrip').prop('hidden', true);
-        $('#tryAgainBtn').prop('hidden', true);
-        $('#nextPuzzleBtn').prop('hidden', true);
-        $('#prevPuzzleBtn').prop('hidden', true);
-        $('#autoNextBtn').prop('hidden', true);
-        $('#backBtn').addClass('primary').text(wasReview ? 'Done' : 'Back to results');
-        return;
+      // First retreat: move cursor back by one from the user's current
+      // view. That's the candidate "previous" puzzle. If we're already
+      // at the start, bail (onPrevPuzzleClick should have caught this,
+      // but defensive).
+      var r0 = Session.retreat(sessionState);
+      sessionState = r0.state;
+      if (!r0.puzzleId) return;
+      // Now drill, with orphan-skip. Asymmetry vs advanceSessionAndDrill:
+      // there, each iteration calls Session.advance to move forward, and
+      // removeAt's cursor-back-by-1 cancels that out so the next iteration
+      // lands on the next puzzle. Here we DON'T retreat again per iteration
+      // — the initial retreat already moved us back, and removeAt's
+      // cursor-back-by-1 does the further-back movement on orphan-skip.
+      // Calling retreat again per iteration would move back by 2 each time,
+      // skipping past valid puzzles in front of an orphan.
+      for (var skipCount = 0; skipCount < MAX_ORPHAN_SKIPS; skipCount++) {
+        // Back-click-during-drill race: see advanceSessionAndDrill's
+        // matching guard. If onBackClick nulled sessionState mid-loop,
+        // bail silently.
+        if (!sessionState) return;
+        if (sessionState.cursor < 0 ||
+            sessionState.cursor >= sessionState.queue.length) {
+          // Spliced past the start of the queue. No earlier puzzle remains.
+          if (skipCount > 0) refreshReviewBadge();
+          return;
+        }
+        var pid = sessionState.queue[sessionState.cursor];
+        if (typeof pid !== 'string' || !pid) {
+          // Defensive — corrupt queue entry mid-flight. Treat as at-start.
+          if (skipCount > 0) refreshReviewBadge();
+          return;
+        }
+        var result = await startDrillByPuzzleId(pid);
+        if (result.ok) {
+          saveTrainingResume();
+          if (skipCount > 0) refreshReviewBadge();
+          return;
+        }
+        if (!result.orphan) break;
+        try { Progress.forget(pid); } catch (e) { /* ignore */ }
+        recordProgressMutation();
+        // Splice the orphan. removeAt shifts cursor back by 1, so next
+        // iteration drills the puzzle that was BEFORE this orphan in the
+        // pre-splice numbering.
+        sessionState = Session.removeAt(sessionState, sessionState.cursor);
       }
-      // Persist the new cursor for resume (issue #1).
-      saveTrainingResume();
+      // Non-orphan failure (or too many orphans). Drop session state and
+      // restore single-puzzle Back styling. Mirrors advanceSessionAndDrill.
+      var wasReview = (sessionState && sessionState.kind === 'review');
+      sessionState = null;
+      trainingOutcomes = null;
+      autoNextInFlight = false;
+      isPracticing = false;
+      clearTrainingResume();
+      $('#trainingStats').prop('hidden', true).empty();
+      $('#retryFailedBtn').prop('hidden', true).removeData('failedItems');
+      $('#sameAgainBtn').prop('hidden', true);
+      $('#endTrainingBtn').prop('hidden', true);
+      $('#sessionProgress').prop('hidden', true);
+      $('#completionStrip').prop('hidden', true);
+      $('#tryAgainBtn').prop('hidden', true);
+      $('#nextPuzzleBtn').prop('hidden', true);
+      $('#prevPuzzleBtn').prop('hidden', true);
+      $('#autoNextBtn').prop('hidden', true);
+      $('#backBtn').addClass('primary').text(wasReview ? 'Done' : 'Back to results');
+      refreshReviewBadge();
     }
 
     // Session exhausted: show the completion message, repurpose the
@@ -7383,11 +7512,20 @@
       $('#trainingResumePill').prop('hidden', true);
       sessionLoading = true;
       try {
-        var ok = await startDrillByPuzzleId(pid);
-        if (!ok) {
-          // Body fetch failed for an id from our own saved queue — could
-          // be a stale id whose shard moved or got pruned. Drop saved
-          // state so the user doesn't re-trigger the same failure.
+        var result = await startDrillByPuzzleId(pid);
+        if (!result.ok) {
+          // Body fetch failed for an id from our own saved queue. If the
+          // body is genuinely missing (orphan), tombstone it so the same
+          // failure doesn't recur the next time the user opens review or
+          // restarts a training set. Either way, drop the saved state —
+          // training rounds are tightly balanced, splicing one puzzle out
+          // mid-resume would lie about the round counts. Cleaner UX is
+          // to start a fresh training set.
+          if (result.orphan) {
+            try { Progress.forget(pid); } catch (e) { /* ignore */ }
+            recordProgressMutation();
+            refreshReviewBadge();
+          }
           sessionState = null;
           trainingOutcomes = null;
           clearTrainingResume();
