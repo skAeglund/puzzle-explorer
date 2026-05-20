@@ -187,6 +187,55 @@ section('merge: forward-compat fields on remote preserved');
   check('remote forward-compat field preserved', m.positions.a.futureField === 42);
 }
 
+section('merge: first-attempt — preserved when only one side has it (newer side lacks it)');
+{
+  // Device A first-attempted the puzzle (older lastSeen, carries `first`).
+  // Device B pulled it and re-reviewed later (newer lastSeen, no new `first`
+  // in this snapshot). The lastSeen winner is B, but `first` must survive
+  // from A via the field-level spread.
+  const local  = { positions: { a: { lastSeen: '2025-01-02T00:00:00.000Z', completed: true } } };
+  const remote = { positions: { a: { lastSeen: '2025-01-01T00:00:00.000Z', completed: true, first: { pass: false, themes: ['fork'], at: '2025-01-01T00:00:00.000Z' } } } };
+  const m = Sync.merge(local, remote);
+  check('lastSeen winner is local', m.positions.a.lastSeen === '2025-01-02T00:00:00.000Z');
+  check('first survives from the older side', m.positions.a.first && m.positions.a.first.pass === false);
+  check('first.themes survives', JSON.stringify(m.positions.a.first.themes) === JSON.stringify(['fork']));
+}
+
+section('merge: first-attempt — symmetric (local has it, remote is the newer winner)');
+{
+  const local  = { positions: { a: { lastSeen: '2025-01-01T00:00:00.000Z', completed: true, first: { pass: true, themes: ['pin'], at: '2025-01-01T00:00:00.000Z' } } } };
+  const remote = { positions: { a: { lastSeen: '2025-02-01T00:00:00.000Z', completed: true } } };
+  const m = Sync.merge(local, remote);
+  check('lastSeen winner is remote', m.positions.a.lastSeen === '2025-02-01T00:00:00.000Z');
+  check('first survives from local', m.positions.a.first && m.positions.a.first.pass === true);
+}
+
+section('merge: first-attempt — both set independently → earliest `at` wins (immutable)');
+{
+  // Concurrent offline first attempts of the same fresh puzzle. The
+  // chronologically-earliest is the true first, regardless of lastSeen.
+  const local  = { positions: { a: { lastSeen: '2025-03-10T00:00:00.000Z', first: { pass: true,  themes: ['fork'], at: '2025-03-10T00:00:00.000Z' } } } };
+  const remote = { positions: { a: { lastSeen: '2025-03-01T00:00:00.000Z', first: { pass: false, themes: ['pin'],  at: '2025-03-01T00:00:00.000Z' } } } };
+  const m = Sync.merge(local, remote);
+  check('earlier `at` (remote) wins despite local newer lastSeen', m.positions.a.first.pass === false);
+  check('winning first themes are the earlier ones', JSON.stringify(m.positions.a.first.themes) === JSON.stringify(['pin']));
+  // Reverse the timestamps: now local is the earlier attempt.
+  const local2  = { positions: { a: { lastSeen: '2025-03-01T00:00:00.000Z', first: { pass: true, themes: ['fork'], at: '2025-03-01T00:00:00.000Z' } } } };
+  const remote2 = { positions: { a: { lastSeen: '2025-03-10T00:00:00.000Z', first: { pass: false, themes: ['pin'], at: '2025-03-10T00:00:00.000Z' } } } };
+  const m2 = Sync.merge(local2, remote2);
+  check('earlier `at` (local) wins despite remote newer lastSeen', m2.positions.a.first.pass === true);
+}
+
+section('merge: first-attempt — invalid `first` shapes ignored');
+{
+  // A malformed `first` (no boolean pass) must not be treated as valid; the
+  // valid side wins.
+  const local  = { positions: { a: { lastSeen: '2025-01-02T00:00:00.000Z', first: { themes: ['fork'] } } } };
+  const remote = { positions: { a: { lastSeen: '2025-01-01T00:00:00.000Z', first: { pass: false, themes: ['pin'], at: '2025-01-01T00:00:00.000Z' } } } };
+  const m = Sync.merge(local, remote);
+  check('valid remote first chosen over malformed local first', m.positions.a.first && m.positions.a.first.pass === false);
+}
+
 section('merge: streak meta — newer lastReviewDay wins (issue #9)');
 {
   const local = {

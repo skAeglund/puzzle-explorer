@@ -474,6 +474,56 @@
       color: var(--fg-dim);
       margin-top: 4px;
     }
+    /* Themes-to-work-on list. One row per weak theme: name, a success-rate
+       bar (filled = solved share, colored by how rough the rate is), and a
+       compact "n solved / total" count. Bars use the same --ok / --warn /
+       --accent palette as the rest of the drawer. */
+    .stats-themes {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+    }
+    .stats-themes li {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      grid-template-areas: "name count" "bar bar";
+      gap: 2px 8px;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+    .stats-themes .theme-name {
+      grid-area: name;
+      font-size: 12px;
+      color: var(--fg);
+      text-transform: capitalize;
+    }
+    .stats-themes .theme-count {
+      grid-area: count;
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--fg-dim);
+      white-space: nowrap;
+    }
+    .stats-themes .theme-bar {
+      grid-area: bar;
+      height: 5px;
+      border-radius: 3px;
+      background: var(--surface-2);
+      overflow: hidden;
+    }
+    .stats-themes .theme-bar > span {
+      display: block;
+      height: 100%;
+      border-radius: 3px;
+    }
+    .stats-themes .theme-bar > span.low  { background: var(--warn); }
+    .stats-themes .theme-bar > span.mid  { background: var(--accent); }
+    .stats-themes .theme-bar > span.high { background: var(--ok); }
+    .stats-themes-empty {
+      font-size: 11px;
+      color: var(--fg-dim);
+      line-height: 1.4;
+    }
     /* Mobile takeover. On narrow viewports, the drawer fills the screen
        so the user has the same readable layout as a desktop side-drawer
        without horizontal cramping. */
@@ -1615,7 +1665,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">orphan-skip</span>
+    <span id="buildVersion">theme-stats</span>
     <button id="soundToggle" class="sound-toggle" type="button" aria-label="Toggle sound" title="Toggle sound effects">🔊</button>
     <!-- Stats drawer toggle (issue #9). Same lightweight aesthetic as the
          sound toggle — header real estate is tight, so it's icon-only. The
@@ -1723,6 +1773,19 @@
         <h3>Lapse rate</h3>
         <div id="statsLapseValue" class="stats-lapse-value">—</div>
         <div id="statsLapseDetail" class="stats-lapse-detail"></div>
+      </section>
+
+      <!-- Themes to work on (failed-themes stats). First-attempt-only success
+           rates per Lichess theme, sourced from Progress.themeStats() — the
+           immutable `first` field on each progress entry, which rides the
+           Gist sync so the panel reflects cross-device activity. Rendered
+           synchronously alongside the rest of the drawer. Noise tags (phase /
+           length / goal) are filtered out at display time; weakest motifs
+           sort to the top. -->
+      <section class="stats-section" id="statsThemesSection">
+        <h3>Themes to work on</h3>
+        <ul id="statsThemesList" class="stats-themes"></ul>
+        <div id="statsThemesEmpty" class="stats-themes-empty" hidden></div>
       </section>
 
     </div>
@@ -2269,6 +2332,12 @@
     var mode = 'search';
     var drillState = null;       // current Drill state machine result
     var drillPuzzle = null;      // the body object {id, fen, moves, rating, themes, ...}
+    // Was this puzzle already in Progress when the drill started? Captured at
+    // enterDrillMode time and used to gate theme-stats recording to GENUINE
+    // first attempts only (a re-drill of a known puzzle — review queue, etc. —
+    // must not re-record a first-attempt theme outcome). See
+    // recordThemeOutcomeIfFirst.
+    var drillWasSeenBefore = false;
     var lastMatches = null;      // cached for re-render on back-from-drill
     var searchFen = null;        // remembered so we can restore the board on back
     // Search-mode move builder. searchMoveHistory is the list of plies
@@ -3837,6 +3906,14 @@
     function enterDrillMode(puzzle) {
       mode = 'drill';
       drillPuzzle = puzzle;
+      // Snapshot whether this puzzle was already known BEFORE any progress
+      // write this drill does. Theme stats record first attempts only, so a
+      // re-drill (review queue, retry, etc.) must not contribute. getEntry
+      // returns the entry or null; a tombstone (forgotten puzzle) is non-null
+      // and so counts as seen-before — we don't reset a forgotten puzzle's
+      // "first attempt", which is the safe choice.
+      try { drillWasSeenBefore = !!(Progress && Progress.getEntry(puzzle.id)); }
+      catch (e) { drillWasSeenBefore = false; }
       try {
         drillState = Drill.start({
           puzzleId: puzzle.id,
@@ -4449,6 +4526,10 @@
         if (result.toRecord !== null && !isPracticing) {
           Progress.recordReview(drillState.puzzleId, result.toRecord);
           recordProgressMutation();
+          // First wrong move determines the theme outcome as a fail. Write-
+          // once in Progress.markFirstAttempt means the later completion write
+          // (which would also be a fail) is a no-op.
+          recordThemeOutcomeIfFirst(false);
           // First-wrong reschedules to tomorrow → drops out of today's
           // due count → header badge needs to reflect that.
           refreshReviewBadge();
@@ -5534,6 +5615,10 @@
           Progress.markSeen(pid);
         }
         recordProgressMutation();
+        // Theme outcome: a clean solve with no hint is a pass; any wrong
+        // attempt or hint use is a fail (a prior first-wrong already
+        // recorded the fail — this is a no-op then, per write-once).
+        recordThemeOutcomeIfFirst(drillState.wrongAttempts === 0 && !drillState.hintUsed);
         // Either path mutates progress state; refresh badge in case the
         // count changed (recordReview reschedules; markSeen never adds
         // to the queue, so the count is unchanged but the call is cheap).
@@ -5763,6 +5848,10 @@
         recordProgressMutation();
         refreshReviewBadge();
       }
+      // Giving up = a fail for theme stats. Reveal is only reachable after a
+      // first wrong move (the button enables then), so this is normally a
+      // write-once no-op; recorded here too for defensiveness.
+      recordThemeOutcomeIfFirst(false);
       // Disable both controls — Hint is now meaningless (we're playing the
       // full solution), and Show-solution shouldn't re-fire mid-autoplay.
       $('#hintBtn').prop('disabled', true);
@@ -6257,8 +6346,90 @@
       }
     }
 
+    // Themes-to-work-on display config. THEME_HIDE lists Lichess "tag"
+    // themes (phase / length / goal / origin) that aren't tactical skills —
+    // they'd swamp a weakest-themes list with noise. Anything NOT hidden is
+    // shown, so new Lichess motif themes appear automatically without a code
+    // change. The store keeps every theme verbatim; this is display-only.
+    var THEME_HIDE = {
+      mate: 1, mateIn1: 1, mateIn2: 1, mateIn3: 1, mateIn4: 1, mateIn5: 1,
+      advantage: 1, crushing: 1, equality: 1,
+      opening: 1, middlegame: 1, endgame: 1,
+      oneMove: 1, short: 1, long: 1, veryLong: 1,
+      master: 1, masterVsMaster: 1, superGM: 1, healthyMix: 1
+    };
+    var THEME_MIN_ATTEMPTS = 3;  // gate out 1-of-1-style low-sample noise
+    var THEME_MAX_ROWS = 8;
+
+    // backRankMate → "back rank mate"; discoveredAttack → "discovered attack".
+    function prettyTheme(t) {
+      return String(t)
+        .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+        .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+        .toLowerCase()
+        .trim();
+    }
+
+    // Render the weakest first-attempt themes into #statsThemesList. Sources
+    // from Progress.themeStats() (the synced `first` fields on progress
+    // entries) — synchronous, same data source as the rest of the drawer.
+    function renderThemeStats() {
+      var $list = $('#statsThemesList');
+      var $empty = $('#statsThemesEmpty');
+      var agg;
+      try { agg = (Progress && Progress.themeStats) ? Progress.themeStats() : null; }
+      catch (e) { agg = null; }
+      if (!agg) { $('#statsThemesSection').prop('hidden', true); return; }
+      $('#statsThemesSection').prop('hidden', false);
+
+      var themes = agg.themes || {};
+      var rows = [];
+      for (var t in themes) {
+        if (!Object.prototype.hasOwnProperty.call(themes, t)) continue;
+        if (THEME_HIDE[t]) continue;
+        var b = themes[t];
+        if (!b || b.attempts < THEME_MIN_ATTEMPTS) continue;
+        var solved = b.attempts - b.fails;
+        rows.push({ theme: t, attempts: b.attempts, solved: solved, rate: solved / b.attempts });
+      }
+      // Weakest first: lowest success rate, tie-break by most attempts
+      // (stronger evidence), then name for a stable order.
+      rows.sort(function (a, c) {
+        if (a.rate !== c.rate) return a.rate - c.rate;
+        if (a.attempts !== c.attempts) return c.attempts - a.attempts;
+        return a.theme < c.theme ? -1 : (a.theme > c.theme ? 1 : 0);
+      });
+      rows = rows.slice(0, THEME_MAX_ROWS);
+
+      $list.empty();
+      if (rows.length === 0) {
+        $empty.prop('hidden', false).text(
+          (agg.totalPuzzles > 0)
+            ? ('Not enough per-theme data yet — drill a few more (' + THEME_MIN_ATTEMPTS + '+ first attempts per theme) to surface your weak spots.')
+            : 'No theme data yet. Solve some puzzles and your weakest motifs will show up here.'
+        );
+        return;
+      }
+      $empty.prop('hidden', true);
+      for (var i = 0; i < rows.length; i++) {
+        var r = rows[i];
+        var pct = Math.round(r.rate * 100);
+        var cls = r.rate < 0.5 ? 'low' : (r.rate < 0.8 ? 'mid' : 'high');
+        var $li = $('<li></li>');
+        // .text() for the theme name keeps it XSS-safe even though themes
+        // come from trusted CC0 data — same posture as the result list.
+        $li.append($('<span class="theme-name"></span>').text(prettyTheme(r.theme)));
+        $li.append($('<span class="theme-count"></span>').text(r.solved + '/' + r.attempts + ' · ' + pct + '%'));
+        var $bar = $('<span class="theme-bar"></span>');
+        $bar.append($('<span></span>').addClass(cls).css('width', pct + '%'));
+        $li.append($bar);
+        $list.append($li);
+      }
+    }
+
     function openStatsDrawer() {
       renderStats();
+      renderThemeStats();
       $('#statsDrawerBackdrop').prop('hidden', false);
       $('#statsDrawer').prop('hidden', false);
       // Focus the close button so Tab navigates within the drawer first
@@ -7161,6 +7332,10 @@
         }
       }
       recordProgressMutation();
+      // Theme outcome mirrors the user's self-grade: known-without-hint is a
+      // pass; failed (Key 4) or hint-assisted "known" is a fail. Same
+      // hint→fail posture as the mouse path's clean&&!hint test.
+      recordThemeOutcomeIfFirst(success && !hintUsed);
       refreshReviewBadge();
       // Training outcomes — handleCompletion deferred this for kb mode.
       // Use the kb-supplied grade so the post-session stats line counts
@@ -7914,6 +8089,44 @@
       try { Sync.notifyMutation(); } catch (e) {
         if (typeof console !== 'undefined' && console.warn) {
           console.warn('[sync] notifyMutation threw:', e && e.message);
+        }
+      }
+    }
+
+    // Record this drill's first-attempt theme outcome (failed-themes stats).
+    // Called next to the Progress writes at each resolution path:
+    //   - first wrong move        → recordThemeOutcomeIfFirst(false)
+    //   - clean/hint completion   → recordThemeOutcomeIfFirst(clean && !hint)
+    //   - keyboard self-grade     → recordThemeOutcomeIfFirst(success && !hint)
+    //   - reveal solution         → recordThemeOutcomeIfFirst(false)
+    // The outcome is stored as an immutable `first` field ON the puzzle's
+    // progress entry (Progress.markFirstAttempt), so it rides the existing
+    // Gist sync — the verdict and themes travel to other devices and the
+    // stats panel reflects cross-device activity. Gating is layered:
+    //   1. drillWasSeenBefore  — only genuine first-ever attempts count
+    //      (re-drills of review-queue / known / pre-feature puzzles are
+    //      excluded). This is the "first attempt only" rule.
+    //   2. isPracticing        — study re-runs never record.
+    //   3. markFirstAttempt is write-once per puzzle, so the first call for a
+    //      puzzle wins and later calls in the SAME drill (e.g. completion
+    //      after a first-wrong) are silent no-ops — which is why every path
+    //      can call freely without checking who fired first.
+    function recordThemeOutcomeIfFirst(pass) {
+      if (drillWasSeenBefore) return;
+      if (isPracticing) return;
+      if (typeof Progress !== 'object' || !Progress || !Progress.markFirstAttempt) return;
+      if (!drillPuzzle || !drillPuzzle.id) return;
+      var themes = Array.isArray(drillPuzzle.themes) ? drillPuzzle.themes : [];
+      try {
+        var wrote = Progress.markFirstAttempt(drillPuzzle.id, !!pass, themes, new Date());
+        // markFirstAttempt returns the entry on a real write, null on a
+        // write-once no-op (re-fire within the same drill). Notify Sync only
+        // when something actually changed so a no-op doesn't schedule a
+        // redundant push.
+        if (wrote) recordProgressMutation();
+      } catch (e) {
+        if (typeof console !== 'undefined' && console.warn) {
+          console.warn('[themeStats] markFirstAttempt threw:', e && e.message);
         }
       }
     }
