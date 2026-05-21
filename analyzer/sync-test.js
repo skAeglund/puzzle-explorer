@@ -214,16 +214,18 @@ section('merge: first-attempt — both set independently → earliest `at` wins 
 {
   // Concurrent offline first attempts of the same fresh puzzle. The
   // chronologically-earliest is the true first, regardless of lastSeen.
-  const local  = { positions: { a: { lastSeen: '2025-03-10T00:00:00.000Z', first: { pass: true,  themes: ['fork'], at: '2025-03-10T00:00:00.000Z' } } } };
-  const remote = { positions: { a: { lastSeen: '2025-03-01T00:00:00.000Z', first: { pass: false, themes: ['pin'],  at: '2025-03-01T00:00:00.000Z' } } } };
+  const local  = { positions: { a: { lastSeen: '2025-03-10T00:00:00.000Z', first: { pass: true,  themes: ['fork'], at: '2025-03-10T00:00:00.000Z', rating: 1900 } } } };
+  const remote = { positions: { a: { lastSeen: '2025-03-01T00:00:00.000Z', first: { pass: false, themes: ['pin'],  at: '2025-03-01T00:00:00.000Z', rating: 1200 } } } };
   const m = Sync.merge(local, remote);
   check('earlier `at` (remote) wins despite local newer lastSeen', m.positions.a.first.pass === false);
   check('winning first themes are the earlier ones', JSON.stringify(m.positions.a.first.themes) === JSON.stringify(['pin']));
+  check('winning first rating rides along', m.positions.a.first.rating === 1200);
   // Reverse the timestamps: now local is the earlier attempt.
-  const local2  = { positions: { a: { lastSeen: '2025-03-01T00:00:00.000Z', first: { pass: true, themes: ['fork'], at: '2025-03-01T00:00:00.000Z' } } } };
-  const remote2 = { positions: { a: { lastSeen: '2025-03-10T00:00:00.000Z', first: { pass: false, themes: ['pin'], at: '2025-03-10T00:00:00.000Z' } } } };
+  const local2  = { positions: { a: { lastSeen: '2025-03-01T00:00:00.000Z', first: { pass: true, themes: ['fork'], at: '2025-03-01T00:00:00.000Z', rating: 1900 } } } };
+  const remote2 = { positions: { a: { lastSeen: '2025-03-10T00:00:00.000Z', first: { pass: false, themes: ['pin'], at: '2025-03-10T00:00:00.000Z', rating: 1200 } } } };
   const m2 = Sync.merge(local2, remote2);
   check('earlier `at` (local) wins despite remote newer lastSeen', m2.positions.a.first.pass === true);
+  check('local winner rating rides along', m2.positions.a.first.rating === 1900);
 }
 
 section('merge: first-attempt — invalid `first` shapes ignored');
@@ -234,6 +236,35 @@ section('merge: first-attempt — invalid `first` shapes ignored');
   const remote = { positions: { a: { lastSeen: '2025-01-01T00:00:00.000Z', first: { pass: false, themes: ['pin'], at: '2025-01-01T00:00:00.000Z' } } } };
   const m = Sync.merge(local, remote);
   check('valid remote first chosen over malformed local first', m.positions.a.first && m.positions.a.first.pass === false);
+}
+
+section('merge: userThemes — newest `userThemesAt` wins (mutable tags)');
+{
+  // Tags are mutable: the latest edit is authoritative, independent of the
+  // lastSeen winner (tagging doesn't bump lastSeen).
+  const local  = { positions: { a: { lastSeen: '2025-05-10T00:00:00.000Z', userThemes: ['fork'], userThemesAt: '2025-05-01T00:00:00.000Z' } } };
+  const remote = { positions: { a: { lastSeen: '2025-05-01T00:00:00.000Z', userThemes: ['pin', 'skewer'], userThemesAt: '2025-05-09T00:00:00.000Z' } } };
+  const m = Sync.merge(local, remote);
+  check('newer userThemesAt (remote) wins despite older lastSeen', JSON.stringify(m.positions.a.userThemes) === JSON.stringify(['pin', 'skewer']));
+  check('winning userThemesAt carried', m.positions.a.userThemesAt === '2025-05-09T00:00:00.000Z');
+}
+
+section('merge: userThemes — preserved when only one side has tags');
+{
+  const local  = { positions: { a: { lastSeen: '2025-05-10T00:00:00.000Z', completed: true } } };
+  const remote = { positions: { a: { lastSeen: '2025-05-01T00:00:00.000Z', userThemes: ['fork'], userThemesAt: '2025-05-01T00:00:00.000Z' } } };
+  const m = Sync.merge(local, remote);
+  check('tags survive from the only side that has them', JSON.stringify(m.positions.a.userThemes) === JSON.stringify(['fork']));
+}
+
+section('merge: userThemes — newer empty array propagates removal');
+{
+  // Device A cleared all tags (newer); device B still has the old non-empty
+  // set. The cleared (empty) array must win because it is newer.
+  const local  = { positions: { a: { lastSeen: '2025-05-10T00:00:00.000Z', userThemes: [], userThemesAt: '2025-05-09T00:00:00.000Z' } } };
+  const remote = { positions: { a: { lastSeen: '2025-05-10T00:00:00.000Z', userThemes: ['fork', 'pin'], userThemesAt: '2025-05-01T00:00:00.000Z' } } };
+  const m = Sync.merge(local, remote);
+  check('newer empty array wins (removal propagates)', Array.isArray(m.positions.a.userThemes) && m.positions.a.userThemes.length === 0);
 }
 
 section('merge: streak meta — newer lastReviewDay wins (issue #9)');

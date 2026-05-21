@@ -486,7 +486,7 @@
     .stats-themes li {
       display: grid;
       grid-template-columns: 1fr auto;
-      grid-template-areas: "name count" "bar bar";
+      grid-template-areas: "name perf" "bar count";
       gap: 2px 8px;
       align-items: center;
       margin-bottom: 10px;
@@ -496,6 +496,14 @@
       font-size: 12px;
       color: var(--fg);
       text-transform: capitalize;
+    }
+    .stats-themes .theme-perf {
+      grid-area: perf;
+      font-family: var(--mono);
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--fg);
+      white-space: nowrap;
     }
     .stats-themes .theme-count {
       grid-area: count;
@@ -1105,6 +1113,44 @@
       text-overflow: ellipsis;
       white-space: nowrap;
     }
+    /* Theme tagging UI. */
+    .tag-row { width: 100%; margin: 2px 0 4px; }
+    .tag-row-label { font-size: 11px; color: var(--fg-dim); }
+    .tag-row-label.nudge { color: var(--warn); }
+    .tag-chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 5px; }
+    .tag-chip {
+      display: inline-flex; align-items: center; gap: 4px;
+      font-size: 11px; line-height: 1.4; padding: 2px 8px;
+      border-radius: 10px; background: var(--surface-2); color: var(--fg-dim);
+    }
+    .tag-chip.user { background: rgba(214, 164, 76, 0.18); color: var(--fg); }
+    .tag-chip .x {
+      cursor: pointer; color: var(--fg-dim); font-size: 13px; line-height: 1;
+      padding: 0 1px; border-radius: 3px;
+    }
+    .tag-chip .x:hover { color: var(--error); }
+    .tag-add {
+      font-size: 11px; padding: 2px 9px; border-radius: 10px;
+      border: 1px dashed var(--border); background: transparent;
+      color: var(--fg-dim); cursor: pointer;
+    }
+    .tag-add:hover { color: var(--fg); border-color: var(--fg-dim); }
+    .tag-picker {
+      margin-top: 7px; border: 1px solid var(--border); border-radius: 6px;
+      background: var(--surface); overflow: hidden;
+    }
+    .tag-search {
+      width: 100%; box-sizing: border-box; border: none; outline: none;
+      background: transparent; color: var(--fg); font-size: 12px;
+      padding: 7px 9px; border-bottom: 1px solid var(--border);
+    }
+    .tag-options { max-height: 168px; overflow-y: auto; }
+    .tag-option { padding: 5px 9px; font-size: 12px; cursor: pointer; color: var(--fg); }
+    .tag-option:hover { background: var(--surface-2); }
+    .tag-option.disabled { color: var(--fg-dim); cursor: default; }
+    .tag-option.disabled:hover { background: transparent; }
+    .tag-option.custom { color: var(--accent); }
+    .tag-option .tag-check { float: right; color: var(--ok); }
     /* Small toggle next to id+rating — hides themes + opening by default
        to avoid inadvertent solution hints (themes like 'mateIn1' or
        'discoveredAttack' can give the puzzle away) and to save vertical
@@ -1665,7 +1711,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">theme-stats</span>
+    <span id="buildVersion">theme-tags</span>
     <button id="soundToggle" class="sound-toggle" type="button" aria-label="Toggle sound" title="Toggle sound effects">🔊</button>
     <!-- Stats drawer toggle (issue #9). Same lightweight aesthetic as the
          sound toggle — header real estate is tight, so it's icon-only. The
@@ -1775,13 +1821,15 @@
         <div id="statsLapseDetail" class="stats-lapse-detail"></div>
       </section>
 
-      <!-- Themes to work on (failed-themes stats). First-attempt-only success
-           rates per Lichess theme, sourced from Progress.themeStats() — the
-           immutable `first` field on each progress entry, which rides the
+      <!-- Themes to work on (failed-themes stats). Per-theme PERFORMANCE
+           rating (Lichess PuzzleDashboard formula: avgRating - 500 + 1000*
+           firstAttemptSuccessFraction), weakest first — so a solved 2000
+           counts more than a solved 1000. Success rate is kept as the bar.
+           Sourced from Progress.themeStats() — the immutable `first` field
+           (pass + themes + rating) on each progress entry, which rides the
            Gist sync so the panel reflects cross-device activity. Rendered
-           synchronously alongside the rest of the drawer. Noise tags (phase /
-           length / goal) are filtered out at display time; weakest motifs
-           sort to the top. -->
+           synchronously. Noise tags (phase / length / goal) filtered at
+           display time. -->
       <section class="stats-section" id="statsThemesSection">
         <h3>Themes to work on</h3>
         <ul id="statsThemesList" class="stats-themes"></ul>
@@ -1958,6 +2006,21 @@
            Sits between the banner and the puzzle metadata so the user reads
            it on the same beat as the "Training complete" message. -->
       <div class="training-stats" id="trainingStats" hidden></div>
+      <!-- Theme tag row (manual tagging). Shown post-resolution by
+           renderTagRow / handleCompletion, hidden for fresh drills by
+           enterDrillMode. Lets the user attach motif tags to a puzzle whose
+           auto themes are uninformative (e.g. only "short"/"advantage"), so it
+           contributes to the theme/performance stats. Auto themes show as
+           static chips; user tags are removable; the picker offers the
+           canonical Lichess motif list plus a custom-text fallback. -->
+      <div id="tagRow" class="tag-row" hidden>
+        <span class="tag-row-label" id="tagRowLabel">Themes</span>
+        <div id="tagChips" class="tag-chips"></div>
+        <div id="tagPicker" class="tag-picker" hidden>
+          <input id="tagSearch" class="tag-search" type="text" autocomplete="off" placeholder="Search themes, or type your own…">
+          <div id="tagOptions" class="tag-options"></div>
+        </div>
+      </div>
       <div class="drill-header">
         <span class="drill-id" id="drillId">—</span>
         <span class="drill-rating" id="drillRating">—</span>
@@ -2739,6 +2802,17 @@
       $('#statsDrawerCloseBtn').on('click', closeStatsDrawer);
       $('#statsDrawerBackdrop').on('click', closeStatsDrawer);
       $('#detailsToggleBtn').on('click', onDetailsToggleClick);
+      // Tag picker search: live-filter on input; Enter adds the first option
+      // (canonical match or the custom-text fallback).
+      $('#tagSearch').on('input', renderTagOptions);
+      $('#tagSearch').on('keydown', function (e) {
+        if (e.key === 'Enter' || e.keyCode === 13) {
+          e.preventDefault();
+          $('#tagOptions .tag-option:not(.disabled)').first().trigger('click');
+        } else if (e.key === 'Escape' || e.keyCode === 27) {
+          closeTagPicker();
+        }
+      });
       // Sound toggle — preload audio elements, restore persisted on/off state,
       // then sync the button label to whatever Sound.isEnabled() ended up as.
       Sound.init();
@@ -3914,6 +3988,10 @@
       // "first attempt", which is the safe choice.
       try { drillWasSeenBefore = !!(Progress && Progress.getEntry(puzzle.id)); }
       catch (e) { drillWasSeenBefore = false; }
+      // Tag row is a post-resolution affordance — hide it for the fresh drill;
+      // handleCompletion re-shows it once the puzzle is solved/revealed.
+      $('#tagRow').prop('hidden', true);
+      closeTagPicker();
       try {
         drillState = Drill.start({
           puzzleId: puzzle.id,
@@ -5721,6 +5799,9 @@
         .addClass(kind)
         .text(msg);
       $('#completionStrip').prop('hidden', false);
+      // Puzzle is resolved → offer manual theme tagging (the entry now has a
+      // `first` record for it). renderTagRow shows the row + nudge.
+      renderTagRow();
       $('#hintBtn').prop('disabled', true);
       $('#showSolutionBtn').prop('disabled', true);
       // Try-again button: visible after every completion. Phrasing depends
@@ -6388,14 +6469,18 @@
         if (!Object.prototype.hasOwnProperty.call(themes, t)) continue;
         if (THEME_HIDE[t]) continue;
         var b = themes[t];
-        if (!b || b.attempts < THEME_MIN_ATTEMPTS) continue;
+        // Need enough RATED first-attempts for a stable performance number.
+        if (!b || b.performance === null || b.ratedAttempts < THEME_MIN_ATTEMPTS) continue;
         var solved = b.attempts - b.fails;
-        rows.push({ theme: t, attempts: b.attempts, solved: solved, rate: solved / b.attempts });
+        rows.push({
+          theme: t, attempts: b.attempts, solved: solved,
+          rate: solved / b.attempts, perf: b.performance, avgRating: b.avgRating
+        });
       }
-      // Weakest first: lowest success rate, tie-break by most attempts
-      // (stronger evidence), then name for a stable order.
+      // Weakest first: lowest performance rating (Lichess "improvement areas").
+      // Tie-break by more attempts (stronger evidence), then name for stability.
       rows.sort(function (a, c) {
-        if (a.rate !== c.rate) return a.rate - c.rate;
+        if (a.perf !== c.perf) return a.perf - c.perf;
         if (a.attempts !== c.attempts) return c.attempts - a.attempts;
         return a.theme < c.theme ? -1 : (a.theme > c.theme ? 1 : 0);
       });
@@ -6416,15 +6501,158 @@
         var pct = Math.round(r.rate * 100);
         var cls = r.rate < 0.5 ? 'low' : (r.rate < 0.8 ? 'mid' : 'high');
         var $li = $('<li></li>');
+        // Hover detail: the basis of the performance number.
+        $li.attr('title', r.solved + '/' + r.attempts + ' solved first-try · avg puzzle rating ~' + Math.round(r.avgRating));
         // .text() for the theme name keeps it XSS-safe even though themes
         // come from trusted CC0 data — same posture as the result list.
         $li.append($('<span class="theme-name"></span>').text(prettyTheme(r.theme)));
-        $li.append($('<span class="theme-count"></span>').text(r.solved + '/' + r.attempts + ' · ' + pct + '%'));
+        // Performance rating is the headline metric.
+        $li.append($('<span class="theme-perf"></span>').text(r.perf));
+        // Success-rate bar (kept), colored by how rough the rate is.
         var $bar = $('<span class="theme-bar"></span>');
         $bar.append($('<span></span>').addClass(cls).css('width', pct + '%'));
         $li.append($bar);
+        $li.append($('<span class="theme-count"></span>').text(r.solved + '/' + r.attempts + ' · ' + pct + '%'));
         $list.append($li);
       }
+    }
+
+    // ── Theme tagging ───────────────────────────────────────────────────
+    // Canonical Lichess motif/mate/endgame themes offered in the tag picker
+    // (the meaningful subset — the inverse of THEME_HIDE). Selecting from this
+    // list keeps a tagged `fork` in the same bucket as Lichess's auto `fork`.
+    // Custom free-text is allowed too (own bucket).
+    var TAGGABLE_THEMES = [
+      'advancedPawn', 'anastasiaMate', 'arabianMate', 'attackingF2F7', 'attraction',
+      'backRankMate', 'bishopEndgame', 'bodenMate', 'capturingDefender', 'castling',
+      'clearance', 'defensiveMove', 'deflection', 'discoveredAttack', 'doubleBishopMate',
+      'doubleCheck', 'dovetailMate', 'enPassant', 'exposedKing', 'fork', 'hangingPiece',
+      'hookMate', 'interference', 'intermezzo', 'killBoxMate', 'kingsideAttack',
+      'knightEndgame', 'pin', 'promotion', 'queenEndgame', 'queenRookEndgame',
+      'queensideAttack', 'quietMove', 'rookEndgame', 'sacrifice', 'skewer',
+      'smotheredMate', 'trappedPiece', 'underPromotion', 'vukovicMate', 'xRayAttack',
+      'zugzwang'
+    ];
+
+    function meaningfulThemes(list) {
+      var out = [];
+      if (!Array.isArray(list)) return out;
+      for (var i = 0; i < list.length; i++) {
+        var t = list[i];
+        if (typeof t === 'string' && t && !THEME_HIDE[t]) out.push(t);
+      }
+      return out;
+    }
+    function currentUserThemes() {
+      if (!drillPuzzle || !Progress || !Progress.getEntry) return [];
+      try {
+        var e = Progress.getEntry(drillPuzzle.id);
+        return (e && Array.isArray(e.userThemes)) ? e.userThemes.slice() : [];
+      } catch (err) { return []; }
+    }
+
+    function renderTagRow() {
+      var $row = $('#tagRow');
+      if (!drillPuzzle) { $row.prop('hidden', true); return; }
+      var intrinsic = meaningfulThemes(drillPuzzle.themes);
+      var user = currentUserThemes();
+      var present = Object.create(null);
+      intrinsic.forEach(function (t) { present[t] = true; });
+      var userOnly = user.filter(function (t) { return !present[t]; });
+
+      // Nudge only when the puzzle has NO meaningful theme at all (the case
+      // that motivated this feature) and the user hasn't tagged one yet.
+      var $label = $('#tagRowLabel');
+      if (intrinsic.length === 0 && userOnly.length === 0) {
+        $label.text('No tactical theme — tag this puzzle:').addClass('nudge');
+      } else {
+        $label.text('Themes').removeClass('nudge');
+      }
+
+      var $chips = $('#tagChips').empty();
+      intrinsic.forEach(function (t) {
+        $chips.append($('<span class="tag-chip"></span>').text(prettyTheme(t)));
+      });
+      userOnly.forEach(function (t) {
+        var $c = $('<span class="tag-chip user"></span>');
+        $c.append($('<span></span>').text(prettyTheme(t)));
+        $c.append($('<span class="x" title="Remove tag">×</span>').on('click', function () { removeTag(t); }));
+        $chips.append($c);
+      });
+      $chips.append($('<button class="tag-add" type="button">＋ tag</button>').on('click', toggleTagPicker));
+
+      $row.prop('hidden', false);
+      if (!$('#tagPicker').prop('hidden')) renderTagOptions();
+    }
+
+    function toggleTagPicker() {
+      var $p = $('#tagPicker');
+      if ($p.prop('hidden')) {
+        $p.prop('hidden', false);
+        $('#tagSearch').val('');
+        renderTagOptions();
+        $('#tagSearch').trigger('focus');
+      } else { closeTagPicker(); }
+    }
+    function closeTagPicker() { $('#tagPicker').prop('hidden', true); }
+
+    function renderTagOptions() {
+      if (!drillPuzzle) return;
+      var raw = ($('#tagSearch').val() || '').trim();
+      var q = raw.toLowerCase();
+      var present = Object.create(null);
+      meaningfulThemes(drillPuzzle.themes).concat(currentUserThemes())
+        .forEach(function (t) { present[t] = true; });
+
+      var $opts = $('#tagOptions').empty();
+      for (var i = 0; i < TAGGABLE_THEMES.length; i++) {
+        var key = TAGGABLE_THEMES[i];
+        var label = prettyTheme(key);
+        if (q && label.indexOf(q) === -1 && key.toLowerCase().indexOf(q) === -1) continue;
+        var $o = $('<div class="tag-option"></div>').text(label);
+        if (present[key]) {
+          $o.addClass('disabled').append($('<span class="tag-check">✓</span>'));
+        } else {
+          (function (k) { $o.on('click', function () { addTag(k); }); })(key);
+        }
+        $opts.append($o);
+      }
+      // Custom free-text fallback: offer it when the typed text isn't an exact
+      // canonical match and isn't already present.
+      if (raw) {
+        var isCanonical = TAGGABLE_THEMES.some(function (k) {
+          return prettyTheme(k) === q || k.toLowerCase() === q;
+        });
+        if (!isCanonical && !present[raw]) {
+          $opts.append(
+            $('<div class="tag-option custom"></div>')
+              .text('Add custom: "' + raw + '"')
+              .on('click', function () { addTag(raw); })
+          );
+        }
+      }
+    }
+
+    function addTag(theme) {
+      if (!drillPuzzle || typeof theme !== 'string') return;
+      var t = theme.trim();
+      if (!t) return;
+      var user = currentUserThemes();
+      if (user.indexOf(t) !== -1) return;
+      user.push(t);
+      Progress.setUserThemes(drillPuzzle.id, user, new Date());
+      recordProgressMutation();
+      $('#tagSearch').val('');
+      renderTagRow();
+      renderTagOptions();
+      $('#tagSearch').trigger('focus');
+    }
+    function removeTag(theme) {
+      if (!drillPuzzle) return;
+      var user = currentUserThemes().filter(function (t) { return t !== theme; });
+      Progress.setUserThemes(drillPuzzle.id, user, new Date());
+      recordProgressMutation();
+      renderTagRow();
     }
 
     function openStatsDrawer() {
@@ -8117,8 +8345,9 @@
       if (typeof Progress !== 'object' || !Progress || !Progress.markFirstAttempt) return;
       if (!drillPuzzle || !drillPuzzle.id) return;
       var themes = Array.isArray(drillPuzzle.themes) ? drillPuzzle.themes : [];
+      var rating = (typeof drillPuzzle.rating === 'number') ? drillPuzzle.rating : null;
       try {
-        var wrote = Progress.markFirstAttempt(drillPuzzle.id, !!pass, themes, new Date());
+        var wrote = Progress.markFirstAttempt(drillPuzzle.id, !!pass, themes, rating, new Date());
         // markFirstAttempt returns the entry on a real write, null on a
         // write-once no-op (re-fire within the same drill). Notify Sync only
         // when something actually changed so a no-op doesn't schedule a
