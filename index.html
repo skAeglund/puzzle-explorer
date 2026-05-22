@@ -980,6 +980,22 @@
     }
     .repertoire-item-load:hover { color: var(--fg); border-color: var(--accent); }
     .repertoire-item-remove:hover { color: var(--error); border-color: var(--error); }
+    .repertoire-items-pager {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 8px; margin-top: 6px; padding-top: 6px;
+      border-top: 1px dashed var(--border);
+    }
+    .rep-pager-status {
+      font-family: var(--mono); font-size: 10px; color: var(--fg-dim);
+      flex: 1 1 auto; text-align: center;
+    }
+    .rep-pager-btn {
+      background: var(--bg); color: var(--fg);
+      border: 1px solid var(--border); border-radius: 3px;
+      padding: 3px 9px; font-size: 10px; font-family: var(--mono); cursor: pointer;
+    }
+    .rep-pager-btn:hover:not(:disabled) { border-color: var(--accent); }
+    .rep-pager-btn:disabled { opacity: 0.4; cursor: default; }
 
     /* Move-builder UI: drag pieces on the board (or click-to-move) to set
        a position one ply at a time. Move list mirrors what's been played;
@@ -1045,48 +1061,6 @@
     #status[data-kind="warn"]  { border-left-color: var(--warn); }
     #status[data-kind="error"] { border-left-color: var(--error); color: var(--error); }
     #status[data-kind="info"]  { border-left-color: var(--info); }
-
-    #results {
-      list-style: none;
-      padding: 0;
-      margin: 0;
-    }
-    #results li {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 7px 12px;
-      border: 1px solid var(--border);
-      border-radius: 3px;
-      margin-bottom: 4px;
-      background: var(--surface);
-      font-size: 12px;
-      cursor: pointer;
-      transition: border-color 0.1s, background 0.1s;
-    }
-    #results li:hover {
-      border-color: var(--accent);
-      background: var(--surface-2);
-    }
-    .result-left { display: flex; align-items: baseline; gap: 6px; }
-    .puzzle-id {
-      font-weight: 600;
-      letter-spacing: 0.03em;
-    }
-    .puzzle-rating {
-      color: var(--fg-dim);
-      font-variant-numeric: tabular-nums;
-    }
-    .done-badge {
-      color: var(--ok);
-      font-weight: 700;
-      font-size: 13px;
-    }
-    .results-meta {
-      font-size: 11px;
-      color: var(--fg-dim);
-      margin: 8px 2px 6px;
-    }
 
     /* drill panel */
     .drill-header {
@@ -1513,6 +1487,41 @@
       font-variant-numeric: tabular-nums;
     }
     .session-counts.empty { color: var(--fg-dim); }
+    /* Theme filter chips. A scrollable, wrapping chip cloud grouped by
+       section. Capped height so a 31-chip set doesn't dominate the panel
+       on mobile; scrolls within. Selected chips use the accent color. */
+    .theme-filter-head {
+      display: flex; align-items: center; justify-content: space-between;
+      margin: 8px 2px 4px;
+    }
+    .theme-filter-head label { margin: 0; }
+    .theme-filter-clear {
+      background: none; border: none; color: var(--accent);
+      font-size: 11px; cursor: pointer; padding: 0; text-decoration: underline;
+    }
+    .theme-filter {
+      max-height: 132px; overflow-y: auto;
+      border: 1px solid var(--border); border-radius: 3px;
+      padding: 6px; background: var(--bg);
+    }
+    .theme-group-label {
+      font-size: 10px; letter-spacing: 0.04em; text-transform: uppercase;
+      color: var(--fg-dim); margin: 4px 1px 3px;
+    }
+    .theme-group:first-child .theme-group-label { margin-top: 0; }
+    .theme-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+    .theme-chip {
+      background: var(--surface); color: var(--fg);
+      border: 1px solid var(--border); border-radius: 11px;
+      padding: 2px 9px; font-size: 11px; cursor: pointer;
+      transition: border-color 0.1s, background 0.1s, color 0.1s;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .theme-chip:hover { border-color: var(--accent); }
+    .theme-chip.selected {
+      background: var(--accent); border-color: var(--accent); color: #1a1a1a;
+      font-weight: 600;
+    }
     /* Training section divider — separates the dual-slider Start-session
        block from the fixed-bucket Start-training block inside the same
        panel. Subtle line; reuses --border to match the page's other
@@ -1711,7 +1720,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">theme-tags</span>
+    <span id="buildVersion">theme-filter</span>
     <button id="soundToggle" class="sound-toggle" type="button" aria-label="Toggle sound" title="Toggle sound effects">🔊</button>
     <!-- Stats drawer toggle (issue #9). Same lightweight aesthetic as the
          sound toggle — header real estate is tight, so it's icon-only. The
@@ -1980,6 +1989,16 @@
             <button id="repertoireExitBtn" type="button" class="repertoire-exit" title="Exit repertoire mode" aria-label="Exit repertoire mode">×</button>
           </div>
           <ol class="repertoire-items" id="repertoireItems"></ol>
+          <!-- Pager for large repertoires (e.g. a study import with
+               hundreds of positions). Hidden when the rep fits in a single
+               page so small personal reps render exactly as before. Prev/
+               Next are stable nodes bound once at init; renderActiveRepertoire
+               fills the status text and toggles visibility. -->
+          <div class="repertoire-items-pager" id="repertoireItemsPager" hidden>
+            <button type="button" id="repItemsPrev" class="rep-pager-btn" aria-label="Previous page">‹ Prev</button>
+            <span class="rep-pager-status" id="repItemsPagerStatus"></span>
+            <button type="button" id="repItemsNext" class="rep-pager-btn" aria-label="Next page">Next ›</button>
+          </div>
         </div>
       </div>
     </div>
@@ -2130,6 +2149,20 @@
         <span id="plyRangeMinLabel">0</span>
         <span id="plyRangeMaxLabel">any</span>
       </div>
+      <!-- Theme filter (issue: filter by theme). Global pre-filter like the
+           ply range above — applies to BOTH Start session and Start
+           training, NOT to the SRS review queue (which answers to the
+           scheduler, not search filters). OR / union semantics across
+           selected chips. Chips are injected by JS from Themes.GROUPS so
+           the curated set lives in one place (lib/themes.js). Filtering
+           reads index m[5]; on an index not yet republished with theme
+           codes the filter no-ops (every entry passes), so this UI is inert
+           until the data carries m[5]. -->
+      <div class="theme-filter-head">
+        <label title="Filter the session/training pool to puzzles tagged with ANY of the selected themes (union). Applies to both Start session and Start training, not the review queue. Inactive until the published index carries theme data.">Themes</label>
+        <button type="button" id="themeFilterClear" class="theme-filter-clear" hidden>clear</button>
+      </div>
+      <div class="theme-filter" id="themeFilter"></div>
       <label>Rating range</label>
       <div class="dual-range" id="ratingRange">
         <div class="range-track"></div>
@@ -2206,8 +2239,6 @@
       </div>
     </div>
 
-    <div class="results-meta" id="resultsMeta" hidden></div>
-    <ol id="results"></ol>
   </main>
 
   <!-- Libraries: jQuery 3.7.1, chess.js 0.10.3, chessboard.js 1.0.0 (per project pin).
@@ -2217,6 +2248,7 @@
   <script src="lib/vendor/chessboard-1.0.0.min.js"></script>
   <!-- Shared posKey lib (must produce byte-identical keys with the build) -->
   <script src="lib/posKey.js"></script>
+  <script src="lib/themes.js"></script>
   <!-- FSRS scheduler (must precede drill.js + progress.js — they reference root.FSRS) -->
   <script src="lib/fsrs.js"></script>
   <script src="lib/drill.js"></script>
@@ -2253,7 +2285,6 @@
   (function () {
     var board = null;
     var chess = null;
-    var MAX_RESULTS = 100;       // cap visible matches; filters/pagination later
     // Upper bound of the source-game ply slider in #sessionPanel. Covers
     // virtually all puzzles — the average source game is ~28 ply long
     // and the long tail rarely exceeds 80. Slider value at the max is
@@ -2261,6 +2292,12 @@
     // upper bound (= no filter). Kept in sync with the slider markup
     // (input[type=range] max=80) and validatePlyRange's clamp range.
     var PLY_RANGE_MAX = 80;
+    // Theme filter selection — array of curated theme KEYS (strings) the
+    // user has toggled on in #themeFilter. Mirrors settings.themes; the
+    // chips, the previews, and the start handlers all read it. Empty ⇒ no
+    // theme filter (the common case). getActiveThemeCodes() maps these keys
+    // to integer codes (matching index m[5]) at filter time.
+    var selectedThemeKeys = [];
     // Training-session round configuration. Three buckets the user
     // drills sequentially: easy → medium → hard. Labels are fixed; rating
     // bounds AND target counts are user-adjustable via the Customize-
@@ -2581,8 +2618,8 @@
     // Session state — null when not in a session. Built by Session.create
     // from the current `lastMatches` + slider range when the user clicks
     // "Start session". Walked by Session.advance on each "Next puzzle"
-    // click. Cleared on "Back to results". A row click in search-mode
-    // bypasses session entirely (sessionState stays null).
+    // click. Cleared on "Back to results". Stays null outside of a
+    // session/training/review run (e.g. while browsing search results).
     var sessionState = null;
     // Per-puzzle outcomes captured during a training session — keyed by
     // puzzleId, value is { grade: FSRS grade, hintUsed: bool, wrongAttempts:
@@ -2716,6 +2753,15 @@
         var fen = $(this).attr('data-fen');
         if (fen) onRemoveRepertoireItem(fen);
       });
+      // Items list pager (only visible for large reps). Step the page and
+      // re-render the active control bar; renderActiveRepertoire clamps the
+      // page and rebuilds just the current slice.
+      $('#repItemsPrev').on('click', function () {
+        if (repItemsPage > 0) { repItemsPage--; renderActiveRepertoire(); }
+      });
+      $('#repItemsNext').on('click', function () {
+        repItemsPage++; renderActiveRepertoire();
+      });
 
       // Import-study modal. Most handlers attach to specific element IDs
       // (the modal lives in static markup) — close/cancel/backdrop all
@@ -2761,8 +2807,7 @@
       $('#colorFilterBtn').on('click', toggleColorFilter);
       updateColorFilterBtn();
 
-      // Drill UI handlers. Result-row click is delegated since rows are
-      // re-rendered on each search.
+      // Drill UI handlers.
       $('#hintBtn').on('click', onHintClick);
       $('#showSolutionBtn').on('click', onShowSolutionClick);
       $('#backBtn').on('click', onBackClick);
@@ -2793,6 +2838,12 @@
       $('#trainingRanges').on('change', '.training-ranges-input', onTrainingRangeChange);
       $('#trainingRangesReset').on('click', onTrainingRangesReset);
       initTrainingRanges();
+      // Theme filter chips (delegated toggle on the stable container) + the
+      // clear shortcut. buildThemeChips renders the cloud from Themes.GROUPS
+      // and restores the saved selection.
+      $('#themeFilter').on('click', '.theme-chip', onThemeChipToggle);
+      $('#themeFilterClear').on('click', clearThemeFilter);
+      buildThemeChips();
       $('#reviewBadge').on('click', onReviewBadgeClick);
       // Stats drawer (issue #9). The button toggles open; backdrop click
       // and the drawer's own close button close. Esc-to-close lives on a
@@ -2834,20 +2885,6 @@
       // on the container — see onDualRangeTrackMousedown for the dance.
       $('#ratingRange').on('mousedown', onDualRangeTrackMousedown);
       $('#plyRange').on('mousedown', onDualRangeTrackMousedown);
-      $('#results').on('click', 'li[data-puzzle-id]', async function () {
-        var pid = $(this).attr('data-puzzle-id');
-        if (!pid) return;
-        var result = await startDrillByPuzzleId(pid);
-        // Orphan: tombstone so the stale ✓ Done badge drops and the puzzle
-        // doesn't haunt the review queue or sync. Re-render the result list
-        // in place so the badge change is visible without forcing a back.
-        if (!result.ok && result.orphan) {
-          try { Progress.forget(pid); } catch (e) { /* ignore */ }
-          recordProgressMutation();
-          refreshReviewBadge();
-          if (lastMatches && lastMatches.length) renderResults(lastMatches);
-        }
-      });
 
       // Click-to-move: capture-phase mousedown so we can intercept the click
       // BEFORE chessboard.js's drag-start logic kicks in (and call
@@ -3059,8 +3096,6 @@
       updateMoveListDisplay();
       updateFenInputFromBoard();
       setStatus('Position loaded. Click Search.', 'ok');
-      $('#results').empty();
-      $('#resultsMeta').prop('hidden', true);
       // Hide the session panel — its slider/counts are tied to the
       // previous search's matches and would be misleading until the
       // user re-searches against the new FEN.
@@ -3145,12 +3180,9 @@
           } else {
             setStatus('No puzzles found at this position. (Shard ' + shard + ' fetched, but the position key isn\'t indexed.)', 'info');
           }
-        } else if (matches.length > MAX_RESULTS) {
-          setStatus(matches.length + ' matches found' + filterNote +
-            ' (showing first ' + MAX_RESULTS + ' by rating).', 'ok');
         } else {
           setStatus(matches.length + ' match' + (matches.length === 1 ? '' : 'es') +
-            ' found' + filterNote + '.', 'ok');
+            ' found' + filterNote + '. Start a session or training below.', 'ok');
         }
       } catch (e) {
         setStatus('Fetch error: ' + e.message + '. Are you serving over http (not file://)? Is data/ generated?', 'error');
@@ -3375,12 +3407,9 @@
           } else {
             setStatus('No puzzles found across ' + label + '.', 'info');
           }
-        } else if (matches.length > MAX_RESULTS) {
-          setStatus(matches.length + ' unique matches across ' + label + filterNote +
-            ' (showing first ' + MAX_RESULTS + ' by rating).', 'ok');
         } else {
           setStatus(matches.length + ' match' + (matches.length === 1 ? '' : 'es') +
-            ' found across ' + label + filterNote + '.', 'ok');
+            ' found across ' + label + filterNote + '. Start a session or training below.', 'ok');
         }
       } catch (e) {
         setStatus('Fetch error: ' + e.message + '. Are you serving over http (not file://)? Is data/ generated?', 'error');
@@ -3409,35 +3438,21 @@
       return hex.slice(0, SHARD_HEX_LEN);
     }
 
+    // ingestMatches: was renderResults — the clickable id·rating list was
+    // removed (no use-case for selecting a puzzle by id). Its remaining job
+    // is to cache the match set and toggle the session panel. Kept under the
+    // old name because ~15 call sites (search paths, mode swaps, back-from-
+    // drill) drive off it; renaming all of them buys nothing here.
     function renderResults(matches) {
       lastMatches = matches;
-      var $list = $('#results').empty();
-      var $meta = $('#resultsMeta');
       if (!matches.length) {
-        $meta.prop('hidden', true);
         $('#sessionPanel').prop('hidden', true);
         return;
       }
-      // sort by rating asc; stable enough for our purposes
+      // Sort by rating asc. Downstream session sampling + configureSlider
+      // read lastMatches directly, so keep the ordering stable here even
+      // though there's no longer a list to display.
       matches.sort(function (a, b) { return a[1] - b[1]; });
-      var shown = matches.slice(0, MAX_RESULTS);
-      $meta.text('id · rating  (sorted by rating, lowest first — click a row to drill)').prop('hidden', false);
-      for (var i = 0; i < shown.length; i++) {
-        var m = shown[i];
-        var pid = m[0];
-        var rating = m[1];
-        var $li = $('<li></li>')
-          .attr('data-puzzle-id', pid)
-          .attr('data-rating', rating || '');
-        var $left = $('<span class="result-left"></span>');
-        if (Progress.isCompleted(pid)) {
-          $left.append($('<span class="done-badge" title="Previously completed">✓</span>'));
-        }
-        $left.append($('<span class="puzzle-id"></span>').text(pid));
-        $li.append($left);
-        $li.append($('<span class="puzzle-rating"></span>').text(rating || '—'));
-        $list.append($li);
-      }
       $('#sessionPanel').prop('hidden', false);
     }
 
@@ -3513,6 +3528,12 @@
       if (ply.min !== null || ply.max !== null) {
         inRange = Session.filterByPly(inRange, ply.min, ply.max);
       }
+      // Theme filter on top — keeps the live count honest with what
+      // onStartSessionClick will queue. No-op when nothing is selected.
+      var themeCodes = getActiveThemeCodes();
+      if (themeCodes.length) {
+        inRange = Session.filterByTheme(inRange, themeCodes);
+      }
       var unsolved = Session.countUnsolved(inRange, Progress.isCompleted);
       var solved = inRange.length - unsolved;
       var msg;
@@ -3559,6 +3580,13 @@
       var pool = (ply.min !== null || ply.max !== null)
         ? Session.filterByPly(lastMatches, ply.min, ply.max)
         : lastMatches;
+      // Theme filter once at the top — matches createTraining, which applies
+      // it once before per-round logic so every round draws from the same
+      // theme-bounded pool. No-op when nothing is selected.
+      var themeCodes = getActiveThemeCodes();
+      if (themeCodes.length) {
+        pool = Session.filterByTheme(pool, themeCodes);
+      }
       var seen = Object.create(null);
       var grandTotal = 0;
       var parts = [];
@@ -3804,6 +3832,89 @@
       return { min: minActive, max: maxActive };
     }
 
+    // Map the current theme selection (curated keys) to integer codes for
+    // Session.filterByTheme / Session.create / createTraining. Returns []
+    // when nothing is selected (⇒ filterByTheme no-ops) or when Themes is
+    // unavailable. Codes match index m[5].
+    function getActiveThemeCodes() {
+      if (typeof Themes === 'undefined' || !selectedThemeKeys.length) return [];
+      return Themes.encodeSelection(selectedThemeKeys);
+    }
+
+    // Build the theme chip cloud once from Themes.GROUPS and restore the
+    // saved selection. Called once at init. If lib/themes.js failed to load,
+    // hide the whole block gracefully rather than render an empty box.
+    function buildThemeChips() {
+      var $head = $('.theme-filter-head');
+      var $wrap = $('#themeFilter');
+      if (typeof Themes === 'undefined' || !$wrap.length) {
+        $head.prop('hidden', true);
+        $wrap.prop('hidden', true);
+        return;
+      }
+      selectedThemeKeys = loadSettings().themes || [];
+      var selSet = {};
+      for (var s = 0; s < selectedThemeKeys.length; s++) selSet[selectedThemeKeys[s]] = true;
+
+      var wrap = $wrap.empty()[0];
+      var frag = document.createDocumentFragment();
+      for (var g = 0; g < Themes.GROUPS.length; g++) {
+        var group = Themes.GROUPS[g];
+        var groupEl = document.createElement('div');
+        groupEl.className = 'theme-group';
+        var lab = document.createElement('div');
+        lab.className = 'theme-group-label';
+        lab.textContent = group.name;
+        groupEl.appendChild(lab);
+        var chips = document.createElement('div');
+        chips.className = 'theme-chips';
+        for (var k = 0; k < group.keys.length; k++) {
+          var key = group.keys[k];
+          var chip = document.createElement('button');
+          chip.type = 'button';
+          chip.className = 'theme-chip' + (selSet[key] ? ' selected' : '');
+          chip.setAttribute('data-theme', key);
+          chip.setAttribute('aria-pressed', selSet[key] ? 'true' : 'false');
+          chip.textContent = Themes.labelFor(key);
+          chips.appendChild(chip);
+        }
+        groupEl.appendChild(chips);
+        frag.appendChild(groupEl);
+      }
+      wrap.appendChild(frag);
+      updateThemeClearVisibility();
+    }
+
+    function updateThemeClearVisibility() {
+      $('#themeFilterClear').prop('hidden', selectedThemeKeys.length === 0);
+    }
+
+    // Toggle one chip on/off. Mutates selectedThemeKeys, persists, refreshes
+    // both count previews so the user sees the pool change immediately.
+    function onThemeChipToggle(e) {
+      var $chip = $(e.target).closest('.theme-chip');
+      if (!$chip.length) return;
+      var key = $chip.attr('data-theme');
+      if (!key) return;
+      var idx = selectedThemeKeys.indexOf(key);
+      if (idx === -1) { selectedThemeKeys.push(key); $chip.addClass('selected').attr('aria-pressed', 'true'); }
+      else            { selectedThemeKeys.splice(idx, 1); $chip.removeClass('selected').attr('aria-pressed', 'false'); }
+      saveSettings({ themes: selectedThemeKeys.slice() });
+      updateThemeClearVisibility();
+      updateSessionPanelUI();
+      updateTrainingMetaUI();
+    }
+
+    function clearThemeFilter() {
+      if (!selectedThemeKeys.length) return;
+      selectedThemeKeys = [];
+      $('#themeFilter .theme-chip.selected').removeClass('selected').attr('aria-pressed', 'false');
+      saveSettings({ themes: [] });
+      updateThemeClearVisibility();
+      updateSessionPanelUI();
+      updateTrainingMetaUI();
+    }
+
     // Click-on-track behavior for ANY dual-range slider container. Default
     // <input type=range> behavior of "click track to jump" is killed by our
     // `pointer-events: none` on the inputs (necessary so both thumbs remain
@@ -3903,7 +4014,9 @@
     }
 
     // ─── drill mode ─────────────────────────────────────────────────────
-    // Click on a result row → fetch puzzle body shard → find by id → drill.
+    // Drill a puzzle by id → fetch its body shard → find by id → drill.
+    // Entry points: session advance/retreat, the SRS review queue, and
+    // training resume. (The old click-a-row single-drill path was removed.)
     // Body shards are keyed by SHA-1 prefix of puzzleId (per build-index.js
     // shardId(body.id)). Same hashing as positions, just over a different
     // input. ndjson: one body per line, no ordering guarantee.
@@ -4048,8 +4161,6 @@
       // Swap panels.
       $('#searchPanel').hide();
       $('#sessionPanel').prop('hidden', true);
-      $('#resultsMeta').prop('hidden', true);
-      $('#results').hide();
       // Resume pill (issue #1) is a top-level child of <main>, NOT inside
       // sessionPanel — so hiding sessionPanel above doesn't take it down
       // with it. Hide explicitly on every drill entry so the pill never
@@ -4707,8 +4818,6 @@
       // from-drill would re-render results that don't match the current
       // board). Hide the session panel too — its slider/counts are tied
       // to lastMatches. Don't auto-search; user clicks Search when ready.
-      $('#results').empty();
-      $('#resultsMeta').prop('hidden', true);
       $('#sessionPanel').prop('hidden', true);
       lastMatches = null;
       lastMatchesRepsByPid = null;
@@ -4972,8 +5081,6 @@
         clearLastMove();
         showCheckDeferred(chess);
       }
-      $('#results').empty();
-      $('#resultsMeta').prop('hidden', true);
       $('#sessionPanel').prop('hidden', true);
       lastMatches = null;
       lastMatchesRepsByPid = null;
@@ -5003,8 +5110,6 @@
       if (hasAnyAnnotations()) clearAnnotations();
       updateMoveListDisplay();
       updateFenInputFromBoard();
-      $('#results').empty();
-      $('#resultsMeta').prop('hidden', true);
       $('#sessionPanel').prop('hidden', true);
       lastMatches = null;
       lastMatchesRepsByPid = null;
@@ -5026,8 +5131,6 @@
       // state-changing handler (toggleColorFilter, applyFen, etc). Even
       // when the filter is OFF, dropping the cache keeps the UX model
       // consistent: any state change → results stale → click Search.
-      $('#results').empty();
-      $('#resultsMeta').prop('hidden', true);
       $('#sessionPanel').prop('hidden', true);
       lastMatches = null;
       lastMatchesRepsByPid = null;
@@ -5045,8 +5148,6 @@
       if (mode !== 'search') return;
       matchOwnColorOnly = !matchOwnColorOnly;
       updateColorFilterBtn();
-      $('#results').empty();
-      $('#resultsMeta').prop('hidden', true);
       $('#sessionPanel').prop('hidden', true);
       lastMatches = null;
       lastMatchesRepsByPid = null;
@@ -6188,16 +6289,14 @@
       // so a leftover ::after class doesn't survive a half-rebuilt DOM.
       clearCompletionBadge();
       clearWrongX();
-      // Re-render the result list so a freshly-completed puzzle picks up
-      // its ✓ Done badge (cheap — capped at MAX_RESULTS rows). Applies
-      // in BOTH search-session and review-mode flows: if the user had a
-      // prior search, restoring those results on exit beats dropping them
-      // at an empty home state. The list is guarded by lastMatches.length
-      // so an empty/no-prior-search state is also handled cleanly.
+      // Restore the session panel from the prior search so the user can
+      // start another session/training without re-searching. Applies in
+      // BOTH search-session and review-mode flows: if the user had a prior
+      // search, restoring it on exit beats dropping them at an empty home
+      // state. Guarded by lastMatches.length so an empty/no-prior-search
+      // state is also handled cleanly.
       if (lastMatches && lastMatches.length) {
         renderResults(lastMatches);
-        $('#resultsMeta').prop('hidden', false);
-        $('#results').show();
         // Refresh slider counts (unsolved count may have decreased while
         // drilling). Don't reconfigure bounds — preserve user's range.
         updateSessionPanelUI();
@@ -6222,9 +6321,9 @@
           'info'
         );
       } else if (wasTraining) {
-        setStatus('Pick a row, or start another training session.', 'info');
+        setStatus('Start another training session below.', 'info');
       } else if (hadSession) {
-        setStatus('Adjust the range and start a new session, or pick a row.', 'info');
+        setStatus('Adjust the range and start a new session below.', 'info');
       } else if (lastPid) {
         setStatus('Back to results.', 'info');
       } else {
@@ -6744,6 +6843,7 @@
         ratingMax: rmax,
         plyMin: ply.min,
         plyMax: ply.max,
+        themeCodes: getActiveThemeCodes(),
         isCompleted: Progress.isCompleted
       });
       if (s.complete) {
@@ -6797,6 +6897,7 @@
         rounds: getTrainingRounds(),
         plyMin: ply.min,
         plyMax: ply.max,
+        themeCodes: getActiveThemeCodes(),
         isCompleted: Progress.isCompleted,
         multiRep: multiRep
       });
@@ -7638,7 +7739,7 @@
       try { return window.localStorage || null; } catch (e) { return null; }
     }
     function loadSettings() {
-      var defaults = { autoNext: false, keyboardMode: false, trainingRanges: null, plyRange: null };
+      var defaults = { autoNext: false, keyboardMode: false, trainingRanges: null, plyRange: null, themes: [] };
       var s = _settingsStorage();
       if (!s) return defaults;
       var raw;
@@ -7658,8 +7759,34 @@
         // string/object from accidentally enabling the mode.
         keyboardMode: parsed.keyboardMode === true,
         trainingRanges: validateTrainingRanges(parsed.trainingRanges),
-        plyRange: validatePlyRange(parsed.plyRange)
+        plyRange: validatePlyRange(parsed.plyRange),
+        themes: validateThemes(parsed.themes)
       };
+    }
+    // Accept an array of curated theme KEYS (strings). Keeps only keys the
+    // current build still recognizes as curated (Themes.isCurated), deduped,
+    // order preserved. Anything else → []. Storing keys (not codes) makes
+    // the setting human-readable and robust to the codec's internal codes;
+    // getActiveThemeCodes() maps keys→codes at filter time. A key that was
+    // curated when saved but later dropped from curation simply disappears
+    // on next load — graceful, no crash.
+    function validateThemes(arr) {
+      if (!Array.isArray(arr)) return [];
+      var out = [];
+      var seen = {};
+      var Th = (typeof Themes !== 'undefined') ? Themes : null;
+      for (var i = 0; i < arr.length; i++) {
+        var k = arr[i];
+        if (typeof k !== 'string' || !k) continue;
+        if (seen[k]) continue;
+        // If Themes failed to load for some reason, don't silently wipe the
+        // user's saved selection — keep strings as-is (filter will no-op on
+        // unknown codes anyway). When Themes is present, gate on curation.
+        if (Th && !Th.isCurated(k)) continue;
+        seen[k] = true;
+        out.push(k);
+      }
+      return out;
     }
     // Accept {min, max} where both are integers in [0, PLY_RANGE_MAX] and
     // min ≤ max. Anything else → null (means "use defaults", i.e. full
@@ -9110,6 +9237,16 @@
     // Sync.notifyMutation so the gist gets the change and (b) re-renders
     // the row + active control bar.
     var activeRepertoireIds = [];
+    // Repertoire items list pagination. The single-rep view renders one
+    // page of items at a time so a big study import (hundreds of positions)
+    // doesn't rebuild a huge DOM subtree on every renderActiveRepertoire
+    // call (which fires on import, sync, add, delete, …). repItemsPage is
+    // the 0-indexed current page; repItemsRepId tracks which rep that page
+    // belongs to so switching reps resets to page 0 while re-renders of the
+    // SAME rep (e.g. after removing an item) preserve the page.
+    var REP_ITEMS_PAGE_SIZE = 25;
+    var repItemsPage = 0;
+    var repItemsRepId = null;
     // Parallel to lastMatches: maps pid → array of rep ids that contributed
     // it during the most recent search. Populated by the multi-rep search
     // path, used by onStartTrainingClick to pass `multiRep` through to
@@ -9247,6 +9384,10 @@
       // have.
       $('#repertoireAddCurrentBtn, #repertoireImportStudyBtn, #repertoireRenameBtn, #repertoireDeleteBtn').prop('hidden', multi);
       $('#repertoireItems').prop('hidden', multi);
+      // Pager is single-rep-only; the single-rep branch decides whether it
+      // actually shows (pageCount > 1). Hide here so multi-mode never shows
+      // a stale pager.
+      if (multi) $('#repertoireItemsPager').prop('hidden', true);
 
       if (multi) {
         // Summary bar: joined names + total dedup'd position count. Names
@@ -9285,29 +9426,83 @@
         return;
       }
 
-      // Single-rep mode (original behavior preserved verbatim below).
+      // Single-rep mode.
       var rep = liveReps[0];
       $('#repertoireActiveName').text(rep.name).attr('title', rep.name);
-      $('#repertoireActiveCount').text(rep.items.length + ' position' + (rep.items.length === 1 ? '' : 's'));
-      var $items = $('#repertoireItems').empty();
-      for (var ii = 0; ii < rep.items.length; ii++) {
-        var item = rep.items[ii];
-        var $li = $('<li></li>');
-        $li.append($('<span class="repertoire-item-num"></span>').text((ii + 1) + '.'));
-        // Label preferred when present; fall back to a compact slice of
-        // the FEN. The full FEN goes in the title attr for hover.
+      var repItems = rep.items || [];
+      $('#repertoireActiveCount').text(repItems.length + ' position' + (repItems.length === 1 ? '' : 's'));
+
+      // Pagination. Reset to page 0 when the active rep changes; preserve
+      // the page across re-renders of the same rep (so removing an item on
+      // page 3 doesn't bounce the user to page 1). Clamp in case the item
+      // count shrank below the current page's start (e.g. items removed).
+      if (repItemsRepId !== rep.id) { repItemsPage = 0; repItemsRepId = rep.id; }
+      var pageCount = Math.max(1, Math.ceil(repItems.length / REP_ITEMS_PAGE_SIZE));
+      if (repItemsPage >= pageCount) repItemsPage = pageCount - 1;
+      if (repItemsPage < 0) repItemsPage = 0;
+      var pageStart = repItemsPage * REP_ITEMS_PAGE_SIZE;
+      var pageEnd = Math.min(pageStart + REP_ITEMS_PAGE_SIZE, repItems.length);
+
+      // Build the page into a detached fragment, then insert once. Avoids
+      // the per-item reflow of appending into the live <ol> in a loop — the
+      // whole point of paginating is to keep big study imports cheap to
+      // render on mobile.
+      var itemsEl = document.getElementById('repertoireItems');
+      itemsEl.textContent = '';
+      var frag = document.createDocumentFragment();
+      for (var ii = pageStart; ii < pageEnd; ii++) {
+        var item = repItems[ii];
+        var li = document.createElement('li');
+
+        var numSpan = document.createElement('span');
+        numSpan.className = 'repertoire-item-num';
+        // Number against the FULL list (1-indexed) so item #312 reads
+        // "312." even on a later page.
+        numSpan.textContent = (ii + 1) + '.';
+        li.appendChild(numSpan);
+
+        // Label preferred when present; fall back to the full FEN. The full
+        // FEN goes in the title attr for hover.
         var displayText = (typeof item.label === 'string' && item.label) ? item.label : item.fen;
-        $li.append($('<span class="repertoire-item-fen"></span>')
-          .text(displayText)
-          .attr('title', item.fen + (item.orientation ? '  ·  ' + item.orientation + ' perspective' : '')));
-        $li.append($('<button type="button" class="repertoire-item-load">Load</button>')
-          .attr('data-fen', item.fen)
-          .attr('data-orientation', item.orientation || '')
-          .attr('title', 'Load this position on the search board'));
-        $li.append($('<button type="button" class="repertoire-item-remove">×</button>')
-          .attr('data-fen', item.fen)
-          .attr('aria-label', 'Remove this position from the repertoire'));
-        $items.append($li);
+        var fenSpan = document.createElement('span');
+        fenSpan.className = 'repertoire-item-fen';
+        fenSpan.textContent = displayText;
+        fenSpan.title = item.fen + (item.orientation ? '  ·  ' + item.orientation + ' perspective' : '');
+        li.appendChild(fenSpan);
+
+        var loadBtn = document.createElement('button');
+        loadBtn.type = 'button';
+        loadBtn.className = 'repertoire-item-load';
+        loadBtn.textContent = 'Load';
+        loadBtn.setAttribute('data-fen', item.fen);
+        loadBtn.setAttribute('data-orientation', item.orientation || '');
+        loadBtn.title = 'Load this position on the search board';
+        li.appendChild(loadBtn);
+
+        var removeBtn = document.createElement('button');
+        removeBtn.type = 'button';
+        removeBtn.className = 'repertoire-item-remove';
+        removeBtn.textContent = '×';
+        removeBtn.setAttribute('data-fen', item.fen);
+        removeBtn.setAttribute('aria-label', 'Remove this position from the repertoire');
+        li.appendChild(removeBtn);
+
+        frag.appendChild(li);
+      }
+      itemsEl.appendChild(frag);
+
+      // Pager: only when the rep spans more than one page. Small reps render
+      // exactly as before (pager stays hidden).
+      var $pager = $('#repertoireItemsPager');
+      if (pageCount > 1) {
+        $('#repItemsPagerStatus').text(
+          'Page ' + (repItemsPage + 1) + ' / ' + pageCount +
+          '  ·  ' + (pageStart + 1) + '–' + pageEnd + ' of ' + repItems.length);
+        $('#repItemsPrev').prop('disabled', repItemsPage <= 0);
+        $('#repItemsNext').prop('disabled', repItemsPage >= pageCount - 1);
+        $pager.prop('hidden', false);
+      } else {
+        $pager.prop('hidden', true);
       }
     }
 

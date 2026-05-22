@@ -97,8 +97,8 @@ section('end-to-end: emitted entries include ply + startPly fields');
   const allEntries = Object.values(idx).flat();
   check('4 positions emitted (one per mainline ply)',
     allEntries.length === 4, 'got ' + allEntries.length);
-  check('every entry is length 5',
-    allEntries.every(e => e.length === 5),
+  check('every entry is length 6',
+    allEntries.every(e => e.length === 6),
     'lengths: ' + allEntries.map(e => e.length).join(','));
   check('every entry has puzzleId === "PLY1"',
     allEntries.every(e => e[0] === 'PLY1'));
@@ -106,6 +106,14 @@ section('end-to-end: emitted entries include ply + startPly fields');
     allEntries.every(e => e[1] === 1500));
   check('every entry has color (w or b)',
     allEntries.every(e => e[2] === 'w' || e[2] === 'b'));
+  check('themeCodes (m[5]) is an array',
+    allEntries.every(e => Array.isArray(e[5])));
+  // Theme "test" is not in the curated vocabulary, so encodeThemes drops
+  // it → m[5] === []. Present-but-empty is the correct, distinct-from-
+  // missing signal.
+  check('themeCodes (m[5]) is [] for a non-curated theme',
+    allEntries.every(e => e[5].length === 0),
+    'got ' + JSON.stringify(allEntries.map(e => e[5])));
   check('ply (m[3]) values are integers',
     allEntries.every(e => Number.isInteger(e[3])));
   check('startPly (m[4]) values are integers',
@@ -320,8 +328,8 @@ ${p.mainline} *
   const sharedEntries = Object.values(idx).find(arr => arr.length > 1);
   check('shared shard has 2 entries (cap held)',
     sharedEntries && sharedEntries.length === 2);
-  check('all surviving entries are length 5 (ply + startPly preserved through cap)',
-    sharedEntries && sharedEntries.every(e => e.length === 5),
+  check('all surviving entries are length 6 (ply + startPly + themeCodes preserved through cap)',
+    sharedEntries && sharedEntries.every(e => e.length === 6),
     sharedEntries && JSON.stringify(sharedEntries.map(e => e.length)));
   check('all surviving entries have ply=1',
     sharedEntries && sharedEntries.every(e => e[3] === 1));

@@ -62,6 +62,28 @@
  *        --add-puzzle-ply is a valid operation (stamps existing data
  *        without filtering anything else).
  *
+ *   --add-themes:
+ *        Stamp m[5] (curated theme codes) on length-5+ index entries to
+ *        upgrade them in-place to length-6 [id, rating, color, ply, startPly,
+ *        themeCodes]. Theme codes are the puzzle's CURATED themes encoded via
+ *        lib/themes.js (integer codes, sorted, curated-only — see that file).
+ *        The values come from a pre-pass over the BODIES (which carry the
+ *        full theme strings); the index itself has no theme data, so this is
+ *        the only way to source m[5] without a full PGN rebuild.
+ *
+ *        Unlike --add-puzzle-ply this is SAFE on any source (filtered or
+ *        not) — themes are a per-body property untouched by which index
+ *        entries survived rating/ply filtering. Idempotent: any existing
+ *        m[5] is dropped and re-derived from the bodies. Length-4 entries
+ *        that did NOT get an m[4] (e.g. legacy, not also --add-puzzle-ply'd)
+ *        are left untouched — never creates a sparse tuple. When combined
+ *        with --add-puzzle-ply in one pass, a length-4 entry is upgraded to
+ *        length-5 (m[4]) then to length-6 (m[5]).
+ *
+ *        Curation is a UI concern referencing stable codes, so widening the
+ *        curated set later just needs a re-run of --add-themes + republish —
+ *        no rebuild, no vocabulary change. Bypasses the identity-copy refusal.
+ *
  * Filters and operations can be combined freely. Common recipes:
  *   - Repertoire-only:        node filter-data.js whitelist.txt
  *   - Size shrink:            node filter-data.js --rating-floor 1000 --max-emission-ply 24
@@ -69,6 +91,7 @@
  *   - Drop deep middlegame:   node filter-data.js --max-puzzle-ply 50
  *   - Filter + stamp m[4]:    node filter-data.js --source-dir ./data --rating-floor 1000 --max-emission-ply 22 --max-puzzle-ply 80 --add-puzzle-ply
  *   - Stamp m[4] only (must run on unfiltered build): node filter-data.js --source-dir ./data --out-dir ./data-stamped --add-puzzle-ply
+ *   - Add theme filtering to the published set (no rebuild): node filter-data.js --source-dir ./data --rating-floor 1000 --max-emission-ply 22 --max-puzzle-ply 80 --add-themes
  *
  * Each filtered run also annotates meta.json with `filterStats` recording
  * what was dropped/upgraded and why, so the output is self-documenting.
@@ -81,6 +104,7 @@
  *     [--max-emission-ply N]     drop entries past this ply
  *     [--max-puzzle-ply N]       drop puzzles whose start ply > N
  *     [--add-puzzle-ply]         stamp m[4] (puzzle-start ply) on every entry
+ *     [--add-themes]             stamp m[5] (curated theme codes) on every entry
  *     [--dry-run]                report stats without writing
  *
  * Exits non-zero if no filter or operation is active (refuses to run as a
@@ -92,6 +116,7 @@ const fs = require('fs');
 const path = require('path');
 const { fenPositionKey } = require('../lib/posKey');
 const RepertoireFilter = require('../lib/repertoireFilter');
+const Themes = require('../lib/themes');
 
 // ─── CLI ─────────────────────────────────────────────────────────────────
 function parseArgs(argv) {
@@ -149,6 +174,7 @@ function filterIndexShard(shardObj, criteria) {
   const maxEmissionPly = (typeof c.maxEmissionPly === 'number') ? c.maxEmissionPly : null;
   const droppedPuzzleIds = c.droppedPuzzleIds || null;
   const puzzleStartPlyMap = c.puzzleStartPlyMap || null;
+  const themeCodesMap = c.themeCodesMap || null;
 
   const kept = Object.create(null);
   const referencedIds = new Set();
@@ -157,11 +183,14 @@ function filterIndexShard(shardObj, criteria) {
   let entriesKept = 0;
   let entriesDropped = 0;
   let entriesUpgraded = 0;
+  let entriesThemed = 0;
 
-  // Per-entry walk needed iff there's filtering to do OR upgrading to do.
-  // Without either, the shard pass-through fast path applies.
+  // Per-entry walk needed iff there's filtering to do OR upgrading to do
+  // OR theme-stamping to do. Without any, the shard pass-through fast path
+  // applies.
   const hasEntryFilter = (ratingFloor !== null) || (maxEmissionPly !== null) || !!droppedPuzzleIds;
   const hasUpgrade = !!puzzleStartPlyMap;
+  const hasThemeStamp = !!themeCodesMap;
 
   for (const posKey of Object.keys(shardObj)) {
     if (whitelistSet && !whitelistSet.has(posKey)) {
@@ -173,7 +202,7 @@ function filterIndexShard(shardObj, criteria) {
     // Fast path: no entry-level filters AND no upgrades → keep array as-is,
     // skip per-entry copy. Big win on legacy whitelist-only filtering at
     // multi-GB scale.
-    if (!hasEntryFilter && !hasUpgrade) {
+    if (!hasEntryFilter && !hasUpgrade && !hasThemeStamp) {
       kept[posKey] = inEntries;
       positionsKept++;
       entriesKept += inEntries.length;
@@ -209,6 +238,24 @@ function filterIndexShard(shardObj, criteria) {
         // leave the entry length-4. Filter readers already pass-through
         // length-4 entries via filterByPly's missing-m[4] back-compat.
       }
+      // Stamp m[5] (curated theme codes) if requested. Only on entries that
+      // already carry m[4] (length-5+) — never create a sparse tuple by
+      // adding m[5] without m[4]. Runs AFTER the m[4] upgrade above, so a
+      // length-4 entry that --add-puzzle-ply just upgraded to length-5 in
+      // the same pass also gets themed (→ length-6). Idempotent: re-deriving
+      // from bodies is the source of truth, so any existing m[5] is dropped
+      // and re-stamped (slice(0,5) then push). A length-4 entry that did NOT
+      // get upgraded is left untouched — it passes the theme filter via the
+      // missing-m[5] back-compat path. An id genuinely absent from the map
+      // (corrupt data) is also left untouched rather than stamped [] (which
+      // would wrongly drop it under an active selection); missing → pass.
+      if (hasThemeStamp && outE.length >= 5 && themeCodesMap.has(id)) {
+        const codes = themeCodesMap.get(id) || [];
+        const stamped = outE.slice(0, 5);
+        stamped.push(codes);
+        outE = stamped;
+        entriesThemed++;
+      }
       survivors.push(outE);
       entriesKept++;
       referencedIds.add(id);
@@ -228,6 +275,7 @@ function filterIndexShard(shardObj, criteria) {
     entriesKept: entriesKept,
     entriesDropped: entriesDropped,
     entriesUpgraded: entriesUpgraded,
+    entriesThemed: entriesThemed,
   };
 }
 
@@ -368,6 +416,7 @@ function runFilter(opts) {
     maxEmissionPly,
     maxPuzzlePly,
     addPuzzlePly,
+    addThemes,
   } = opts;
   const indexInDir = path.join(sourceDir, 'index');
   const puzzlesInDir = path.join(sourceDir, 'puzzles');
@@ -404,7 +453,8 @@ function runFilter(opts) {
   const hasEmissionPly = (typeof maxEmissionPly === 'number') && maxEmissionPly > 0;
   const hasPuzzlePly = (typeof maxPuzzlePly === 'number') && maxPuzzlePly > 0;
   const hasAddPuzzlePly = !!addPuzzlePly;
-  if (!hasWhitelist && !hasRating && !hasEmissionPly && !hasPuzzlePly && !hasAddPuzzlePly) {
+  const hasAddThemes = !!addThemes;
+  if (!hasWhitelist && !hasRating && !hasEmissionPly && !hasPuzzlePly && !hasAddPuzzlePly && !hasAddThemes) {
     throw new Error('no filter or operation active; refusing to run as identity copy');
   }
 
@@ -490,12 +540,46 @@ function runFilter(opts) {
     }
   }
 
+  // ─── Optional pre-pass: build puzzleId → curated theme codes map ───
+  // Themes live in the BODIES, not the index, so --add-themes reads every
+  // body shard up front to build the id → m[5] map, then stamps it onto
+  // index entries in Pass 1. Unlike --add-puzzle-ply this is SAFE on
+  // filtered source — themes are a per-body property, untouched by which
+  // index entries survived rating/ply filtering. We read all source bodies
+  // (the map covers every id any surviving index entry could reference,
+  // since build-index emits a body per indexed puzzle). Memory: ~id-string +
+  // small-int-array per puzzle; heavier than the ply pre-pass's id→number
+  // map but bounded by puzzle count, not entry count. At the full 5.86M set
+  // this map can approach ~1GB; if the run OOMs, raise the heap with
+  // `node --max-old-space-size=4096 analyzer/filter-data.js …`. Run once.
+  let themeCodesMap = null;
+  if (hasAddThemes) {
+    themeCodesMap = new Map();
+    const bodyFilesForThemes = fs.readdirSync(puzzlesInDir).filter(f => f.endsWith('.ndjson'));
+    let themeBodiesScanned = 0;
+    for (const f of bodyFilesForThemes) {
+      const text = fs.readFileSync(path.join(puzzlesInDir, f), 'utf8');
+      const lines = text.split('\n');
+      for (let li = 0; li < lines.length; li++) {
+        const line = lines[li];
+        if (!line) continue;
+        let body;
+        try { body = JSON.parse(line); } catch (e) { continue; }
+        if (!body || typeof body.id !== 'string') continue;
+        themeCodesMap.set(body.id, Themes.encodeThemes(body.themes));
+        themeBodiesScanned++;
+      }
+    }
+    console.log(`  theme pre-pass: ${themeBodiesScanned} bodies scanned for curated themes`);
+  }
+
   // ─── Pass 1: filter index ───
   let positionsKept = 0;
   let positionsDropped = 0;
   let entriesKept = 0;
   let entriesDropped = 0;
   let entriesUpgraded = 0;
+  let entriesThemed = 0;
   let indexShardsKept = 0;
   let indexShardsDropped = 0;
   // Union of ids referenced by ALL kept entries across ALL shards.
@@ -510,6 +594,9 @@ function runFilter(opts) {
     // is set — keeps existing filter modes' output shape unchanged. Users
     // who want m[4] stamping must opt in explicitly.
     puzzleStartPlyMap: hasAddPuzzlePly ? puzzleStartPlyMap : null,
+    // Same opt-in posture as puzzleStartPlyMap: only stamp m[5] when the
+    // user asked for --add-themes.
+    themeCodesMap: hasAddThemes ? themeCodesMap : null,
   };
   for (const f of indexFiles) {
     const text = fs.readFileSync(path.join(indexInDir, f), 'utf8');
@@ -520,6 +607,7 @@ function runFilter(opts) {
     entriesKept += r.entriesKept;
     entriesDropped += r.entriesDropped;
     entriesUpgraded += r.entriesUpgraded || 0;
+    entriesThemed += r.entriesThemed || 0;
     for (const id of r.referencedPuzzleIds) referencedIds.add(id);
     if (r.positionsKept > 0) {
       indexShardsKept++;
@@ -590,8 +678,10 @@ function runFilter(opts) {
       maxEmissionPly: hasEmissionPly ? maxEmissionPly : null,
       maxPuzzlePly: hasPuzzlePly ? maxPuzzlePly : null,
       addPuzzlePly: hasAddPuzzlePly,
+      addThemes: hasAddThemes,
       puzzlesDroppedByPuzzlePly: droppedPuzzleIds ? droppedPuzzleIds.size : 0,
       entriesUpgradedToLength5: entriesUpgraded,
+      entriesStampedWithThemes: entriesThemed,
       indexShardsKept,
       indexShardsDropped,
       positionsKept,
@@ -616,8 +706,10 @@ function runFilter(opts) {
     maxEmissionPly: hasEmissionPly ? maxEmissionPly : null,
     maxPuzzlePly: hasPuzzlePly ? maxPuzzlePly : null,
     addPuzzlePly: hasAddPuzzlePly,
+    addThemes: hasAddThemes,
     puzzlesDroppedByPuzzlePly: droppedPuzzleIds ? droppedPuzzleIds.size : 0,
     entriesUpgradedToLength5: entriesUpgraded,
+    entriesStampedWithThemes: entriesThemed,
     indexShardsKept, indexShardsDropped,
     positionsKept, positionsDropped,
     entriesKept, entriesDropped,
@@ -640,6 +732,7 @@ function main() {
   const MAX_EMISSION_PLY = flags['max-emission-ply'] != null ? parseInt(flags['max-emission-ply'], 10) : null;
   const MAX_PUZZLE_PLY = flags['max-puzzle-ply'] != null ? parseInt(flags['max-puzzle-ply'], 10) : null;
   const ADD_PUZZLE_PLY = !!flags['add-puzzle-ply'];
+  const ADD_THEMES = !!flags['add-themes'];
 
   // Validate any provided numeric flags up front.
   for (const [name, val] of [
@@ -655,10 +748,10 @@ function main() {
 
   // Need at least one filter or operation. --add-puzzle-ply alone is a
   // valid operation (stamps existing data without filtering anything else).
-  if (!WHITELIST && RATING_FLOOR === null && MAX_EMISSION_PLY === null && MAX_PUZZLE_PLY === null && !ADD_PUZZLE_PLY) {
+  if (!WHITELIST && RATING_FLOOR === null && MAX_EMISSION_PLY === null && MAX_PUZZLE_PLY === null && !ADD_PUZZLE_PLY && !ADD_THEMES) {
     console.error('usage: node filter-data.js [whitelist.txt] [--source-dir DIR] [--out-dir DIR]');
     console.error('                            [--rating-floor N] [--max-emission-ply N]');
-    console.error('                            [--max-puzzle-ply N] [--add-puzzle-ply] [--dry-run]');
+    console.error('                            [--max-puzzle-ply N] [--add-puzzle-ply] [--add-themes] [--dry-run]');
     console.error('At least one filter or operation must be specified.');
     process.exit(1);
   }
@@ -681,6 +774,7 @@ function main() {
   if (MAX_EMISSION_PLY !== null) console.log(`max emission ply:    ${MAX_EMISSION_PLY}`);
   if (MAX_PUZZLE_PLY !== null) console.log(`max puzzle-start ply: ${MAX_PUZZLE_PLY}`);
   if (ADD_PUZZLE_PLY)          console.log(`add puzzle-start ply: yes (stamping m[4] on length-4 entries)`);
+  if (ADD_THEMES)              console.log(`add themes:          yes (stamping curated theme codes as m[5])`);
   console.log(`source:    ${SOURCE}`);
   console.log(`out:       ${OUT}${DRY ? '  (DRY RUN — no writes)' : ''}`);
 
@@ -692,6 +786,7 @@ function main() {
     maxEmissionPly: MAX_EMISSION_PLY,
     maxPuzzlePly: MAX_PUZZLE_PLY,
     addPuzzlePly: ADD_PUZZLE_PLY,
+    addThemes: ADD_THEMES,
     dryRun: DRY,
   });
 

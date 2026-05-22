@@ -9,17 +9,21 @@
  *   node analyzer/build-index.js <input.pgn> [out_dir]
  *
  * Output:
- *   <out_dir>/index/<hex>.json     posKey -> [[puzzleId, rating, color, ply, startPly], ...]
+ *   <out_dir>/index/<hex>.json     posKey -> [[puzzleId, rating, color, ply, startPly, themeCodes], ...]
  *   <out_dir>/puzzles/<hex>.ndjson one puzzle body per line, keyed off puzzleId hash
  *   <out_dir>/meta.json            build stats
  *
- * Index entry: tuple of [puzzleId, rating, color, ply, startPly]. All fields
- * after puzzleId are OPTIONAL by reader convention — older shards emit
- * length-2 / 3 / 4 entries and are passed through unchanged. Readers that
- * filter on a missing field treat it as "unknown":
+ * Index entry: tuple of [puzzleId, rating, color, ply, startPly, themeCodes].
+ * All fields after puzzleId are OPTIONAL by reader convention — older shards
+ * emit length-2 / 3 / 4 / 5 entries and are passed through unchanged. Readers
+ * that filter on a missing field treat it as "unknown":
  *   - color (m[2]) missing → "All colors" semantics (filter no-ops)
  *   - ply (m[3]) missing → emission-ply filter no-ops (passes through)
  *   - startPly (m[4]) missing → puzzle-start-ply filter no-ops (passes through)
+ *   - themeCodes (m[5]) missing → theme filter no-ops (passes through). NOTE
+ *       the distinction the runtime relies on: missing m[5] (legacy / not yet
+ *       republished) passes through any theme selection, whereas m[5] === []
+ *       (present, no curated theme) is DROPPED under an active selection.
  *
  * ply vs startPly — easy to confuse:
  *   - ply (m[3]):      source-game ply at which THIS particular posKey was
@@ -43,6 +47,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { Chess } = require('chess.js');
 const { fenPositionKey, SHARD_HEX_LEN } = require('../lib/posKey');
+const Themes = require('../lib/themes');
 
 // ─── config ─────────────────────────────────────────────────────────────
 // SHARD_HEX_LEN comes from lib/posKey so it stays in sync with the runtime.
@@ -279,6 +284,14 @@ async function main() {
     // is `positions.length` (positions[i].ply = i+1, last index = length-1,
     // last ply = length). Constant across all of this puzzle's entries.
     const startPly = positions.length;
+    // Curated theme codes (m[5]) — puzzle-level, so compute once and reuse
+    // across all of this puzzle's position entries. Curated-only + sorted
+    // (see lib/themes.encodeThemes). Empty array when the puzzle has no
+    // curated theme — distinct from "missing m[5]" (legacy), which only
+    // applies to shards built before this field existed. Cost mirrors the
+    // other puzzle-level fields: repeats across a puzzle's entries, so gzip
+    // collapses most of it within a shard.
+    const themeCodes = Themes.encodeThemes(body.themes);
     // Per-position entry construction: ply differs across positions even
     // within the same source game, so we can't reuse a single pre-serialized
     // JSON string here — JSON.stringify per emit (still cheap; build is
@@ -294,7 +307,7 @@ async function main() {
       const sid = shardId(posKey);
       let buf = indexBufs.get(sid);
       if (!buf) { buf = []; indexBufs.set(sid, buf); allIndexShards.add(sid); }
-      const entryJson = JSON.stringify([body.id, body.rating, colorChar, ply, startPly]);
+      const entryJson = JSON.stringify([body.id, body.rating, colorChar, ply, startPly, themeCodes]);
       buf.push(posKey + '\t' + entryJson);
       positionEntries++;
     }
