@@ -1723,7 +1723,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">offline-reps</span>
+    <span id="buildVersion">offline-fast-search</span>
     <button id="soundToggle" class="sound-toggle" type="button" aria-label="Toggle sound" title="Toggle sound effects">🔊</button>
     <!-- Stats drawer toggle (issue #9). Same lightweight aesthetic as the
          sound toggle — header real estate is tight, so it's icon-only. The
@@ -3249,6 +3249,42 @@
         return;
       }
 
+      // Label for status lines (shared by the fast path and the live path).
+      var label;
+      if (activeReps.length === 1) {
+        label = '"' + activeReps[0].name + '"';
+      } else {
+        label = activeReps.length + ' repertoires (' +
+          activeReps.map(function (r) { return r.name; }).join(', ') + ')';
+      }
+
+      // Fast path: if EVERY active rep has a fresh offline manifest (positions
+      // unchanged since download, same dataset build), serve the stored,
+      // already-unioned match set — skipping per-position SHA-1 hashing and the
+      // fetch + ~1 MB-each JSON.parse of every touched index shard, which is
+      // what makes a large-rep search slow on mobile. Any rep that's missing or
+      // stale → tryFreshManifestMatches returns null → fall through to the live
+      // search below (correct, fresh results after an edit).
+      var fresh = await tryFreshManifestMatches(activeReps);
+      if (!activeMatchesCaptured()) return; // user changed the set during our awaits
+      if (fresh) {
+        lastMatchesRepsByPid = fresh.pidToReps;
+        renderResults(fresh.matches);
+        configureSlider(fresh.matches);
+        if (fresh.matches.length === 0 && matchOwnColorOnly && fresh.rawUniqueCount > 0) {
+          setStatus(fresh.rawUniqueCount + ' puzzle' + (fresh.rawUniqueCount === 1 ? '' : 's') +
+            ' found across ' + label + ', but none in your perspective. Uncheck "My color only" to see them.', 'info');
+        } else if (fresh.matches.length === 0) {
+          setStatus('No puzzles found across ' + label + '.', 'info');
+        } else {
+          var hiddenFast = fresh.rawUniqueCount - fresh.matches.length;
+          var noteFast = (matchOwnColorOnly && hiddenFast > 0) ? ' (' + hiddenFast + ' hidden — wrong color)' : '';
+          setStatus(fresh.matches.length + ' match' + (fresh.matches.length === 1 ? '' : 'es') +
+            ' found across ' + label + noteFast + ' (downloaded copy). Start a session or training below.', 'ok');
+        }
+        return;
+      }
+
       // Compute (key, shard, item, repId) tuples for every item across all
       // active repertoires. Items with unparseable FENs are dropped with a
       // console warning rather than failing the whole search.
@@ -3301,14 +3337,7 @@
         (shardToTriples[tsh] || (shardToTriples[tsh] = [])).push(triples[t]);
       }
       var shardList = Object.keys(shardToTriples);
-      // Status preamble — different phrasing for single vs. multi.
-      var label;
-      if (activeReps.length === 1) {
-        label = '"' + activeReps[0].name + '"';
-      } else {
-        var names = activeReps.map(function (r) { return r.name; });
-        label = activeReps.length + ' repertoires (' + names.join(', ') + ')';
-      }
+      // Status preamble (label was computed up front, shared with the fast path).
       setStatus('Searching ' + label + ' — fetching ' +
                 shardList.length + ' shard' + (shardList.length === 1 ? '' : 's') + '…', 'info');
       try {
@@ -10707,21 +10736,54 @@
       }
       if (!sources.length) return null;
       var unioned = Offline.unionManifests(sources);
-      var matches = unioned.matches;
-      if (matchOwnColorOnly) {
-        var colors = Object.create(null);
-        for (var r = 0; r < reps.length; r++) {
-          var its = reps[r].items || [];
-          for (var j = 0; j < its.length; j++) {
-            var c = itemColorLocal(its[j]);
-            if (c) colors[c] = true;
-          }
-        }
-        if (colors.w || colors.b) {
-          matches = matches.filter(function (m) { return m[2] === undefined || colors[m[2]]; });
+      return { matches: offlinePerspectiveFilter(unioned.matches, reps), pidToReps: unioned.pidToReps };
+    }
+
+    // Perspective filter for a stored (all-color) match set. Approximated by
+    // the set of item colors across the active reps — exact for single-
+    // perspective repertoires (the norm), most-permissive for mixed ones.
+    // No-op when "my color only" is off, or when no item color resolves.
+    function offlinePerspectiveFilter(matches, reps) {
+      if (!matchOwnColorOnly) return matches;
+      var colors = Object.create(null);
+      for (var r = 0; r < reps.length; r++) {
+        var its = reps[r].items || [];
+        for (var j = 0; j < its.length; j++) {
+          var c = itemColorLocal(its[j]);
+          if (c) colors[c] = true;
         }
       }
-      return { matches: matches, pidToReps: unioned.pidToReps };
+      if (!colors.w && !colors.b) return matches;
+      return matches.filter(function (m) { return m[2] === undefined || colors[m[2]]; });
+    }
+
+    // Online fast path: if EVERY active rep has a FRESH offline manifest
+    // (positions unchanged since download AND same dataset build), serve the
+    // stored, already-unioned match set instead of re-hashing positions and
+    // re-fetching/parsing index shards — a big win on mobile for large reps.
+    // Returns null (→ fall through to the live search) if any rep isn't
+    // downloaded or is stale, so an edit to a rep transparently reverts to a
+    // live, correct search. rawUniqueCount lets the caller show the same
+    // "N hidden — wrong color" note the live path does.
+    async function tryFreshManifestMatches(reps) {
+      if (typeof Cache === 'undefined' || !Cache.getOfflineManifest) return null;
+      if (!reps.length) return null;
+      var curBuilt = await getCurrentBuiltAt();
+      var sources = [];
+      for (var i = 0; i < reps.length; i++) {
+        var man = await Cache.getOfflineManifest(reps[i].id);
+        if (!man || !Array.isArray(man.matches)) return null;            // not (all) downloaded
+        if (man.itemSig !== Offline.itemSig(repItemKeys(reps[i]))) return null;  // positions changed
+        if (man.builtAt && curBuilt && man.builtAt !== curBuilt) return null;    // dataset rebuilt
+        sources.push({ repId: reps[i].id, matches: man.matches });
+      }
+      var unioned = Offline.unionManifests(sources);
+      var raw = unioned.matches;
+      return {
+        matches: offlinePerspectiveFilter(raw, reps),
+        pidToReps: unioned.pidToReps,
+        rawUniqueCount: raw.length
+      };
     }
 
     async function loadDatasetInfo() {
