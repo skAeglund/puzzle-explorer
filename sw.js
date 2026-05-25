@@ -30,9 +30,15 @@
  * project rule — automatically invalidates SW caches on the user's next
  * launch. No separate VERSION bookkeeping in this file.
  *
- * NO skipWaiting — when a new SW installs, it goes to waiting; the user
- * picks it up on the next page reload. This avoids the "active SW changes
- * mid-fetch" hazard.
+ * skipWaiting + clients.claim — a fresh SW activates immediately and takes
+ * over open pages rather than sitting in "waiting" until every tab closes,
+ * so a buildVersion bump propagates on the next normal reload. (This reverses
+ * an earlier "wait" posture; see the install handler for the incident that
+ * motivated it.) The page hooks controllerchange to auto-reload on upgrade.
+ *
+ * Precache is resilient (allSettled, not atomic addAll) so a single asset
+ * failing to fetch during install can't leave the SW uninstalled and the app
+ * permanently non-offline — see the install handler.
  */
 // Buildversion comes from the registration URL (sw.js?v=<buildVersion>).
 // Pre-buildversion-coupling installs registered as plain 'sw.js' with no
@@ -112,7 +118,27 @@ self.addEventListener('install', (event) => {
   // SW takes over already-open pages immediately.
   self.skipWaiting();
   event.waitUntil(
-    caches.open(APP_SHELL_CACHE).then((cache) => cache.addAll(APP_SHELL))
+    caches.open(APP_SHELL_CACHE).then((cache) =>
+      // Resilient precache: cache each asset INDEPENDENTLY (allSettled), not
+      // atomically (addAll). addAll rejects the whole batch if ANY single
+      // fetch fails — a mobile-network hiccup on one of 36 assets, a transient
+      // 404 — and a rejected install means the SW never activates AT ALL.
+      // With no active SW, the on-the-fly caching in cacheFirst/networkFirst
+      // never runs either, so the app can never work offline even though it's
+      // fine online. That is exactly the "works online, browser 'You're
+      // offline' page when launched offline" failure. allSettled guarantees
+      // the SW activates: whatever cached makes offline work now, and anything
+      // that missed fills in cache-first on the next online fetch. The two
+      // navigation targets ('./' and './index.html') are the ones that must be
+      // present for an offline launch to render at all.
+      Promise.allSettled(APP_SHELL.map((u) => cache.add(u))).then((results) => {
+        var failed = results.filter((r) => r.status === 'rejected').length;
+        if (failed && typeof console !== 'undefined' && console.warn) {
+          console.warn('[sw] precache: ' + failed + '/' + APP_SHELL.length +
+            ' asset(s) failed to cache; will fill in on next online fetch.');
+        }
+      })
+    )
   );
 });
 
@@ -183,10 +209,10 @@ async function cacheFirst(req) {
     }
     return res;
   } catch (e) {
-    // Navigation request and we have nothing — return the root index.
+    // Navigation request and we have nothing — return the cached index.
     // Covers the "offline + first time hitting a deep link" edge case.
     if (req.mode === 'navigate') {
-      const fallback = await caches.match('./');
+      const fallback = (await caches.match('./')) || (await caches.match('./index.html'));
       if (fallback) return fallback;
     }
     throw e;
@@ -208,10 +234,10 @@ async function networkFirst(req, cacheName) {
   } catch (e) {
     const cached = await caches.match(req);
     if (cached) return cached;
-    // Navigation request and we have nothing — return the root index.
+    // Navigation request and we have nothing — return the cached index.
     // Same fallback shape as cacheFirst, since both paths can serve nav.
     if (req.mode === 'navigate') {
-      const fallback = await caches.match('./');
+      const fallback = (await caches.match('./')) || (await caches.match('./index.html'));
       if (fallback) return fallback;
     }
     throw e;
