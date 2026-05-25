@@ -1720,7 +1720,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">theme-filter</span>
+    <span id="buildVersion">rep-search-stream</span>
     <button id="soundToggle" class="sound-toggle" type="button" aria-label="Toggle sound" title="Toggle sound effects">🔊</button>
     <!-- Stats drawer toggle (issue #9). Same lightweight aesthetic as the
          sound toggle — header real estate is tight, so it's icon-only. The
@@ -2258,6 +2258,7 @@
        Loads after posKey (uses fenPositionKey for item dedup) and before
        sync (sync.merge handles a `repertoires` branch alongside positions). -->
   <script src="lib/repertoires.js"></script>
+  <script src="lib/repertoireUnion.js"></script>
   <!-- Lichess study PGN parser + walker. Uses the page's existing Chess
        constructor (chess.js v0.10) for SAN replay; loads after vendor's
        chess-0.10.3.js but doesn't depend on Repertoires (the import flow
@@ -3271,11 +3272,23 @@
                   '. Set a position on the board, then click + Add current.', 'warn');
         return;
       }
-      // Unique shards across all items. Ordering doesn't matter since the
-      // result is rebuilt from the unionedMatches map.
-      var uniqueShards = {};
-      for (var t = 0; t < triples.length; t++) uniqueShards[triples[t].shard] = true;
-      var shardList = Object.keys(uniqueShards);
+      // Group triples by shard so each shard's JSON can be fetched,
+      // ingested, and DISCARDED one (bounded) batch at a time. The old
+      // approach — Promise.all over every unique shard, then hold the whole
+      // parsed set in `byShard` through the triples walk — was the mobile
+      // crash. A ~500-FEN repertoire hits ~470 distinct shards (birthday
+      // math on 4096); at ~1 MB decompressed each that's ~440 MB of text,
+      // ~0.9-1.3 GB once parsed into JS arrays, all live simultaneously —
+      // past the per-tab memory ceiling on phones. OOM = crash; the GC
+      // thrash while trying to stay under it = the "semi-frozen" state.
+      // Streaming caps live shard JSON to BATCH shards (~a few MB); only the
+      // small accumulator maps (unioned/pidToReps/rawSeen) persist.
+      var shardToTriples = Object.create(null);
+      for (var t = 0; t < triples.length; t++) {
+        var tsh = triples[t].shard;
+        (shardToTriples[tsh] || (shardToTriples[tsh] = [])).push(triples[t]);
+      }
+      var shardList = Object.keys(shardToTriples);
       // Status preamble — different phrasing for single vs. multi.
       var label;
       if (activeReps.length === 1) {
@@ -3287,103 +3300,53 @@
       setStatus('Searching ' + label + ' — fetching ' +
                 shardList.length + ' shard' + (shardList.length === 1 ? '' : 's') + '…', 'info');
       try {
-        // Parallel-fetch all unique shards. fetchIndexShardCached hits
-        // IDB first, so re-running a search on a previously-loaded
-        // selection is local. 404s come back as {status: 404, json: null}.
-        var fetched = await Promise.all(shardList.map(function (s) {
-          return fetchIndexShardCached(s).then(function (res) { return { shard: s, res: res }; });
-        }));
-        // Final mid-flight check before we touch the result list. After
-        // this point, we're synchronous, so no further awaits can race.
-        if (!activeMatchesCaptured()) return;
-        var byShard = {};
-        var anyHit = false;
-        for (var f = 0; f < fetched.length; f++) {
-          var entry = fetched[f];
-          if (entry.res && entry.res.status !== 404 && entry.res.json) {
-            byShard[entry.shard] = entry.res.json;
-            anyHit = true;
-          } else {
-            byShard[entry.shard] = null;
-          }
-        }
-        // Walk triples, look up matches per item, apply per-item
-        // perspective filter, dedupe by puzzle id (m[0]) keeping the
-        // first occurrence — multiple FENs that all match the same
-        // puzzle should not inflate the count.
-        //
-        // We track UNIQUE puzzle ids both pre- and post-filter so the
-        // status messages report a number the user understands. A naive
-        // `rawTotal += raw.length` would double-count a puzzle whose
-        // source game passes through several positions in the
-        // selection (which is the common case for opening study).
-        //
-        // Also build pidToReps: pid → [repId, ...]. A puzzle reachable
-        // through items from multiple repertoires accumulates all of
-        // them. Used by the training-launch path to feed Session.create-
-        // Training's round-robin draft.
-        var unioned = Object.create(null);
-        var pidToReps = Object.create(null);
-        var rawSeen = Object.create(null);
-        for (var p = 0; p < triples.length; p++) {
-          var tr = triples[p];
-          var idx = byShard[tr.shard];
-          if (!idx) continue;
-          var raw = idx[tr.key] || [];
-          // Per-item perspective filter. The user's study color is captured
-          // in item.orientation at addItem time (from searchOrientation, the
-          // board flip when they hit "+ Add current"). That is what we filter
-          // against — NOT the side-to-move of the saved FEN, which is a
-          // different thing. Concrete: a Caro-Kann black-perspective study
-          // saves the position after 1.e4 c6 2.d4 d5 with orientation='black'
-          // but the FEN itself is white-to-move. Filtering on FEN STM there
-          // surfaces white-to-move puzzles ("white finds the tactic"), which
-          // is the opposite of what a black-perspective trainee wants. Fall
-          // back to FEN STM only when orientation is absent (legacy items
-          // pre-dating the orientation field, or any future code path that
-          // skips capturing it).
-          var color = null;
-          if (tr.item.orientation === 'white') color = 'w';
-          else if (tr.item.orientation === 'black') color = 'b';
-          else color = _fenSideToMove(tr.item.fen);
-          var keep;
-          if (matchOwnColorOnly && color) {
-            keep = raw.filter(function (m) { return m[2] === undefined || m[2] === color; });
-          } else {
-            keep = raw;
-          }
-          // Track every pid that surfaced (regardless of filter outcome)
-          // so the unfiltered-unique count is correct across the
-          // selection.
-          for (var qq = 0; qq < raw.length; qq++) {
-            var rmm = raw[qq];
-            if (rmm && rmm[0]) rawSeen[rmm[0]] = true;
-          }
-          for (var q = 0; q < keep.length; q++) {
-            var mm = keep[q];
-            if (!mm || !mm[0]) continue;
-            // Dedupe — first FEN wins. Subsequent matches against the
-            // same pid get dropped silently from `unioned`.
-            if (!unioned[mm[0]]) unioned[mm[0]] = mm;
-            // For pidToReps, accumulate ALL contributing rep ids (a pid
-            // can come from multiple reps via different items). indexOf
-            // is fine for small N (single-digit reps in practice).
-            var arr = pidToReps[mm[0]];
-            if (!arr) {
-              arr = [];
-              pidToReps[mm[0]] = arr;
+        // The matching core — perspective filter, cross-position dedup with
+        // the min-ply tie-break, rep attribution, and unique-count tracking —
+        // lives in lib/repertoireUnion.js so it can be unit-tested without a
+        // browser (see analyzer/repertoireUnion-test.js for the count-
+        // equivalence, determinism, and min-ply property tests). Here we just
+        // stream shards into the accumulator one bounded batch at a time.
+        var acc = RepertoireUnion.createAccumulator({ matchOwnColorOnly: matchOwnColorOnly });
+
+        // Stream shards in bounded-concurrency batches. BATCH caps both the
+        // in-flight fetch count AND the peak parsed-JSON footprint: once a
+        // batch is ingested, its shard JSON drops out of scope before the
+        // next batch is fetched, so a ~500-FEN repertoire (~470 shards) never
+        // holds more than ~8 MB of shard JSON live instead of ~1 GB+. That
+        // streaming — NOT a Promise.all over every shard — is the mobile
+        // crash fix. 8 overlaps network latency; IDB-cached shards resolve
+        // near-instantly, so re-search of a loaded selection stays fast.
+        // fetchIndexShardCached returns {status:404} for misses; we simply
+        // don't ingest those (acc stays anyHit:false until a real shard lands).
+        var BATCH = 8;
+        for (var bi = 0; bi < shardList.length; bi += BATCH) {
+          var batch = shardList.slice(bi, bi + BATCH);
+          var results = await Promise.all(batch.map(function (s) {
+            return fetchIndexShardCached(s).then(function (res) { return { shard: s, res: res }; });
+          }));
+          // Mid-flight bail — user toggled the active set during the awaits.
+          if (!activeMatchesCaptured()) return;
+          for (var r = 0; r < results.length; r++) {
+            var entry = results[r];
+            if (entry.res && entry.res.status !== 404 && entry.res.json) {
+              acc.ingestShard(entry.res.json, shardToTriples[entry.shard]);
             }
-            if (arr.indexOf(tr.repId) === -1) arr.push(tr.repId);
+            // 404/miss: contributes nothing; entry.res.json drops out of
+            // scope on the next turn — nothing retains it.
+          }
+          // Liveness ping so a multi-batch fetch on mobile doesn't read as
+          // frozen. Skipped when everything fits in one batch.
+          if (shardList.length > BATCH) {
+            setStatus('Searching ' + label + ' — ' +
+              Math.min(bi + BATCH, shardList.length) + '/' + shardList.length +
+              ' shards…', 'info');
           }
         }
-        var matches = [];
-        for (var pid in unioned) {
-          if (Object.prototype.hasOwnProperty.call(unioned, pid)) matches.push(unioned[pid]);
-        }
-        var rawUniqueCount = 0;
-        for (var rid in rawSeen) {
-          if (Object.prototype.hasOwnProperty.call(rawSeen, rid)) rawUniqueCount++;
-        }
+        var finalized = acc.finalize();
+        var matches = finalized.matches;
+        var rawUniqueCount = finalized.rawUniqueCount;
+        var pidToReps = finalized.pidToReps;
+        var anyHit = finalized.anyHit;
         var filteredOutUnique = rawUniqueCount - matches.length;
         // Stash the rep-attribution map for the training launch path.
         // Always set (even in single-rep mode) so that any downstream
@@ -3414,17 +3377,6 @@
       } catch (e) {
         setStatus('Fetch error: ' + e.message + '. Are you serving over http (not file://)? Is data/ generated?', 'error');
       }
-    }
-
-    // Extract side-to-move from a FEN. Returns 'w' | 'b' | null. The 2nd
-    // space-separated field is the canonical location; we don't import
-    // chess.js here because this runs in the hot path of repertoire
-    // search and a string split is much cheaper than Chess().load().
-    function _fenSideToMove(fen) {
-      if (typeof fen !== 'string' || !fen) return null;
-      var parts = fen.split(/\s+/);
-      var stm = parts[1];
-      return (stm === 'w' || stm === 'b') ? stm : null;
     }
 
     async function shardIdAsync(s) {
@@ -3479,8 +3431,16 @@
         updateTrainingMetaUI();
         return;
       }
-      var lo = Math.min.apply(null, ratings);
-      var hi = Math.max.apply(null, ratings);
+      // Loop, not Math.min/max.apply: a large repertoire union can yield
+      // tens of thousands of ratings, and .apply spreads the array as
+      // function arguments — past the engine arg-count limit, which throws
+      // RangeError ("Maximum call stack size exceeded") on some mobile
+      // browsers. A linear scan has no such ceiling.
+      var lo = ratings[0], hi = ratings[0];
+      for (var ci = 1; ci < ratings.length; ci++) {
+        if (ratings[ci] < lo) lo = ratings[ci];
+        if (ratings[ci] > hi) hi = ratings[ci];
+      }
       var sliderMin = Math.floor(lo / 50) * 50;
       var sliderMax = Math.ceil(hi / 50) * 50;
       if (sliderMax <= sliderMin) sliderMax = sliderMin + 50;
