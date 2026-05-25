@@ -138,6 +138,46 @@ async function asyncTests() {
   check('stats → {indexCount:0, bodyCount:0}',
     st && st.indexCount === 0 && st.bodyCount === 0);
 
+  // ── offline API: every op resolves to null/[]/no-op in Node ──
+  section('Node async: offline ops resolve to null/[]/no-op');
+
+  const ob = await Cache.getOfflineBody('puzzleX');
+  check('getOfflineBody(...) → null', ob === null);
+
+  let putBodiesThrew = false;
+  try { await Cache.putOfflineBodies([{ id: 'p1', body: { id: 'p1', fen: 'x', moves: ['a'] } }]); }
+  catch (e) { putBodiesThrew = true; }
+  check('putOfflineBodies resolves without throwing', !putBodiesThrew);
+
+  let putBodiesEmptyThrew = false;
+  try { await Cache.putOfflineBodies([]); }
+  catch (e) { putBodiesEmptyThrew = true; }
+  check('putOfflineBodies([]) resolves without throwing', !putBodiesEmptyThrew);
+
+  let delBodiesThrew = false;
+  try { await Cache.deleteOfflineBodies(['p1', 'p2']); }
+  catch (e) { delBodiesThrew = true; }
+  check('deleteOfflineBodies resolves without throwing', !delBodiesThrew);
+
+  const bodyKeys = await Cache.getOfflineBodyKeys();
+  check('getOfflineBodyKeys → []', Array.isArray(bodyKeys) && bodyKeys.length === 0);
+
+  const man = await Cache.getOfflineManifest('repX');
+  check('getOfflineManifest(...) → null', man === null);
+
+  let putManThrew = false;
+  try { await Cache.putOfflineManifest('repX', { matches: [], itemSig: 'abc' }); }
+  catch (e) { putManThrew = true; }
+  check('putOfflineManifest resolves without throwing', !putManThrew);
+
+  let delManThrew = false;
+  try { await Cache.deleteOfflineManifest('repX'); }
+  catch (e) { delManThrew = true; }
+  check('deleteOfflineManifest resolves without throwing', !delManThrew);
+
+  const mans = await Cache.listOfflineManifests();
+  check('listOfflineManifests → []', Array.isArray(mans) && mans.length === 0);
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);
 }

@@ -952,6 +952,9 @@
     .repertoire-active-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
     .repertoire-active-name { font-weight: 600; flex: 1 1 auto; min-width: 100px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .repertoire-active-count { font-family: var(--mono); font-size: 11px; color: var(--fg-dim); }
+    .repertoire-offline-status { font-family: var(--mono); font-size: 11px; color: var(--fg-dim); white-space: nowrap; }
+    .repertoire-offline-status.downloaded { color: var(--ok); }
+    .repertoire-offline-status.stale { color: var(--warn); }
     .repertoire-active-bar > button {
       font-family: var(--mono); font-size: 11px;
       padding: 4px 9px; background: var(--bg); color: var(--fg);
@@ -1720,7 +1723,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">rep-search-stream</span>
+    <span id="buildVersion">offline-reps</span>
     <button id="soundToggle" class="sound-toggle" type="button" aria-label="Toggle sound" title="Toggle sound effects">🔊</button>
     <!-- Stats drawer toggle (issue #9). Same lightweight aesthetic as the
          sound toggle — header real estate is tight, so it's icon-only. The
@@ -1984,6 +1987,9 @@
             <span class="repertoire-active-count" id="repertoireActiveCount"></span>
             <button id="repertoireAddCurrentBtn" type="button" title="Add the position currently on the board to this repertoire">+ Add current</button>
             <button id="repertoireImportStudyBtn" type="button" title="Import positions from a Lichess study">Import from study</button>
+            <button id="repertoireOfflineBtn" type="button" title="Download this repertoire's puzzles for offline drilling">Make available offline</button>
+            <button id="repertoireOfflineRemoveBtn" type="button" class="ghost-danger" title="Remove this repertoire's downloaded offline puzzles" hidden>Remove offline</button>
+            <span class="repertoire-offline-status" id="repertoireOfflineStatus" hidden></span>
             <button id="repertoireRenameBtn" type="button" title="Rename this repertoire">Rename</button>
             <button id="repertoireDeleteBtn" type="button" class="ghost-danger" title="Delete this repertoire">Delete</button>
             <button id="repertoireExitBtn" type="button" class="repertoire-exit" title="Exit repertoire mode" aria-label="Exit repertoire mode">×</button>
@@ -2276,6 +2282,7 @@
   <script src="lib/sync.js"></script>
   <!-- IndexedDB shard cache (independent leaf module; safe to load last) -->
   <script src="lib/cache.js"></script>
+  <script src="lib/offline.js"></script>
   <script src="lib/sound.js"></script>
   <!-- No-mouse drill mode: pure key→action mapper. Independent leaf
        module (no FSRS / chess.js dependency); safe to load anywhere. -->
@@ -2733,6 +2740,8 @@
       $('#repertoireExitBtn').on('click', deactivateRepertoire);
       $('#repertoireAddCurrentBtn').on('click', onAddCurrentToRepertoire);
       $('#repertoireImportStudyBtn').on('click', openImportStudyDialog);
+      $('#repertoireOfflineBtn').on('click', onMakeOfflineClick);
+      $('#repertoireOfflineRemoveBtn').on('click', onRemoveOfflineClick);
       $('#repertoireRenameBtn').on('click', onRenameRepertoire);
       $('#repertoireDeleteBtn').on('click', onDeleteRepertoire);
       // Item rows: load (puts FEN on the position-builder board) + remove.
@@ -3037,6 +3046,9 @@
       loadDatasetInfo();
       refreshReviewBadge();
       renderRepertoires();
+      // Sweep offline data for repertoires that no longer exist (e.g. deleted
+      // on another device on a prior run). Fire-and-forget; never blocks init.
+      pruneOrphanOfflineManifests().catch(function () {});
       // Persisted settings (auto-next toggle today; future settings live in
       // the same storage object). Loaded after the button is in the DOM
       // so updateAutoNextBtn can sync the glyph immediately.
@@ -3375,6 +3387,29 @@
             ' found across ' + label + filterNote + '. Start a session or training below.', 'ok');
         }
       } catch (e) {
+        // Network failure (typically offline). If any active rep was made
+        // available offline, serve its stored match set so drilling works with
+        // no connection. Online-success above always wins; this is the fallback.
+        try {
+          var offline = await tryOfflineMatchesForActive(activeReps);
+          if (offline) {
+            // Manifests exist for the active selection — this is an offline
+            // session, not an error, even if filters left it empty.
+            if (offline.matches.length) {
+              lastMatchesRepsByPid = offline.pidToReps;
+              renderResults(offline.matches);
+              configureSlider(offline.matches);
+              setStatus('Offline — drilling ' + offline.matches.length + ' downloaded puzzle' +
+                (offline.matches.length === 1 ? '' : 's') + ' from ' + label + '.', 'ok');
+            } else {
+              lastMatchesRepsByPid = null;
+              renderResults([]);
+              setStatus('Offline — the downloaded set for ' + label +
+                ' has no puzzles matching the current color filter.', 'info');
+            }
+            return;
+          }
+        } catch (offErr) { /* fall through to the generic error */ }
         setStatus('Fetch error: ' + e.message + '. Are you serving over http (not file://)? Is data/ generated?', 'error');
       }
     }
@@ -4004,6 +4039,21 @@
     // status message already conveys success/failure.
     async function startDrillByPuzzleId(puzzleId) {
       setStatus('Loading puzzle ' + puzzleId + '…', 'info');
+      // Offline-first: a puzzle whose body was downloaded for an offline
+      // repertoire drills with zero network and even survives being filtered
+      // out of a later dataset build. Keyed by id directly — no shard hashing,
+      // so this path works even where Web Crypto is unavailable. A malformed
+      // stored body (shouldn't happen — we only store validated bodies) falls
+      // through to the network path rather than being treated as an orphan.
+      if (typeof Cache !== 'undefined' && Cache.getOfflineBody && Cache.available && Cache.available()) {
+        try {
+          var ob = await Cache.getOfflineBody(puzzleId);
+          if (ob && ob.fen && Array.isArray(ob.moves) && ob.moves.length) {
+            enterDrillMode(ob);
+            return { ok: true, orphan: false };
+          }
+        } catch (e) { /* fall through to network */ }
+      }
       var bodyShard;
       try {
         bodyShard = await shardIdAsync(puzzleId);
@@ -9343,6 +9393,9 @@
       // bar isn't cluttered with controls that need a target they don't
       // have.
       $('#repertoireAddCurrentBtn, #repertoireImportStudyBtn, #repertoireRenameBtn, #repertoireDeleteBtn').prop('hidden', multi);
+      // The offline button works in BOTH modes (single rep vs. all active reps);
+      // renderOfflineState (single) / renderOfflineStateMulti (multi) fully own
+      // the button + remove + status elements, so nothing is force-hidden here.
       $('#repertoireItems').prop('hidden', multi);
       // Pager is single-rep-only; the single-rep branch decides whether it
       // actually shows (pageCount > 1). Hide here so multi-mode never shows
@@ -9383,6 +9436,9 @@
         // collapse to single doesn't briefly flash the previous-active's
         // items before the next render fills in the right ones.
         $('#repertoireItems').empty();
+        // Aggregate offline state across all active reps (async — reads the
+        // IDB manifests). Self-guards against the active set changing.
+        renderOfflineStateMulti(liveReps);
         return;
       }
 
@@ -9391,6 +9447,11 @@
       $('#repertoireActiveName').text(rep.name).attr('title', rep.name);
       var repItems = rep.items || [];
       $('#repertoireActiveCount').text(repItems.length + ' position' + (repItems.length === 1 ? '' : 's'));
+
+      // Reflect this rep's offline-download state on the button/status (async —
+      // reads the IDB manifest). Safe to call every render; it self-guards
+      // against landing on a stale rep.
+      renderOfflineState(rep.id);
 
       // Pagination. Reset to page 0 when the active rep changes; preserve
       // the page across re-renders of the same rep (so removing an item on
@@ -10118,6 +10179,10 @@
         return;
       }
       var deletedName = rep.name;
+      // Free any offline-downloaded bodies for this rep (ref-counted — bodies
+      // shared with another downloaded rep survive). Fire-and-forget; the
+      // delete already succeeded and offline cleanup never blocks the UI.
+      removeRepertoireOffline(soloId).catch(function () {});
       activeRepertoireIds = [];
       saveActiveRepertoireIds();
       lastMatches = null;
@@ -10126,6 +10191,537 @@
       renderRepertoires();
       setStatus('Deleted "' + deletedName + '".', 'info');
       repertoireMutated();
+    }
+
+    // ─── offline repertoires ("Make available offline") ──────────────────
+    // Downloads every matched puzzle BODY for a single repertoire into a
+    // persistent IDB store (keyed by id, eviction-exempt) plus a per-rep
+    // manifest holding the match ENTRIES, so the whole repertoire is drillable
+    // with no network — and every session pre-filter (rating/perspective/ply/
+    // theme) still works because the stored entries carry m[1..5]. Device-local
+    // (never synced via the Gist). See lib/offline.js for the pure helpers.
+
+    // Concurrency guard: at most one in-flight download. Holds the repId whose
+    // prefetch is running so renderOfflineState yields the status line to the
+    // progress writer instead of overwriting it. _offlineBusyMulti is the
+    // equivalent flag for a multi-rep (all-active) download.
+    var _offlineBusyRepId = null;
+    var _offlineBusyMulti = false;
+
+    function formatBytes(n) {
+      if (!n || n < 0 || !isFinite(n)) return '0 B';
+      if (n < 1024) return n + ' B';
+      if (n < 1024 * 1024) return (n / 1024).toFixed(0) + ' KB';
+      return (n / (1024 * 1024)).toFixed(1) + ' MB';
+    }
+
+    // builtAt drives staleness ("dataset updated — re-download"). Same stamp
+    // the IDB shard cache invalidates on (filter-data bumps meta.builtAt to
+    // filteredAt every run), so a republish flips it.
+    function getCurrentBuiltAt() {
+      return metaPromise.then(function (r) {
+        return (r && r.meta && r.meta.builtAt) ? r.meta.builtAt : null;
+      }).catch(function () { return null; });
+    }
+
+    // Canonical position keys for a rep's items — feeds Offline.itemSig so an
+    // edit to the rep's positions (after download) reads as stale.
+    function repItemKeys(rep) {
+      var keys = [];
+      var items = (rep && rep.items) || [];
+      for (var i = 0; i < items.length; i++) {
+        var k;
+        try { k = fenPositionKey(items[i].fen); } catch (e) { k = ''; }
+        if (k) keys.push(k);
+      }
+      return keys;
+    }
+
+    // Mirror RepertoireUnion.itemColor (study orientation, FEN-STM fallback) —
+    // used by the offline perspective approximation below.
+    function itemColorLocal(item) {
+      if (!item) return null;
+      if (item.orientation === 'white') return 'w';
+      if (item.orientation === 'black') return 'b';
+      var stm = (typeof item.fen === 'string') ? item.fen.split(/\s+/)[1] : null;
+      return (stm === 'w' || stm === 'b') ? stm : null;
+    }
+
+    // downloadRepertoireOffline(repId, onProgress) → manifest | null
+    //
+    // null  ⇒ the repertoire produced no published puzzles (nothing to store).
+    // throw ⇒ infrastructure failure (Web Crypto missing, etc). Body shards
+    //         that 404 / error mid-stream are SKIPPED, not fatal — already-
+    //         fetched bodies are written and the run is resumable (idempotent
+    //         puts), so a flaky connection just needs another click to finish.
+    //
+    // Phases: (1) hash item position keys → index shards; (2) stream index
+    // shards into the union accumulator with matchOwnColorOnly:FALSE (cache the
+    // WHOLE match set so any perspective works offline); (3) hash matched ids →
+    // body shards; (4) stream body shards, extract only the matched bodies,
+    // discard the shard; (5) persist bodies + manifest. The manifest's stored
+    // matches are PRUNED to ids whose body we actually captured, so the offline
+    // drill queue contains only drillable puzzles.
+    async function downloadRepertoireOffline(repId, onProgress) {
+      var rep = Repertoires.get(repId);
+      if (!rep) throw new Error('repertoire not found');
+      var items = rep.items || [];
+
+      // (1) index-shard triples
+      var triples = [];
+      for (var i = 0; i < items.length; i++) {
+        var k;
+        try { k = fenPositionKey(items[i].fen); } catch (e) { k = ''; }
+        if (!k) continue;
+        var sh;
+        try { sh = await shardIdAsync(k); }
+        catch (e) { throw new Error('SHA-1 hashing not available (Web Crypto required)'); }
+        triples.push({ key: k, shard: sh, item: items[i], repId: repId });
+      }
+      if (!triples.length) return null;
+
+      var shardToTriples = Object.create(null);
+      for (var t = 0; t < triples.length; t++) {
+        var ts = triples[t].shard;
+        (shardToTriples[ts] || (shardToTriples[ts] = [])).push(triples[t]);
+      }
+      var idxShards = Object.keys(shardToTriples);
+
+      // (2) stream index shards → accumulator (ALL colors)
+      var acc = RepertoireUnion.createAccumulator({ matchOwnColorOnly: false });
+      var IBATCH = 8;
+      for (var bi = 0; bi < idxShards.length; bi += IBATCH) {
+        var ibatch = idxShards.slice(bi, bi + IBATCH);
+        var iresults = await Promise.all(ibatch.map(function (s) {
+          return fetchIndexShardCached(s).then(function (res) { return { shard: s, res: res }; });
+        }));
+        for (var ir = 0; ir < iresults.length; ir++) {
+          var ie = iresults[ir];
+          if (ie.res && ie.res.status !== 404 && ie.res.json) {
+            acc.ingestShard(ie.res.json, shardToTriples[ie.shard]);
+          }
+        }
+        if (onProgress) onProgress({ phase: 'index', done: Math.min(bi + IBATCH, idxShards.length), total: idxShards.length });
+      }
+      var matches = acc.finalize().matches;
+      if (!matches.length) return null;
+
+      // (3) matched ids → body shards
+      var idPairs = [];
+      for (var mi = 0; mi < matches.length; mi++) {
+        var pid = matches[mi][0];
+        var bsh;
+        try { bsh = await shardIdAsync(pid); }
+        catch (e) { throw new Error('SHA-1 hashing not available (Web Crypto required)'); }
+        idPairs.push({ id: pid, shard: bsh });
+      }
+      var byBodyShard = Offline.groupByShard(idPairs);
+      var bodyShards = Object.keys(byBodyShard);
+
+      // (4) stream body shards, extract matched bodies
+      var records = [];
+      var storedIds = Object.create(null);
+      var bodyBytes = 0;
+      var BBATCH = Offline.OFFLINE_BODY_BATCH;
+      for (var bj = 0; bj < bodyShards.length; bj += BBATCH) {
+        var bbatch = bodyShards.slice(bj, bj + BBATCH);
+        var bresults = await Promise.all(bbatch.map(function (s) {
+          return fetchBodyShardCached(s)
+            .then(function (res) { return { shard: s, res: res }; })
+            .catch(function (err) { return { shard: s, err: err }; });
+        }));
+        for (var brr = 0; brr < bresults.length; brr++) {
+          var be = bresults[brr];
+          if (!be.res || typeof be.res.text !== 'string') continue; // skip failed shard
+          var wanted = byBodyShard[be.shard] || [];
+          var wantedSet = Object.create(null);
+          for (var w = 0; w < wanted.length; w++) wantedSet[wanted[w]] = true;
+          var lines = be.res.text.split('\n');
+          for (var li = 0; li < lines.length; li++) {
+            var line = lines[li];
+            if (!line) continue;
+            // A body shard holds ~all puzzles hashing to its 3-hex prefix
+            // (~900 lines at full scale) but we usually want only 1-2 of them.
+            // Pull the id cheaply (the body is JSON.stringify output, so the
+            // "id":"…" pair is unambiguous) and skip the expensive JSON.parse
+            // for lines we don't want. Lines without the marker fall back to a
+            // full parse so an unexpected shape can't silently drop a body.
+            var obj = null;
+            var mk = line.indexOf('"id":"');
+            if (mk !== -1) {
+              var s0 = mk + 6;
+              var s1 = line.indexOf('"', s0);
+              if (s1 === -1) continue;
+              var lid = line.slice(s0, s1);
+              if (!wantedSet[lid] || storedIds[lid]) continue;
+              try { obj = JSON.parse(line); } catch (e) { continue; }
+            } else {
+              try { obj = JSON.parse(line); } catch (e) { continue; }
+            }
+            if (obj && obj.id && wantedSet[obj.id] && !storedIds[obj.id]) {
+              records.push({ id: obj.id, body: obj });
+              storedIds[obj.id] = true;
+              bodyBytes += line.length;
+            }
+          }
+        }
+        if (onProgress) onProgress({ phase: 'body', done: Math.min(bj + BBATCH, bodyShards.length), total: bodyShards.length, bytes: bodyBytes });
+      }
+      if (!records.length) return null;
+
+      // (5) persist bodies + manifest (matches pruned to captured bodies)
+      // Snapshot the PRIOR manifest first — needed for orphan cleanup below,
+      // and it must be read before putOfflineManifest overwrites it.
+      var prior = await Cache.getOfflineManifest(repId);
+      await Cache.putOfflineBodies(records);
+      var prunedMatches = matches.filter(function (m) { return m[0] && storedIds[m[0]]; });
+      var builtAt = await getCurrentBuiltAt();
+      var manifest = {
+        name: rep.name,
+        matches: prunedMatches,
+        itemSig: Offline.itemSig(repItemKeys(rep)),
+        builtAt: builtAt || null,
+        downloadedAt: new Date().toISOString(),
+        bodyCount: records.length,
+        bodyBytes: bodyBytes
+      };
+      await Cache.putOfflineManifest(repId, manifest);
+      // Orphan cleanup on RE-download: bodies that were in the prior download
+      // but are no longer matched (rep shrank, or a rebuild dropped the id) and
+      // aren't referenced by another downloaded rep get freed. Without this,
+      // every re-download — which the staleness UI nudges after each dataset
+      // rebuild — would leak the dropped bodies indefinitely.
+      if (prior && prior.matches && prior.matches.length) {
+        var others = await Cache.listOfflineManifests();
+        var keep = Object.create(null);
+        for (var oi = 0; oi < others.length; oi++) {
+          if (!others[oi] || others[oi].repId === repId) continue; // our new ids ⇒ storedIds
+          var om = others[oi].matches || [];
+          for (var oj = 0; oj < om.length; oj++) { if (om[oj] && om[oj][0]) keep[om[oj][0]] = true; }
+        }
+        var stalePrior = [];
+        for (var pmi = 0; pmi < prior.matches.length; pmi++) {
+          var ppid = prior.matches[pmi] && prior.matches[pmi][0];
+          if (ppid && !storedIds[ppid] && !keep[ppid]) stalePrior.push(ppid);
+        }
+        if (stalePrior.length) await Cache.deleteOfflineBodies(stalePrior);
+      }
+      return manifest;
+    }
+
+    // Ref-counted removal: drop only this rep's bodies that NO other downloaded
+    // repertoire still references, then drop its manifest.
+    async function removeRepertoireOffline(repId) {
+      if (typeof Cache === 'undefined' || !Cache.getOfflineManifest) return;
+      var manifest = await Cache.getOfflineManifest(repId);
+      if (!manifest) return;
+      var thisIds = Object.create(null);
+      var ms = manifest.matches || [];
+      for (var i = 0; i < ms.length; i++) { if (ms[i] && ms[i][0]) thisIds[ms[i][0]] = true; }
+      var others = await Cache.listOfflineManifests();
+      var keep = Object.create(null);
+      for (var o = 0; o < others.length; o++) {
+        if (!others[o] || others[o].repId === repId) continue;
+        var om = others[o].matches || [];
+        for (var j = 0; j < om.length; j++) { if (om[j] && om[j][0]) keep[om[j][0]] = true; }
+      }
+      var toDelete = [];
+      for (var id in thisIds) {
+        if (Object.prototype.hasOwnProperty.call(thisIds, id) && !keep[id]) toDelete.push(id);
+      }
+      if (toDelete.length) await Cache.deleteOfflineBodies(toDelete);
+      await Cache.deleteOfflineManifest(repId);
+    }
+
+    // Sweep manifests whose repertoire no longer exists (e.g. deleted on
+    // another device, arrived as a sync tombstone). Ref-counting in
+    // removeRepertoireOffline protects bodies still used by live reps.
+    async function pruneOrphanOfflineManifests() {
+      if (typeof Cache === 'undefined' || !Cache.listOfflineManifests) return;
+      var mans;
+      try { mans = await Cache.listOfflineManifests(); } catch (e) { return; }
+      for (var i = 0; i < mans.length; i++) {
+        var repId = mans[i].repId;
+        var live = (typeof Repertoires === 'object' && Repertoires) ? Repertoires.get(repId) : null;
+        if (!live) { try { await removeRepertoireOffline(repId); } catch (e) {} }
+      }
+    }
+
+    // Paint the offline button/status for the single active rep. Async (reads
+    // the IDB manifest); self-guards against the active rep changing during the
+    // awaits, and yields entirely while a download is mid-flight.
+    async function renderOfflineState(repId) {
+      var $btn = $('#repertoireOfflineBtn');
+      var $rm = $('#repertoireOfflineRemoveBtn');
+      var $st = $('#repertoireOfflineStatus');
+      if (_offlineBusyRepId === repId || _offlineBusyMulti) return; // a download owns the UI
+      if (typeof Cache === 'undefined' || !Cache.available || !Cache.available() || !Cache.getOfflineManifest) {
+        // No IDB → offline download impossible; hide the affordance entirely.
+        $btn.prop('hidden', true);
+        $rm.prop('hidden', true);
+        $st.prop('hidden', true).removeClass('downloaded stale');
+        return;
+      }
+      var manifest = await Cache.getOfflineManifest(repId);
+      // Active solo rep may have changed during the await.
+      if (activeRepertoireIds.length !== 1 || activeRepertoireIds[0] !== repId) return;
+      if (!manifest) {
+        $btn.prop('hidden', false).prop('disabled', false).text('Make available offline');
+        $rm.prop('hidden', true);
+        $st.prop('hidden', true).removeClass('downloaded stale');
+        return;
+      }
+      var rep = Repertoires.get(repId);
+      var curSig = rep ? Offline.itemSig(repItemKeys(rep)) : manifest.itemSig;
+      var curBuilt = await getCurrentBuiltAt();
+      if (activeRepertoireIds.length !== 1 || activeRepertoireIds[0] !== repId) return;
+      var itemsChanged = manifest.itemSig !== curSig;
+      var datasetChanged = !!(manifest.builtAt && curBuilt && manifest.builtAt !== curBuilt);
+      var stale = itemsChanged || datasetChanged;
+      var count = manifest.bodyCount || 0;
+      var sizeStr = formatBytes(manifest.bodyBytes || 0);
+      $btn.prop('hidden', false).prop('disabled', false).text(stale ? 'Update offline' : 'Re-download');
+      $rm.prop('hidden', false).prop('disabled', false);
+      var label = count + ' puzzle' + (count === 1 ? '' : 's') + ' · ' + sizeStr;
+      if (stale) {
+        label += itemsChanged ? ' · positions changed' : ' · dataset updated';
+        $st.removeClass('downloaded').addClass('stale');
+      } else {
+        label = '✓ offline · ' + label;
+        $st.removeClass('stale').addClass('downloaded');
+      }
+      $st.prop('hidden', false).text(label).attr('title', 'Downloaded ' + (manifest.downloadedAt || ''));
+    }
+
+    async function onMakeOfflineClick() {
+      if (activeRepertoireIds.length >= 2) { onMakeOfflineMulti(); return; }
+      if (activeRepertoireIds.length !== 1) return;
+      var repId = activeRepertoireIds[0];
+      var rep = Repertoires.get(repId);
+      if (!rep) { deactivateRepertoire(); return; }
+      if (!rep.items || !rep.items.length) {
+        setStatus('Repertoire "' + rep.name + '" has no positions to download.', 'warn');
+        return;
+      }
+      if (typeof Cache === 'undefined' || !Cache.available || !Cache.available()) {
+        setStatus('Offline storage (IndexedDB) is not available in this browser.', 'error');
+        return;
+      }
+      if (_offlineBusyRepId || _offlineBusyMulti) return; // a download is already running
+      _offlineBusyRepId = repId;
+      $('#repertoireOfflineBtn').prop('disabled', true);
+      $('#repertoireOfflineRemoveBtn').prop('disabled', true);
+      var $st = $('#repertoireOfflineStatus').prop('hidden', false).removeClass('downloaded stale');
+      function prog(p) {
+        if (activeRepertoireIds.length !== 1 || activeRepertoireIds[0] !== repId) return;
+        if (p.phase === 'index') {
+          $st.text('Finding puzzles… ' + p.done + '/' + p.total + ' shards');
+        } else {
+          $st.text('Downloading… ' + p.done + '/' + p.total + ' shards · ' + formatBytes(p.bytes || 0));
+        }
+      }
+      var failed = false, result = null, errMsg = '';
+      try {
+        result = await downloadRepertoireOffline(repId, prog);
+      } catch (e) {
+        failed = true;
+        errMsg = (e && e.message) ? e.message : 'unknown';
+      }
+      _offlineBusyRepId = null;
+      if (failed) {
+        setStatus('Offline download failed: ' + errMsg + '. Any fetched puzzles are kept — click again to finish.', 'error');
+      } else if (!result) {
+        setStatus('No published puzzles found for "' + rep.name + '" — nothing to download.', 'warn');
+      } else {
+        setStatus('"' + rep.name + '" available offline — ' + result.bodyCount +
+          ' puzzle' + (result.bodyCount === 1 ? '' : 's') + ' · ' + formatBytes(result.bodyBytes || 0) + '.', 'ok');
+      }
+      renderOfflineState(repId);
+    }
+
+    async function onRemoveOfflineClick() {
+      if (activeRepertoireIds.length >= 2) { onRemoveOfflineMulti(); return; }
+      if (activeRepertoireIds.length !== 1) return;
+      if (_offlineBusyRepId || _offlineBusyMulti) return; // don't race a download
+      var repId = activeRepertoireIds[0];
+      var rep = Repertoires.get(repId);
+      var manifest = (typeof Cache !== 'undefined' && Cache.getOfflineManifest)
+        ? await Cache.getOfflineManifest(repId) : null;
+      if (!manifest) { renderOfflineState(repId); return; }
+      var name = rep ? rep.name : (manifest.name || 'this repertoire');
+      if (!window.confirm('Remove the downloaded offline puzzles for "' + name +
+        '"? You can re-download anytime while online.')) return;
+      try { await removeRepertoireOffline(repId); }
+      catch (e) { setStatus('Could not remove offline data: ' + (e && e.message ? e.message : 'unknown'), 'error'); return; }
+      setStatus('Removed offline data for "' + name + '".', 'info');
+      renderOfflineState(repId);
+    }
+
+    // ── multi-mode (2+ active reps) ──────────────────────────────────────
+    // "Make available offline" in multi-mode downloads each active rep in turn
+    // (the prefetch is per-rep; bodies dedupe by id across reps automatically).
+    // The aggregate status shows how many of the active reps are downloaded.
+
+    // Paint the offline button/status for the multi-rep bar. Async; yields
+    // while any download is in flight and self-guards against the active set
+    // changing across its awaits.
+    async function renderOfflineStateMulti(reps) {
+      var $btn = $('#repertoireOfflineBtn');
+      var $rm = $('#repertoireOfflineRemoveBtn');
+      var $st = $('#repertoireOfflineStatus');
+      if (_offlineBusyMulti || _offlineBusyRepId) return; // a download owns the UI
+      if (typeof Cache === 'undefined' || !Cache.available || !Cache.available() || !Cache.getOfflineManifest) {
+        $btn.prop('hidden', true);
+        $rm.prop('hidden', true);
+        $st.prop('hidden', true).removeClass('downloaded stale');
+        return;
+      }
+      var capturedKey = reps.map(function (r) { return r.id; }).join(',');
+      var curBuilt = await getCurrentBuiltAt();
+      if (activeRepertoireIds.join(',') !== capturedKey) return; // set changed
+      // Only reps WITH positions are downloadable, so they form the denominator
+      // — matches onMakeOfflineMulti, and keeps "all fresh / Re-download all"
+      // reachable when an empty rep is in the selection.
+      var dl = [];
+      for (var di = 0; di < reps.length; di++) {
+        if (reps[di].items && reps[di].items.length) dl.push(reps[di]);
+      }
+      var downloaded = 0, totalCount = 0, totalBytes = 0, anyStale = false;
+      for (var i = 0; i < dl.length; i++) {
+        var man = await Cache.getOfflineManifest(dl[i].id);
+        if (activeRepertoireIds.join(',') !== capturedKey) return; // set changed mid-await
+        if (!man) continue;
+        downloaded++;
+        totalCount += man.bodyCount || 0;
+        totalBytes += man.bodyBytes || 0;
+        if (man.itemSig !== Offline.itemSig(repItemKeys(dl[i]))) anyStale = true;
+        if (man.builtAt && curBuilt && man.builtAt !== curBuilt) anyStale = true;
+      }
+      $btn.prop('hidden', false).prop('disabled', false);
+      if (downloaded === 0) {
+        $btn.text('Make available offline');
+        $rm.prop('hidden', true);
+        $st.prop('hidden', true).removeClass('downloaded stale');
+        return;
+      }
+      var allFresh = (downloaded === dl.length) && !anyStale;
+      $btn.text(allFresh ? 'Re-download all' : 'Update offline');
+      $rm.prop('hidden', false).prop('disabled', false);
+      var label = downloaded + '/' + dl.length + ' offline · ' +
+        totalCount + ' puzzle' + (totalCount === 1 ? '' : 's') + ' · ' + formatBytes(totalBytes);
+      if (allFresh) {
+        $st.removeClass('stale').addClass('downloaded').prop('hidden', false).text('✓ ' + label);
+      } else {
+        if (anyStale) label += ' · update available';
+        $st.removeClass('downloaded').addClass('stale').prop('hidden', false).text(label);
+      }
+    }
+
+    async function onMakeOfflineMulti() {
+      var ids = activeRepertoireIds.slice();
+      if (ids.length < 2) return;
+      if (typeof Cache === 'undefined' || !Cache.available || !Cache.available()) {
+        setStatus('Offline storage (IndexedDB) is not available in this browser.', 'error');
+        return;
+      }
+      if (_offlineBusyRepId || _offlineBusyMulti) return;
+      // Resolve to reps that actually have positions; skip empties silently.
+      var reps = [];
+      for (var i = 0; i < ids.length; i++) {
+        var r = Repertoires.get(ids[i]);
+        if (r && r.items && r.items.length) reps.push(r);
+      }
+      if (!reps.length) {
+        setStatus('None of the selected repertoires have positions to download.', 'warn');
+        return;
+      }
+      _offlineBusyMulti = true;
+      $('#repertoireOfflineBtn').prop('disabled', true);
+      $('#repertoireOfflineRemoveBtn').prop('disabled', true);
+      var $st = $('#repertoireOfflineStatus').prop('hidden', false).removeClass('downloaded stale');
+      var capturedKey = ids.join(',');
+      var total = reps.length;
+      // Factory so each progress closure binds its own rep/idx (no var-in-loop
+      // capture ambiguity).
+      function makeProg(rep, idx) {
+        return function (p) {
+          if (activeRepertoireIds.join(',') !== capturedKey) return;
+          var base = 'Repertoire ' + idx + '/' + total + ' ("' + rep.name + '") — ';
+          if (p.phase === 'index') $st.text(base + 'finding puzzles… ' + p.done + '/' + p.total);
+          else $st.text(base + 'downloading… ' + p.done + '/' + p.total + ' shards · ' + formatBytes(p.bytes || 0));
+        };
+      }
+      var okCount = 0, failCount = 0, sumPuzzles = 0, sumBytes = 0;
+      for (var j = 0; j < reps.length; j++) {
+        try {
+          var man = await downloadRepertoireOffline(reps[j].id, makeProg(reps[j], j + 1));
+          if (man) { okCount++; sumPuzzles += man.bodyCount || 0; sumBytes += man.bodyBytes || 0; }
+        } catch (e) { failCount++; }
+      }
+      _offlineBusyMulti = false;
+      var msg = okCount + '/' + total + ' repertoire' + (total === 1 ? '' : 's') +
+        ' available offline — ' + sumPuzzles + ' puzzle' + (sumPuzzles === 1 ? '' : 's') +
+        ' · ' + formatBytes(sumBytes) + '.';
+      if (failCount) msg += ' ' + failCount + ' failed — click again to finish.';
+      setStatus(msg, failCount ? 'warn' : 'ok');
+      renderActiveRepertoire(); // repaint aggregate offline state
+    }
+
+    async function onRemoveOfflineMulti() {
+      var ids = activeRepertoireIds.slice();
+      if (ids.length < 2) return;
+      if (typeof Cache === 'undefined' || !Cache.getOfflineManifest) return;
+      if (_offlineBusyRepId || _offlineBusyMulti) return; // don't race a download
+      var downloadedIds = [];
+      for (var i = 0; i < ids.length; i++) {
+        var man = await Cache.getOfflineManifest(ids[i]);
+        if (man) downloadedIds.push(ids[i]);
+      }
+      if (!downloadedIds.length) { renderActiveRepertoire(); return; }
+      if (!window.confirm('Remove the downloaded offline puzzles for ' + downloadedIds.length +
+        ' repertoire' + (downloadedIds.length === 1 ? '' : 's') + '? You can re-download anytime while online.')) return;
+      // Sequential removal: ref-counting in removeRepertoireOffline keeps any
+      // body still referenced by a NON-removed downloaded rep; bodies shared
+      // only among the removed set are freed once the last referrer is gone.
+      for (var d = 0; d < downloadedIds.length; d++) {
+        try { await removeRepertoireOffline(downloadedIds[d]); } catch (e) {}
+      }
+      setStatus('Removed offline data for ' + downloadedIds.length +
+        ' repertoire' + (downloadedIds.length === 1 ? '' : 's') + '.', 'info');
+      renderActiveRepertoire();
+    }
+
+    // Offline search fallback: when the live union search fails (no network),
+    // serve the stored match sets of whichever active reps are downloaded.
+    // Applies the same perspective filter the online union would (approximated
+    // by the set of item colors across the active reps — exact for the common
+    // single-perspective repertoire; most-permissive for mixed ones).
+    async function tryOfflineMatchesForActive(reps) {
+      if (typeof Cache === 'undefined' || !Cache.getOfflineManifest) return null;
+      var sources = [];
+      for (var i = 0; i < reps.length; i++) {
+        var man = await Cache.getOfflineManifest(reps[i].id);
+        if (man && Array.isArray(man.matches) && man.matches.length) {
+          sources.push({ repId: reps[i].id, matches: man.matches });
+        }
+      }
+      if (!sources.length) return null;
+      var unioned = Offline.unionManifests(sources);
+      var matches = unioned.matches;
+      if (matchOwnColorOnly) {
+        var colors = Object.create(null);
+        for (var r = 0; r < reps.length; r++) {
+          var its = reps[r].items || [];
+          for (var j = 0; j < its.length; j++) {
+            var c = itemColorLocal(its[j]);
+            if (c) colors[c] = true;
+          }
+        }
+        if (colors.w || colors.b) {
+          matches = matches.filter(function (m) { return m[2] === undefined || colors[m[2]]; });
+        }
+      }
+      return { matches: matches, pidToReps: unioned.pidToReps };
     }
 
     async function loadDatasetInfo() {
