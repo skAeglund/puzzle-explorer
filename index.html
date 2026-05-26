@@ -532,6 +532,16 @@
       color: var(--fg-dim);
       line-height: 1.4;
     }
+    .storage-info {
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--fg-dim);
+      line-height: 1.7;
+    }
+    .storage-info .ok   { color: var(--ok); }
+    .storage-info .warn { color: var(--warn); }
+    .storage-info .storage-rep { padding-left: 12px; }
+    .storage-actions { margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; }
     /* Mobile takeover. On narrow viewports, the drawer fills the screen
        so the user has the same readable layout as a desktop side-drawer
        without horizontal cramping. */
@@ -1723,7 +1733,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">offline-save-verify</span>
+    <span id="buildVersion">storage-readout</span>
     <button id="soundToggle" class="sound-toggle" type="button" aria-label="Toggle sound" title="Toggle sound effects">🔊</button>
     <!-- Stats drawer toggle (issue #9). Same lightweight aesthetic as the
          sound toggle — header real estate is tight, so it's icon-only. The
@@ -1846,6 +1856,19 @@
         <h3>Themes to work on</h3>
         <ul id="statsThemesList" class="stats-themes"></ul>
         <div id="statsThemesEmpty" class="stats-themes-empty" hidden></div>
+      </section>
+
+      <!-- Storage & offline diagnostic. Shows whether storage is persistent
+           (eviction risk), how much is used, whether the offline cache is
+           usable, and which repertoires are actually downloaded — so offline
+           problems can be diagnosed on-device without DevTools. -->
+      <section class="stats-section" id="statsStorageSection">
+        <h3>Storage &amp; offline</h3>
+        <div id="storageInfo" class="storage-info">checking…</div>
+        <div class="storage-actions">
+          <button id="storagePersistBtn" type="button" hidden>Make storage persistent</button>
+          <button id="storageRefreshBtn" type="button">Refresh</button>
+        </div>
       </section>
 
     </div>
@@ -2872,6 +2895,8 @@
       // (see openStatsDrawer / closeStatsDrawer).
       $('#statsBtn').on('click', openStatsDrawer);
       $('#statsDrawerCloseBtn').on('click', closeStatsDrawer);
+      $('#storageRefreshBtn').on('click', renderStorageInfo);
+      $('#storagePersistBtn').on('click', onStoragePersistClick);
       $('#statsDrawerBackdrop').on('click', closeStatsDrawer);
       $('#detailsToggleBtn').on('click', onDetailsToggleClick);
       // Tag picker search: live-filter on input; Enter adds the first option
@@ -6810,6 +6835,7 @@
     function openStatsDrawer() {
       renderStats();
       renderThemeStats();
+      renderStorageInfo();
       $('#statsDrawerBackdrop').prop('hidden', false);
       $('#statsDrawer').prop('hidden', false);
       // Focus the close button so Tab navigates within the drawer first
@@ -10848,6 +10874,78 @@
         pidToReps: unioned.pidToReps,
         rawUniqueCount: raw.length
       };
+    }
+
+    // Storage & offline diagnostic readout (rendered into the stats drawer).
+    // Lets offline problems be diagnosed on-device: is storage persistent
+    // (eviction risk), how much is used, is the offline cache usable, and which
+    // repertoires are ACTUALLY downloaded (vs. a download that silently failed).
+    async function renderStorageInfo() {
+      var $info = $('#storageInfo');
+      if (!$info.length) return;
+      $info.empty();
+      function line(html) { $info.append($('<div>').html(html)); }
+      function repLine(name, suffix) {
+        // Name is user-supplied → text node (no HTML injection); suffix is
+        // numeric/trusted.
+        var $d = $('<div class="storage-rep">');
+        $d.append(document.createTextNode('• '));
+        $d.append($('<span>').text(name));
+        $d.append(document.createTextNode(' — ' + suffix));
+        $info.append($d);
+      }
+
+      var persisted = null;
+      try {
+        if (navigator.storage && navigator.storage.persisted) persisted = await navigator.storage.persisted();
+      } catch (e) {}
+      if (persisted === true) line('Persistent storage: <span class="ok">granted</span>');
+      else if (persisted === false) line('Persistent storage: <span class="warn">not granted</span> — data may be evicted');
+      else line('Persistent storage: unknown');
+      $('#storagePersistBtn').prop('hidden', persisted === true || !(navigator.storage && navigator.storage.persist));
+
+      try {
+        if (navigator.storage && navigator.storage.estimate) {
+          var est = await navigator.storage.estimate();
+          if (est && typeof est.usage === 'number') {
+            line('Used: ' + formatBytes(est.usage) +
+              (typeof est.quota === 'number' && est.quota ? ' of ' + formatBytes(est.quota) : ''));
+          }
+        }
+      } catch (e) {}
+
+      var available = (typeof Cache !== 'undefined' && Cache.available && Cache.available());
+      if (!available) {
+        line('Offline cache: <span class="warn">unavailable</span> (IndexedDB blocked or private mode)');
+        return;
+      }
+      line('Offline cache: <span class="ok">available</span>');
+      var mans = [];
+      try { mans = (typeof Cache.listOfflineManifests === 'function') ? await Cache.listOfflineManifests() : []; }
+      catch (e) { mans = []; }
+      if (!mans.length) {
+        line('Downloaded offline: none');
+        return;
+      }
+      var totP = 0, totB = 0;
+      for (var i = 0; i < mans.length; i++) { totP += (mans[i].bodyCount || 0); totB += (mans[i].bodyBytes || 0); }
+      line('Downloaded offline: ' + mans.length + ' repertoire' + (mans.length === 1 ? '' : 's') +
+        ' · ' + totP + ' puzzle' + (totP === 1 ? '' : 's') + ' · ' + formatBytes(totB));
+      for (var j = 0; j < mans.length; j++) {
+        var m = mans[j];
+        var c = m.bodyCount || 0;
+        repLine(m.name || m.repId || '(unnamed)',
+          c + ' puzzle' + (c === 1 ? '' : 's') + ' · ' + formatBytes(m.bodyBytes || 0));
+      }
+    }
+
+    // Explicit user-gesture persistence request (some browsers only grant on a
+    // gesture, or after the heuristics warm up). Re-renders to reflect the new
+    // state.
+    async function onStoragePersistClick() {
+      if (!(navigator.storage && navigator.storage.persist)) return;
+      try { await navigator.storage.persist(); } catch (e) {}
+      renderStorageInfo();
     }
 
     async function loadDatasetInfo() {
