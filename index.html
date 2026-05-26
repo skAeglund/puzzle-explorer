@@ -1723,7 +1723,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">pwa-offline-fix</span>
+    <span id="buildVersion">offline-boot-fix</span>
     <button id="soundToggle" class="sound-toggle" type="button" aria-label="Toggle sound" title="Toggle sound effects">🔊</button>
     <!-- Stats drawer toggle (issue #9). Same lightweight aesthetic as the
          sound toggle — header real estate is tight, so it's icon-only. The
@@ -2661,6 +2661,17 @@
         setStatus('Failed to load: ' + missing.join(', ') + '. Check the browser console / network tab.', 'error');
         return;
       }
+      // Ask the browser to make this origin's storage PERSISTENT, so the SW
+      // app-shell cache and the IndexedDB offline data (downloaded repertoires
+      // + their puzzle bodies) aren't evicted under storage pressure. Eviction
+      // is the most likely cause of "worked offline, then stopped after a
+      // while / a few restarts": a non-persisted origin can have its Cache
+      // Storage and/or IDB cleared by the OS, after which an offline launch
+      // hits the browser's "You're offline" page and downloaded data is gone.
+      // Installed PWAs are usually granted this automatically; best-effort.
+      if (navigator.storage && navigator.storage.persist) {
+        navigator.storage.persist().catch(function () {});
+      }
       // Build the initial interactive search board. rebuildSearchBoard
       // sets `chess` to a fresh Chess() (start position) and installs the
       // drag/drop handlers used by the move builder.
@@ -3046,9 +3057,12 @@
       loadDatasetInfo();
       refreshReviewBadge();
       renderRepertoires();
-      // Sweep offline data for repertoires that no longer exist (e.g. deleted
-      // on another device on a prior run). Fire-and-forget; never blocks init.
-      pruneOrphanOfflineManifests().catch(function () {});
+      // NOTE: offline-manifest orphan pruning is intentionally NOT here — it
+      // must run AFTER setupSync() restores the synced username, otherwise it
+      // reads Repertoires on the empty base key, sees every manifest as
+      // orphaned, and deletes all downloaded offline data on every cold boot.
+      // It now runs at the end of setupSync once the username (and thus the
+      // correct repertoire storage key) is in place.
       // Persisted settings (auto-next toggle today; future settings live in
       // the same storage object). Loaded after the button is in the DOM
       // so updateAutoNextBtn can sync the glyph immediately.
@@ -8233,11 +8247,22 @@
       // repertoires no longer exist (deleted on another device since the
       // last session here).
       activeRepertoireIds = loadActiveRepertoireIds();
-      // Re-render — init() called renderRepertoires() before setupSync, at
-      // which point activeRepertoireIds was still the default []. Now that
-      // the persisted selection is loaded, repaint pills with .active and
-      // unhide the active panel for returning users.
-      if (activeRepertoireIds.length > 0) renderRepertoires();
+      // Re-render UNCONDITIONALLY now that the username is set. init() called
+      // renderRepertoires() before setupSync with the (possibly wrong) base
+      // storage key — for a synced user that rendered an EMPTY list and showed
+      // the example-position row. The list itself depends on the username key,
+      // not just the active selection, so this repaint must happen even when
+      // nothing is active. (Previously gated on activeRepertoireIds.length > 0,
+      // which left a returning user's reps invisible offline until a Gist sync
+      // re-render landed — and offline that sync never lands.)
+      renderRepertoires();
+
+      // Sweep offline data for repertoires that no longer exist (e.g. deleted
+      // on another device). MUST run here, after the username is restored, so
+      // it reads Repertoires on the correct (namespaced) key — running it
+      // pre-username would see every manifest as orphaned and wipe all
+      // downloaded offline data. Fire-and-forget; never blocks startup.
+      pruneOrphanOfflineManifests().catch(function () {});
 
       // ─── DOM bindings ─────────────────────────────────────────────────
       $('#syncPill').on('click', function () {
@@ -10467,6 +10492,16 @@
     // removeRepertoireOffline protects bodies still used by live reps.
     async function pruneOrphanOfflineManifests() {
       if (typeof Cache === 'undefined' || !Cache.listOfflineManifests) return;
+      // Safety: never prune against an EMPTY repertoire store. An empty list
+      // can mean "no reps" but it can also mean "reps not loaded yet / wrong
+      // username key" — and we must not destroy downloaded offline data on a
+      // transient/misordered empty view. If there are genuinely zero reps, a
+      // leftover orphan manifest is a harmless few-hundred-KB leak; wrongly
+      // deleting a downloaded set is not. (This pairs with the call site now
+      // running only after the username is restored.)
+      var liveList = (typeof Repertoires === 'object' && Repertoires && Repertoires.list)
+        ? Repertoires.list() : [];
+      if (!liveList.length) return;
       var mans;
       try { mans = await Cache.listOfflineManifests(); } catch (e) { return; }
       for (var i = 0; i < mans.length; i++) {
