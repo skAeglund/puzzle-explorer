@@ -1723,7 +1723,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">offline-boot-fix</span>
+    <span id="buildVersion">offline-no-autoprune</span>
     <button id="soundToggle" class="sound-toggle" type="button" aria-label="Toggle sound" title="Toggle sound effects">🔊</button>
     <!-- Stats drawer toggle (issue #9). Same lightweight aesthetic as the
          sound toggle — header real estate is tight, so it's icon-only. The
@@ -8257,12 +8257,20 @@
       // re-render landed — and offline that sync never lands.)
       renderRepertoires();
 
-      // Sweep offline data for repertoires that no longer exist (e.g. deleted
-      // on another device). MUST run here, after the username is restored, so
-      // it reads Repertoires on the correct (namespaced) key — running it
-      // pre-username would see every manifest as orphaned and wipe all
-      // downloaded offline data. Fire-and-forget; never blocks startup.
-      pruneOrphanOfflineManifests().catch(function () {});
+      // NOTE: no automatic offline-manifest pruning here (or anywhere on the
+      // boot / sync path). Auto-pruning has twice been implicated in wiping
+      // downloaded offline data — once via boot-ordering (ran before the
+      // username was restored → empty rep list → everything looked orphaned),
+      // and it remains unsafe near sync because Repertoires.importData REPLACES
+      // the store with the merged result, so any transiently partial merge
+      // would orphan-and-delete the "missing" reps' offline data. The cost of
+      // NOT pruning is a small, harmless leak (a repertoire deleted on another
+      // device leaves its puzzle bodies in IDB, unused); the cost of a wrong
+      // prune is destroying data the user explicitly downloaded. We never auto-
+      // delete offline data: removeRepertoireOffline runs only on an explicit
+      // local repertoire delete and on re-download cleanup (both safe, scoped
+      // to the rep in hand). pruneOrphanOfflineManifests is kept defined but
+      // dormant, available to wire to a future manual "clean up offline" action.
 
       // ─── DOM bindings ─────────────────────────────────────────────────
       $('#syncPill').on('click', function () {
