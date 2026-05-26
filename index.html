@@ -1723,7 +1723,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">offline-no-autoprune</span>
+    <span id="buildVersion">offline-save-verify</span>
     <button id="soundToggle" class="sound-toggle" type="button" aria-label="Toggle sound" title="Toggle sound effects">🔊</button>
     <!-- Stats drawer toggle (issue #9). Same lightweight aesthetic as the
          sound toggle — header real estate is tight, so it's icon-only. The
@@ -10435,7 +10435,17 @@
       // Snapshot the PRIOR manifest first — needed for orphan cleanup below,
       // and it must be read before putOfflineManifest overwrites it.
       var prior = await Cache.getOfflineManifest(repId);
-      await Cache.putOfflineBodies(records);
+
+      // These writes can fail SILENTLY (IndexedDB blocked / private mode /
+      // quota / aborted transaction). Check the reported result, then VERIFY by
+      // reading the manifest back, so a failed download surfaces as a real
+      // error instead of a misleading "available offline — N puzzles" toast.
+      var bodiesRes = await Cache.putOfflineBodies(records);
+      if (!bodiesRes || !bodiesRes.ok) {
+        throw new Error('couldn\u2019t save puzzles to device storage' +
+          (bodiesRes && bodiesRes.error ? ' (' + bodiesRes.error + ')' : '') +
+          ' — free up space or close other tabs of the app');
+      }
       var prunedMatches = matches.filter(function (m) { return m[0] && storedIds[m[0]]; });
       var builtAt = await getCurrentBuiltAt();
       var manifest = {
@@ -10447,7 +10457,18 @@
         bodyCount: records.length,
         bodyBytes: bodyBytes
       };
-      await Cache.putOfflineManifest(repId, manifest);
+      var manRes = await Cache.putOfflineManifest(repId, manifest);
+      if (!manRes || !manRes.ok) {
+        throw new Error('couldn\u2019t save the offline manifest' +
+          (manRes && manRes.error ? ' (' + manRes.error + ')' : ''));
+      }
+      // Read-back verification: catches silent rollbacks (e.g. quota hit on
+      // commit) that a per-write "ok" can still miss.
+      var verify = await Cache.getOfflineManifest(repId);
+      if (!verify || verify.bodyCount !== manifest.bodyCount) {
+        throw new Error('offline data didn\u2019t persist (storage full or unavailable) — nothing was saved reliably');
+      }
+
       // Orphan cleanup on RE-download: bodies that were in the prior download
       // but are no longer matched (rep shrank, or a rebuild dropped the id) and
       // aren't referenced by another downloaded rep get freed. Without this,
