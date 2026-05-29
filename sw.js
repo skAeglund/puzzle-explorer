@@ -75,6 +75,8 @@ const APP_SHELL = [
   './lib/sync.js',
   './lib/cache.js',
   './lib/offline.js',
+  './lib/offlineFs.js',
+  './lib/sound.js',
   './lib/keyboardMode.js',
   './lib/vendor/jquery-3.7.1.min.js',
   './lib/vendor/chess-0.10.3.js',

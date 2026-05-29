@@ -1733,7 +1733,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">offline-idb-reconnect</span>
+    <span id="buildVersion">capacitor-offline-fs</span>
     <button id="soundToggle" class="sound-toggle" type="button" aria-label="Toggle sound" title="Toggle sound effects">🔊</button>
     <!-- Stats drawer toggle (issue #9). Same lightweight aesthetic as the
          sound toggle — header real estate is tight, so it's icon-only. The
@@ -2306,6 +2306,7 @@
   <!-- IndexedDB shard cache (independent leaf module; safe to load last) -->
   <script src="lib/cache.js"></script>
   <script src="lib/offline.js"></script>
+  <script src="lib/offlineFs.js"></script>
   <script src="lib/sound.js"></script>
   <!-- No-mouse drill mode: pure key→action mapper. Independent leaf
        module (no FSRS / chess.js dependency); safe to load anywhere. -->
@@ -2379,6 +2380,18 @@
     // Trailing slash is enforced below so the constant tolerates either form.
     var DATA_BASE_URL = 'https://skaeglund.github.io/puzzle-explorer-data/';
     if (DATA_BASE_URL && DATA_BASE_URL.charAt(DATA_BASE_URL.length - 1) !== '/') DATA_BASE_URL += '/';
+
+    // True when the persistent "offline" stores are usable on this platform —
+    // browser IDB on the web build, or the native filesystem backend
+    // (lib/offlineFs.js) on the Capacitor build. The offline-first body read
+    // and the "Make available offline" affordances gate on THIS rather than on
+    // Cache.available() alone, so they stay correct on a native build whose
+    // durable store is the filesystem, not IDB.
+    function offlineStorageAvailable() {
+      if (typeof Cache !== 'undefined' && Cache.available && Cache.available()) return true;
+      if (typeof OfflineFs !== 'undefined' && OfflineFs.available && OfflineFs.available()) return true;
+      return false;
+    }
 
     // ─── meta.json + cache bootstrap ──────────────────────────────────────
     // We fetch meta.json exactly once per page load and share the result
@@ -2684,6 +2697,18 @@
         setStatus('Failed to load: ' + missing.join(', ') + '. Check the browser console / network tab.', 'error');
         return;
       }
+      // Native (Capacitor) build only: route the persistent "offline" stores
+      // off browser IDB and onto the app's private filesystem (lib/offlineFs.js).
+      // Browser storage isn't durable on mobile — the OS can evict a downloaded
+      // repertoire even with persist() granted — whereas Directory.Data is
+      // cleared only on uninstall. No-op on the plain web build (Capacitor
+      // absent → OfflineFs.available() false → IDB path stays in effect).
+      try {
+        if (typeof OfflineFs !== 'undefined' && OfflineFs.available()
+            && typeof Cache !== 'undefined' && Cache._setOfflineBackend) {
+          Cache._setOfflineBackend(OfflineFs);
+        }
+      } catch (e) { /* fall back to IDB */ }
       // Ask the browser to make this origin's storage PERSISTENT, so the SW
       // app-shell cache and the IndexedDB offline data (downloaded repertoires
       // + their puzzle bodies) aren't evicted under storage pressure. Eviction
@@ -4113,7 +4138,7 @@
       // so this path works even where Web Crypto is unavailable. A malformed
       // stored body (shouldn't happen — we only store validated bodies) falls
       // through to the network path rather than being treated as an orphan.
-      if (typeof Cache !== 'undefined' && Cache.getOfflineBody && Cache.available && Cache.available()) {
+      if (typeof Cache !== 'undefined' && Cache.getOfflineBody && offlineStorageAvailable()) {
         try {
           var ob = await Cache.getOfflineBody(puzzleId);
           if (ob && ob.fen && Array.isArray(ob.moves) && ob.moves.length) {
@@ -10574,7 +10599,7 @@
       var $rm = $('#repertoireOfflineRemoveBtn');
       var $st = $('#repertoireOfflineStatus');
       if (_offlineBusyRepId === repId || _offlineBusyMulti) return; // a download owns the UI
-      if (typeof Cache === 'undefined' || !Cache.available || !Cache.available() || !Cache.getOfflineManifest) {
+      if (typeof Cache === 'undefined' || !Cache.getOfflineManifest || !offlineStorageAvailable()) {
         // No IDB → offline download impossible; hide the affordance entirely.
         $btn.prop('hidden', true);
         $rm.prop('hidden', true);
@@ -10689,7 +10714,7 @@
       var $rm = $('#repertoireOfflineRemoveBtn');
       var $st = $('#repertoireOfflineStatus');
       if (_offlineBusyMulti || _offlineBusyRepId) return; // a download owns the UI
-      if (typeof Cache === 'undefined' || !Cache.available || !Cache.available() || !Cache.getOfflineManifest) {
+      if (typeof Cache === 'undefined' || !Cache.getOfflineManifest || !offlineStorageAvailable()) {
         $btn.prop('hidden', true);
         $rm.prop('hidden', true);
         $st.prop('hidden', true).removeClass('downloaded stale');
@@ -10895,26 +10920,39 @@
         $info.append($d);
       }
 
-      var persisted = null;
-      try {
-        if (navigator.storage && navigator.storage.persisted) persisted = await navigator.storage.persisted();
-      } catch (e) {}
-      if (persisted === true) line('Persistent storage: <span class="ok">granted</span>');
-      else if (persisted === false) line('Persistent storage: <span class="warn">not granted</span> — data may be evicted');
-      else line('Persistent storage: unknown');
-      $('#storagePersistBtn').prop('hidden', persisted === true || !(navigator.storage && navigator.storage.persist));
+      // On the native (Capacitor) build the downloaded repertoires live in the
+      // app's private files, NOT browser storage — so the persisted()/estimate()
+      // figures (which only describe the WebView's browser storage) understate
+      // reality and an "evictable" warning would be actively misleading. Report
+      // the durable on-device store instead.
+      var peOfflineNative = (typeof OfflineFs !== 'undefined' && OfflineFs.available && OfflineFs.available());
+      if (peOfflineNative) {
+        line('Offline storage: <span class="ok">on-device app files</span> (not browser-evictable)');
+        $('#storagePersistBtn').prop('hidden', true);
+      } else {
+        var persisted = null;
+        try {
+          if (navigator.storage && navigator.storage.persisted) persisted = await navigator.storage.persisted();
+        } catch (e) {}
+        if (persisted === true) line('Persistent storage: <span class="ok">granted</span>');
+        else if (persisted === false) line('Persistent storage: <span class="warn">not granted</span> — data may be evicted');
+        else line('Persistent storage: unknown');
+        $('#storagePersistBtn').prop('hidden', persisted === true || !(navigator.storage && navigator.storage.persist));
+      }
 
       try {
         if (navigator.storage && navigator.storage.estimate) {
           var est = await navigator.storage.estimate();
           if (est && typeof est.usage === 'number') {
-            line('Used: ' + formatBytes(est.usage) +
+            // Native: this is browser-cache usage only (shard cache); the
+            // downloaded bundle is counted under "Downloaded offline" below.
+            line((peOfflineNative ? 'Browser cache used: ' : 'Used: ') + formatBytes(est.usage) +
               (typeof est.quota === 'number' && est.quota ? ' of ' + formatBytes(est.quota) : ''));
           }
         }
       } catch (e) {}
 
-      var available = (typeof Cache !== 'undefined' && Cache.available && Cache.available());
+      var available = offlineStorageAvailable();
       if (!available) {
         line('Offline cache: <span class="warn">unavailable</span> (IndexedDB blocked or private mode)');
         return;
@@ -11002,7 +11040,12 @@
   // a stale-asset incident — see the long comment in sw.js's install
   // handler. Refresh-to-update remains the contract; the only change is
   // that the wait-period is gone.
-  if ('serviceWorker' in navigator) {
+  // On the native Capacitor build the app shell is served from the APK's own
+  // assets, so a service worker is unnecessary (and a stale SW cache could only
+  // get in the way). Register it on the web build only.
+  var peNativeCap = !!(window.Capacitor && typeof window.Capacitor.isNativePlatform === 'function'
+    && window.Capacitor.isNativePlatform());
+  if (!peNativeCap && 'serviceWorker' in navigator) {
     window.addEventListener('load', function () {
       // Read the build stamp from the DOM. If the element is missing
       // somehow (defensive), fall back to a plain registration — sw.js

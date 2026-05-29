@@ -1,0 +1,11 @@
+{
+  "appId": "io.github.skaeglund.puzzleexplorer",
+  "appName": "Puzzles",
+  "webDir": "www",
+  "android": {
+    "allowMixedContent": false
+  },
+  "server": {
+    "androidScheme": "https"
+  }
+}

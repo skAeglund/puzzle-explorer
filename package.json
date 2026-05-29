@@ -1,9 +1,13 @@
 {
   "name": "puzzle-explorer",
   "version": "1.0.0",
-  "description": "",
+  "description": "Position-searchable Lichess opening puzzle trainer with FSRS-5 spaced repetition.",
   "main": "index.js",
   "scripts": {
+    "build:www": "node tools/build-www.js",
+    "cap:add": "npm run build:www && npx cap add android",
+    "cap:sync": "npm run build:www && npx cap sync android",
+    "cap:open": "npx cap open android",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
@@ -11,5 +15,11 @@
   "license": "ISC",
   "dependencies": {
     "chess.js": "^1.4.0"
+  },
+  "devDependencies": {
+    "@capacitor/android": "^7.0.0",
+    "@capacitor/cli": "^7.0.0",
+    "@capacitor/core": "^7.0.0",
+    "@capacitor/filesystem": "^7.0.0"
   }
 }
