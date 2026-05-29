@@ -727,9 +727,10 @@ section('syncToGist: username mismatch refuses to write');
   check('status ended at "error"',       statusLog[statusLog.length-1] === 'error');
 }
 
-section('keepalive flag: small body uses keepalive, large body does not');
+section('keepalive flag: only on the flush path, never on regular sync');
 {
-  // Small payload first
+  // Regular debounced sync, small body → keepalive must NOT be set (an Android
+  // System WebView rejects a keepalive PATCH and breaks every normal sync).
   freshSync();
   const fakeFetchSmall = makeFakeFetch([
     jsonResponse({ files: { [Sync.GIST_FILENAME]: { content: JSON.stringify({ positions: {} }) } } }),
@@ -747,7 +748,28 @@ section('keepalive flag: small body uses keepalive, large body does not');
   Sync.setCredentials('t', 'g');
   Sync.notifyMutation();
   await pendingS.fn();
-  check('small body: keepalive=true', fakeFetchSmall.calls[1].opts.keepalive === true);
+  check('regular sync small body: keepalive omitted', !('keepalive' in fakeFetchSmall.calls[1].opts) ||
+                                                       fakeFetchSmall.calls[1].opts.keepalive !== true);
+
+  // flushNow (pagehide/unload path), small body → keepalive IS set so the
+  // request survives the unload.
+  freshSync();
+  const fakeFetchFlush = makeFakeFetch([
+    jsonResponse({ files: { [Sync.GIST_FILENAME]: { content: JSON.stringify({ positions: {} }) } } }),
+    jsonResponse({})
+  ]);
+  Sync._setHooks({
+    storage: Sync._makeMemoryStorage(),
+    fetch: fakeFetchFlush,
+    setTimeout: function () { return {}; },
+    clearTimeout: function () {}
+  });
+  Sync.init({ getProgressData: () => ({ positions: {} }), setProgressData: () => {} });
+  Sync.setUsername('a');
+  Sync.setCredentials('t', 'g');
+  Sync.notifyMutation();   // marks dirty so flushNow doesn't short-circuit
+  await Sync.flushNow();
+  check('flush path small body: keepalive=true', fakeFetchFlush.calls[1].opts.keepalive === true);
 
   // Large payload — generate enough positions to push body past KEEPALIVE_MAX_BYTES
   freshSync();
