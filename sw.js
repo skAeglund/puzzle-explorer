@@ -76,6 +76,7 @@ const APP_SHELL = [
   './lib/cache.js',
   './lib/offline.js',
   './lib/offlineFs.js',
+  './lib/liveUpdate.js',
   './lib/sound.js',
   './lib/keyboardMode.js',
   './lib/vendor/jquery-3.7.1.min.js',

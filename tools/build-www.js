@@ -23,7 +23,7 @@ const ROOT = path.join(__dirname, '..');
 const OUT = path.join(ROOT, 'www');
 
 // Files + directories that make up the shippable app shell.
-const FILES = ['index.html', 'manifest.webmanifest'];
+const FILES = ['index.html', 'manifest.webmanifest', 'bundle-version.json'];
 const DIRS  = ['lib', 'icons', 'sounds'];
 
 function rmrf(p) {

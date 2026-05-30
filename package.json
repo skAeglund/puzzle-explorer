@@ -8,7 +8,8 @@
     "cap:add": "npm run build:www && npx cap add android",
     "cap:sync": "npm run build:www && npx cap sync android",
     "cap:open": "npx cap open android",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "publish:bundle": "node tools/publish-bundle.js"
   },
   "keywords": [],
   "author": "",
@@ -20,6 +21,8 @@
     "@capacitor/android": "^7.0.0",
     "@capacitor/cli": "^7.0.0",
     "@capacitor/core": "^7.0.0",
-    "@capacitor/filesystem": "^7.0.0"
+    "@capacitor/filesystem": "^7.0.0",
+    "@capgo/capacitor-updater": "^7.0.0",
+    "adm-zip": "^0.5.16"
   }
 }

@@ -1733,7 +1733,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">sync-keepalive-fix</span>
+    <span id="buildVersion">ota-live-updates</span>
     <button id="soundToggle" class="sound-toggle" type="button" aria-label="Toggle sound" title="Toggle sound effects">🔊</button>
     <!-- Stats drawer toggle (issue #9). Same lightweight aesthetic as the
          sound toggle — header real estate is tight, so it's icon-only. The
@@ -2307,6 +2307,7 @@
   <script src="lib/cache.js"></script>
   <script src="lib/offline.js"></script>
   <script src="lib/offlineFs.js"></script>
+  <script src="lib/liveUpdate.js"></script>
   <script src="lib/sound.js"></script>
   <!-- No-mouse drill mode: pure key→action mapper. Independent leaf
        module (no FSRS / chess.js dependency); safe to load anywhere. -->
@@ -2709,6 +2710,28 @@
           Cache._setOfflineBackend(OfflineFs);
         }
       } catch (e) { /* fall back to IDB */ }
+
+      // Native (Capacitor) build only: OTA web-bundle updates (lib/liveUpdate.js).
+      // notifyReady() first — it confirms the running bundle is healthy so Capgo
+      // doesn't roll it back; must run early in EVERY bundle. Then check the
+      // manifest in the background and stage any newer bundle, which applies on
+      // the NEXT launch (never mid-session). All paths are no-ops on web and
+      // failure-safe, so this never blocks boot or disturbs the live bundle.
+      try {
+        if (typeof LiveUpdate !== 'undefined' && LiveUpdate.available()) {
+          LiveUpdate.notifyReady();
+          LiveUpdate.checkAndStage({ manifestUrl: DATA_BASE_URL + 'app/app-manifest.json' })
+            .then(function (r) {
+              // A newer bundle was downloaded and set; it activates on the next
+              // cold start (we never reload mid-session). Surface a gentle
+              // notice so the user can restart when convenient.
+              if (r && r.staged) {
+                setStatus('Update ready — fully close and reopen the app to apply.', 'ok');
+              }
+            })
+            .catch(function () { /* OTA is best-effort */ });
+        }
+      } catch (e) { /* OTA is best-effort */ }
       // Ask the browser to make this origin's storage PERSISTENT, so the SW
       // app-shell cache and the IndexedDB offline data (downloaded repertoires
       // + their puzzle bodies) aren't evicted under storage pressure. Eviction

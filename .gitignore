@@ -28,3 +28,6 @@ ios/
 # Android signing key — keep well away from git.
 *.keystore
 *.jks
+
+# OTA bundle artifacts (tools/publish-bundle.js output) — regenerated on publish.
+dist-bundle/
