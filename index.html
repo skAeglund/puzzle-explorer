@@ -1075,6 +1075,34 @@
     #status[data-kind="error"] { border-left-color: var(--error); color: var(--error); }
     #status[data-kind="info"]  { border-left-color: var(--info); }
 
+    /* OTA "Update ready" banner (native build). Fixed so it overlays without
+       shifting layout; dismissable; persists until acted on (unlike #status). */
+    #updateBanner {
+      position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%);
+      z-index: 1000; max-width: 92%;
+      display: flex; align-items: center; gap: 12px;
+      padding: 10px 14px;
+      background: var(--bg); color: var(--fg);
+      border: 1px solid var(--accent); border-radius: 8px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.45);
+      font-size: 14px;
+    }
+    #updateBanner[hidden] { display: none; }
+    #updateBanner .ub-msg { flex: 1; }
+    #updateBannerRestart {
+      cursor: pointer; white-space: nowrap;
+      background: var(--accent); color: var(--bg);
+      border: 1px solid var(--accent); border-radius: 6px; padding: 6px 12px;
+    }
+    #updateBannerRestart:hover:not(:disabled) { background: var(--accent-hover); }
+    #updateBannerRestart:disabled { opacity: 0.6; cursor: default; }
+    #updateBannerDismiss {
+      cursor: pointer; line-height: 1;
+      background: transparent; color: var(--fg);
+      border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px;
+    }
+    #updateBannerDismiss:hover { background: var(--border); }
+
     /* drill panel */
     .drill-header {
       display: flex;
@@ -1733,7 +1761,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">ota-live-updates</span>
+    <span id="buildVersion">ota-restart-button</span>
     <button id="soundToggle" class="sound-toggle" type="button" aria-label="Toggle sound" title="Toggle sound effects">🔊</button>
     <!-- Stats drawer toggle (issue #9). Same lightweight aesthetic as the
          sound toggle — header real estate is tight, so it's icon-only. The
@@ -2120,6 +2148,15 @@
     </div>
 
     <div id="status" data-kind="info">Set a position and click Search.</div>
+
+    <!-- OTA update banner (shown only on the native build when a newer web
+         bundle has been downloaded + staged). "Restart now" reloads into it
+         immediately; otherwise it applies on the next cold start. -->
+    <div id="updateBanner" hidden>
+      <span class="ub-msg">Update ready.</span>
+      <button id="updateBannerRestart" type="button">Restart now</button>
+      <button id="updateBannerDismiss" type="button" title="Dismiss" aria-label="Dismiss">×</button>
+    </div>
 
     <!-- Resume training (issue #1): top-level so it's visible at startup
          BEFORE the user runs a search — sessionPanel is hidden until
@@ -2719,14 +2756,25 @@
       // failure-safe, so this never blocks boot or disturbs the live bundle.
       try {
         if (typeof LiveUpdate !== 'undefined' && LiveUpdate.available()) {
+          // Banner actions: "Restart now" reloads into the staged bundle
+          // immediately; dismiss just hides it (the bundle still applies on the
+          // next cold start). Bound once here, before staging can fire.
+          $('#updateBannerRestart').on('click', function () {
+            $(this).prop('disabled', true).text('Restarting…');
+            LiveUpdate.applyNow();
+          });
+          $('#updateBannerDismiss').on('click', function () {
+            $('#updateBanner').prop('hidden', true);
+          });
           LiveUpdate.notifyReady();
           LiveUpdate.checkAndStage({ manifestUrl: DATA_BASE_URL + 'app/app-manifest.json' })
             .then(function (r) {
               // A newer bundle was downloaded and set; it activates on the next
-              // cold start (we never reload mid-session). Surface a gentle
-              // notice so the user can restart when convenient.
+              // cold start (we never reload mid-session unprompted). Surface the
+              // banner so the user can restart now or later.
               if (r && r.staged) {
-                setStatus('Update ready — fully close and reopen the app to apply.', 'ok');
+                $('#updateBanner .ub-msg').text('Update ready — restart to apply.');
+                $('#updateBanner').prop('hidden', false);
               }
             })
             .catch(function () { /* OTA is best-effort */ });

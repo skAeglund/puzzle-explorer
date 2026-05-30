@@ -125,6 +125,16 @@ async function run() {
     check('missing manifestUrl → unavailable', r3.ok === false && r3.reason === 'unavailable');
   }
 
+  // ━━━ applyNow ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  section('applyNow');
+  {
+    reset();
+    check('no plugin → false, no throw', (await LiveUpdate.applyNow()) === false);
+    const p = makePlugin(); LiveUpdate._setPlugin(p);
+    const ok = await LiveUpdate.applyNow();
+    check('delegates to reload', ok === true && p.calls.indexOf('reload') !== -1);
+  }
+
   console.log('\n' + (fail === 0 ? '✓ ALL PASS' : '✗ FAILURES') + ' — ' + pass + ' passed, ' + fail + ' failed');
   process.exit(fail === 0 ? 0 : 1);
 }
