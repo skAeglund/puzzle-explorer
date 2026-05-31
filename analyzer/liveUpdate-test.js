@@ -71,20 +71,19 @@ async function run() {
     check('delegates to notifyAppReady', ok === true && p.calls.indexOf('notifyAppReady') !== -1);
   }
 
-  // ━━━ checkAndStage: newer → download + set, no reload ━━━━━━━━━━━━━━━━━
-  section('checkAndStage: stages a newer bundle');
+  // ━━━ checkAndStage: newer → download only (no set, no reload) ━━━━━━━━━
+  section('checkAndStage: downloads a newer bundle (no set/reload yet)');
   {
     reset();
     const p = makePlugin(); LiveUpdate._setPlugin(p);
     LiveUpdate._setLocalVersionLoader(() => 3);
     LiveUpdate._setFetch(() => Promise.resolve({ ok: true, json: () => Promise.resolve({ version: 7, url: 'https://x/app/bundles/7.zip' }) }));
     const r = await LiveUpdate.checkAndStage({ manifestUrl: 'https://x/app/app-manifest.json' });
-    check('reports staged update', r.ok === true && r.updated === true && r.version === 7, JSON.stringify(r));
+    check('reports staged update', r.ok === true && r.updated === true && r.staged === true && r.version === 7, JSON.stringify(r));
     const dl = p.calls.find(c => Array.isArray(c) && c[0] === 'download');
     check('download called with url+string version', dl && dl[1].url === 'https://x/app/bundles/7.zip' && dl[1].version === '7');
-    const st = p.calls.find(c => Array.isArray(c) && c[0] === 'set');
-    check('set called with downloaded bundle id', st && st[1].id === 'bndl_7');
-    check('reload NEVER called (applies next launch)', p.calls.indexOf('reload') === -1);
+    check('set NOT called during staging (avoids pending-validation limbo)', !p.calls.some(c => Array.isArray(c) && c[0] === 'set'));
+    check('reload NOT called during staging', p.calls.indexOf('reload') === -1);
   }
 
   // ━━━ checkAndStage: up-to-date → no download ━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -116,7 +115,7 @@ async function run() {
     LiveUpdate._setLocalVersionLoader(() => 1);
     LiveUpdate._setFetch(() => Promise.resolve({ ok: true, json: () => Promise.resolve({ version: 2, url: 'u' }) }));
     const r2 = await LiveUpdate.checkAndStage({ manifestUrl: 'm' });
-    check('download failure → ok:false, no set, no throw', r2.ok === false && r2.reason === 'download-or-set-failed'
+    check('download failure → ok:false, no set, no throw', r2.ok === false && r2.reason === 'download-failed'
       && !p2.calls.some(c => Array.isArray(c) && c[0] === 'set'));
 
     // no manifestUrl / no plugin
@@ -130,9 +129,25 @@ async function run() {
   {
     reset();
     check('no plugin → false, no throw', (await LiveUpdate.applyNow()) === false);
+
+    // After staging a download, applyNow set()s that bundle then reload()s —
+    // in that order — so the swap is clean (no pending-validation limbo).
+    reset();
     const p = makePlugin(); LiveUpdate._setPlugin(p);
+    LiveUpdate._setLocalVersionLoader(() => 1);
+    LiveUpdate._setFetch(() => Promise.resolve({ ok: true, json: () => Promise.resolve({ version: 2, url: 'u' }) }));
+    await LiveUpdate.checkAndStage({ manifestUrl: 'm' });
     const ok = await LiveUpdate.applyNow();
-    check('delegates to reload', ok === true && p.calls.indexOf('reload') !== -1);
+    const setIdx = p.calls.findIndex(c => Array.isArray(c) && c[0] === 'set');
+    const reloadIdx = p.calls.indexOf('reload');
+    check('set the staged bundle then reload', ok === true && setIdx !== -1 && reloadIdx !== -1 && setIdx < reloadIdx);
+    check('set used the downloaded bundle id', p.calls[setIdx][1].id === 'bndl_2');
+
+    // No pending download → applyNow is just a reload.
+    reset();
+    const p2 = makePlugin(); LiveUpdate._setPlugin(p2);
+    await LiveUpdate.applyNow();
+    check('no pending → reload only, no set', p2.calls.indexOf('reload') !== -1 && !p2.calls.some(c => Array.isArray(c) && c[0] === 'set'));
   }
 
   console.log('\n' + (fail === 0 ? '✓ ALL PASS' : '✗ FAILURES') + ' — ' + pass + ' passed, ' + fail + ' failed');

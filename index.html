@@ -1764,7 +1764,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">board-fit-scopefix</span>
+    <span id="buildVersion">ota-apply-on-restart</span>
     <button id="soundToggle" class="sound-toggle" type="button" aria-label="Toggle sound" title="Toggle sound effects">🔊</button>
     <!-- Stats drawer toggle (issue #9). Same lightweight aesthetic as the
          sound toggle — header real estate is tight, so it's icon-only. The
@@ -2759,9 +2759,10 @@
       // failure-safe, so this never blocks boot or disturbs the live bundle.
       try {
         if (typeof LiveUpdate !== 'undefined' && LiveUpdate.available()) {
-          // Banner actions: "Restart now" reloads into the staged bundle
-          // immediately; dismiss just hides it (the bundle still applies on the
-          // next cold start). Bound once here, before staging can fire.
+          // Banner actions: "Restart now" activates the downloaded bundle and
+          // reloads into it (applyNow). Dismiss just hides the banner — nothing
+          // is swapped, and the user is re-prompted on the next launch (the
+          // bundle is downloaded again then). Bound once here, before staging.
           $('#updateBannerRestart').on('click', function () {
             $(this).prop('disabled', true).text('Restarting…');
             LiveUpdate.applyNow();
@@ -2769,12 +2770,14 @@
           $('#updateBannerDismiss').on('click', function () {
             $('#updateBanner').prop('hidden', true);
           });
-          LiveUpdate.notifyReady();
+          // NOTE: bundle health is confirmed (notifyReady) at the END of init(),
+          // not here — so a bundle that crashes during init never gets marked
+          // healthy and Capgo auto-rolls-back to the last good bundle. Staging
+          // (download only) is fine to kick off now; the swap happens on Restart.
           LiveUpdate.checkAndStage({ manifestUrl: DATA_BASE_URL + 'app/app-manifest.json' })
             .then(function (r) {
-              // A newer bundle was downloaded and set; it activates on the next
-              // cold start (we never reload mid-session unprompted). Surface the
-              // banner so the user can restart now or later.
+              // A newer bundle was downloaded and is ready to apply. Surface the
+              // banner; the swap happens only when the user taps Restart now.
               if (r && r.staged) {
                 $('#updateBanner .ub-msg').text('Update ready — restart to apply.');
                 $('#updateBanner').prop('hidden', false);
@@ -3220,6 +3223,16 @@
       // stale, missing, or malformed, the function silently leaves the
       // pill hidden.
       refreshTrainingResumePill();
+
+      // Native build: NOW that init() has fully succeeded, tell Capgo this
+      // bundle is healthy so it isn't rolled back. A bundle that throws earlier
+      // in init() never reaches this line, so Capgo reverts to the last good
+      // bundle on the next launch — the correct self-heal for a bad OTA push.
+      try {
+        if (typeof LiveUpdate !== 'undefined' && LiveUpdate.available()) {
+          LiveUpdate.notifyReady();
+        }
+      } catch (e) { /* OTA best-effort */ }
     }
 
     function applyFen() {
