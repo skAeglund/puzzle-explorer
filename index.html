@@ -546,6 +546,8 @@
        so the user has the same readable layout as a desktop side-drawer
        without horizontal cramping. */
     @media (max-width: 540px) {
+      /* Tighter page padding on phones so the board can use more width. */
+      body { padding: 8px; }
       .stats-drawer {
         width: 100vw;
         border-left: none;
@@ -817,10 +819,11 @@
     #boardWrap {
       position: relative;
       width: 100%;
-      /* No max-width — let the board flow to the body's content width
-         so it matches the panels below it (visually, the panels and
-         the board align as a single column). The body's own max-width
-         (520px) bounds them all together. */
+      /* width is set in px by sizeBoard() to the largest square that fits the
+         viewport (height-aware); max-width:100% caps it to the body column so
+         the desktop layout (520px) is unchanged. width:100% is the pre-JS
+         fallback. */
+      max-width: 100%;
       margin: 0 auto 16px;
     }
     #boardWrap > #board {
@@ -1761,7 +1764,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">ota-restart-button</span>
+    <span id="buildVersion">board-fit</span>
     <button id="soundToggle" class="sound-toggle" type="button" aria-label="Toggle sound" title="Toggle sound effects">🔊</button>
     <!-- Stats drawer toggle (issue #9). Same lightweight aesthetic as the
          sound toggle — header real estate is tight, so it's icon-only. The
@@ -2842,9 +2845,24 @@
         }
       }
 
-      $(window).on('resize', function () {
-        if (board) board.resize();
-        renderAnnotations();   // SVG follows the board's bounding box
+      // Size the board to the largest square that fits the viewport with a
+      // little padding: width-bound in portrait, height-bound in landscape.
+      // This makes it as big as possible AND fully visible without pinch-zoom
+      // (the Android WebView blocks page zoom). #boardWrap's max-width:100%
+      // caps the px width to the body column, so the desktop layout is
+      // unchanged; the height term is what helps phones (esp. landscape).
+      function sizeBoard() {
+        try {
+          var edge = Math.min(window.innerWidth, window.innerHeight) - 12;
+          if (edge < 240) edge = 240;
+          $('#boardWrap').css('width', edge + 'px');
+          if (board) board.resize();
+          if (typeof renderAnnotations === 'function') renderAnnotations();
+        } catch (e) { /* non-fatal */ }
+      }
+
+      $(window).on('resize orientationchange', function () {
+        sizeBoard();   // sets width, then board.resize() + renderAnnotations
       });
 
       $('#applyBtn').on('click', applyFen);
@@ -4525,6 +4543,7 @@
         onSnapEnd: onSnapEnd,
         onSnapbackEnd: onSnapbackEnd
       });
+      sizeBoard();   // fit the new board to the viewport
 
       if (hasIntro) {
         // The blunder-play closure is shared between the cinematic path
@@ -4641,6 +4660,7 @@
         onSnapEnd: onSnapEnd,
         onSnapbackEnd: onSnapbackEnd
       });
+      sizeBoard();   // fit the new board to the viewport
       // Keep chess.js in sync with what's on the board, so a follow-up
       // Search picks up the same position the user sees.
       chess = new Chess();
