@@ -1,4 +1,4 @@
 {
-  "version": 5,
+  "version": 6,
   "note": "OTA web-bundle version. Monotonically increasing integer. tools/publish-bundle.js bumps this; tools/build-www.js copies it into www/ so each bundle knows its own version. The APK's built-in bundle and any OTA bundle both carry this file."
 }

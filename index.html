@@ -556,6 +556,24 @@
         grid-template-columns: repeat(2, 1fr);
       }
     }
+    /* Tablet sizing. The 520px reading column is right for desktop text but
+       leaves the board — the hero element — tiny on a tablet (a portrait
+       tablet at ~800px CSS would render the board at the 520px column width,
+       wasting ~40% of the viewport). sizeBoard() already computes the correct
+       viewport-fit px (min(innerW,innerH) - 12); it's #boardWrap's
+       max-width:100% clamping it to the body column that shrinks it. Widening
+       the column on big viewports unclamps the board (and gives the panels
+       more room too). Scoped so a mouse-driven desktop keeps its narrow
+       reading column:
+         - portrait + wide  → tablets held upright (the reported case),
+         - landscape + coarse pointer → tablets rotated (touch, not a desktop
+           mouse), height-bound board still needs the wider column to grow. */
+    @media (min-width: 600px) and (orientation: portrait) {
+      body { max-width: 760px; }
+    }
+    @media (min-width: 900px) and (orientation: landscape) and (pointer: coarse) {
+      body { max-width: 760px; }
+    }
     /* ─── Generic center-modal pattern ──────────────────────────────────
        Used by the Lichess study import dialog. The stats drawer is right-
        slide; this is center because the import flow is a focused
@@ -1764,7 +1782,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">in-drill-kb-toggle</span>
+    <span id="buildVersion">tablet-board-fit</span>
     <button id="soundToggle" class="sound-toggle" type="button" aria-label="Toggle sound" title="Toggle sound effects">🔊</button>
     <!-- Stats drawer toggle (issue #9). Same lightweight aesthetic as the
          sound toggle — header real estate is tight, so it's icon-only. The
