@@ -1764,7 +1764,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">ota-apply-on-restart</span>
+    <span id="buildVersion">in-drill-kb-toggle</span>
     <button id="soundToggle" class="sound-toggle" type="button" aria-label="Toggle sound" title="Toggle sound effects">🔊</button>
     <!-- Stats drawer toggle (issue #9). Same lightweight aesthetic as the
          sound toggle — header real estate is tight, so it's icon-only. The
@@ -2145,6 +2145,16 @@
              color-filter button's lightweight toggle treatment — this is
              a session preference, not a primary action. -->
         <button id="autoNextBtn" hidden title="When ON, automatically advance to the next session puzzle after a brief delay (only when the puzzle was solved without errors).">☐ Auto-next</button>
+        <!-- In-drill mirror of the session-panel keyboard-mode toggle. Lets
+             the user flip 3-key input on/off WITHOUT leaving the puzzle —
+             critical escape hatch if a Bluetooth ring disconnects mid-drill
+             (mouse input is blocked while kb mode is on, so without this the
+             user is stranded). Shares onKeyboardModeToggleClick + the
+             updateKeyboardModeBtn glyph painter with the session-panel button,
+             so the two stay in sync. Same session-eligible gating as the
+             keydown router (random session + training only — review/single
+             bypass kb mode). -->
+        <button id="drillKeyboardModeBtn" hidden title="Toggle 3-key (keyboard / Bluetooth ring) input for this session. Turn OFF to take over with the mouse if your input device disconnects.">☐ Keyboard mode</button>
         <a id="lichessLink" class="lichess-link" href="#" target="_blank" rel="noopener">view source game ↗</a>
         <a id="analyzeLink" class="lichess-link" href="#" target="_blank" rel="noopener" title="Open this position on Lichess's analysis board with engine evaluation">analyze on Lichess ↗</a>
       </div>
@@ -2963,6 +2973,7 @@
       $('#prevPuzzleBtn').on('click', onPrevPuzzleClick);
       $('#autoNextBtn').on('click', onAutoNextToggleClick);
       $('#keyboardModeBtn').on('click', onKeyboardModeToggleClick);
+      $('#drillKeyboardModeBtn').on('click', onKeyboardModeToggleClick);
       // Move-strip click delegation: clicking a SAN with data-ply rewinds
       // the displayed view to that ply. Delegated because the strip is
       // re-rendered every move (updateMoveStripDisplay rebuilds children
@@ -4456,6 +4467,10 @@
       // exists in session mode. Hide the toggle in single-puzzle drilling
       // so it doesn't suggest a behavior that won't happen.
       $('#autoNextBtn').prop('hidden', !sessionState);
+      // In-drill keyboard-mode toggle: visible only for kb-eligible sessions
+      // (random session + training). Hidden in single-drill and review where
+      // kb mode never engages, so it can't suggest a toggle that does nothing.
+      $('#drillKeyboardModeBtn').prop('hidden', !isKeyboardEligibleSession());
       // Previous-puzzle button: same session-only gating as Auto-next, but
       // additionally disabled at cursor=0 (no earlier puzzle to retreat to).
       // Lives in .drill-controls (not the completion strip) so it's available
@@ -7704,20 +7719,27 @@
       keyboardModeEnabled = !keyboardModeEnabled;
       saveSettings({ keyboardMode: keyboardModeEnabled });
       updateKeyboardModeBtn();
-      // Toggling OFF mid-completion-pending is the awkward case: handleCompletion
-      // hid the Next button + autoNextBtn, so a naive clear of
-      // keyboardCompletionPending here would strand the user with no way
-      // to advance (kb routing dead, Next hidden). Instead we leave the
-      // flag set; the keydown router accepts Key 1 / Key 4 from the
-      // pending-flag fallback below until the user grades. If they want
-      // to advance via mouse instead, Back exits cleanly.
+      // Toggling OFF mid-completion-pending: handleCompletion hid the Next
+      // button + autoNextBtn and routed grading to Key 1 / Key 4. If the
+      // input device just dropped, those keys are unreachable and the user
+      // would be stranded with no mouse path to advance (the original reason
+      // this in-drill toggle exists). finalizeDeferredKbCompletion grades the
+      // puzzle as solved and restores the mouse completion controls so the
+      // user continues without abandoning the session. Only fires when
+      // turning OFF — turning kb ON never has a pending grade to resolve.
+      if (!keyboardModeEnabled && keyboardCompletionPending) {
+        finalizeDeferredKbCompletion();
+        return;
+      }
       // Toggling OFF mid-puzzle (not pending): kb routing turns off, but
       // chessboard.js drag is already enabled (onDragStart re-checks the
       // flag every event) — user takes over with mouse on the next move.
     }
 
     function updateKeyboardModeBtn() {
-      $('#keyboardModeBtn').text((keyboardModeEnabled ? '☑' : '☐') + ' Keyboard mode');
+      var label = (keyboardModeEnabled ? '☑' : '☐') + ' Keyboard mode';
+      $('#keyboardModeBtn').text(label);
+      $('#drillKeyboardModeBtn').text(label);
     }
 
     // True iff the toggle is on AND the active session is one of the
@@ -7728,6 +7750,16 @@
     // between session kinds is reflected immediately.
     function isKeyboardModeActive() {
       if (!keyboardModeEnabled) return false;
+      return isKeyboardEligibleSession();
+    }
+
+    // Session-kind gate, independent of the enabled toggle. Drives both
+    // isKeyboardModeActive (above) AND the in-drill toggle button's
+    // visibility — the button should appear iff kb mode COULD apply to the
+    // current session, regardless of whether it's currently on (the user
+    // flips it either direction). Single-drill (no sessionState) and the
+    // review queue bypass kb mode, so the button stays hidden there.
+    function isKeyboardEligibleSession() {
       if (!sessionState) return false;
       var kind = sessionState.kind;
       return kind === 'search' || kind === 'training';
@@ -7845,6 +7877,28 @@
       // Disarm immediately so a second key press while we await the
       // body fetch doesn't double-record.
       keyboardCompletionPending = false;
+      recordKeyboardGrade(success);
+      // Advance the session. Same path the auto-next + manual Next
+      // both use; sessionLoading guard prevents reentry while the body
+      // fetch is in flight. enterDrillMode (called inside) clears
+      // keyboardCompletionPending for the new puzzle.
+      sessionLoading = true;
+      try {
+        await advanceSessionAndDrill();
+      } finally {
+        sessionLoading = false;
+      }
+    }
+
+    // recordKeyboardGrade — the SRS / theme / training-outcome writes that
+    // handleCompletion defers when a kb completion is pending. Pulled out of
+    // keyboardGradeAndAdvance so the in-drill kb-toggle escape hatch can run
+    // the SAME grading without also advancing the session (see
+    // finalizeDeferredKbCompletion). NO control-flow guards or pending-flag
+    // management here — callers own that; this is purely the write block.
+    // Returns the FSRS grade applied. Assumes drillState.complete and a live
+    // session (both caller-verified).
+    function recordKeyboardGrade(success) {
       var pid = drillState.puzzleId;
       var hintUsed = !!drillState.hintUsed;
       var grade;
@@ -7880,7 +7934,7 @@
       // Training outcomes — handleCompletion deferred this for kb mode.
       // Use the kb-supplied grade so the post-session stats line counts
       // accurately (failed/hint/clean buckets in renderTrainingPostCompletion).
-      if (sessionState.kind === 'training' && trainingOutcomes) {
+      if (sessionState && sessionState.kind === 'training' && trainingOutcomes) {
         trainingOutcomes[pid] = {
           grade: grade,
           hintUsed: hintUsed,
@@ -7890,16 +7944,25 @@
         renderTrainingStatsStrip();
         saveTrainingResume();
       }
-      // Advance the session. Same path the auto-next + manual Next
-      // both use; sessionLoading guard prevents reentry while the body
-      // fetch is in flight. enterDrillMode (called inside) clears
-      // keyboardCompletionPending for the new puzzle.
-      sessionLoading = true;
-      try {
-        await advanceSessionAndDrill();
-      } finally {
-        sessionLoading = false;
-      }
+      return grade;
+    }
+
+    // finalizeDeferredKbCompletion — recover from a kb completion that's
+    // awaiting a grade key when the user turns kb mode OFF (typically because
+    // their input device dropped and Key 1/4 are unreachable). The puzzle was
+    // played to completion via correct moves, so grade it as solved (the
+    // generous, queue-friendly default — honoring hint→Hard; never fabricates
+    // a failure), then reveal the standard mouse-driven completion controls
+    // that the kb branch of handleCompletion hid, so the user continues with
+    // the mouse instead of being stranded or having to abandon the session.
+    function finalizeDeferredKbCompletion() {
+      recordKeyboardGrade(true);
+      keyboardCompletionPending = false;
+      $('#nextPuzzleBtn').prop({ disabled: false, hidden: false }).focus();
+      $('#autoNextBtn').prop('hidden', !sessionState);
+      $('#tryAgainBtn').text('Solve again').prop('hidden', false);
+      var exitLabel = (sessionState && sessionState.kind === 'training') ? 'Exit training' : 'Exit session';
+      setStatus('Keyboard mode off — puzzle graded as solved. Click Next puzzle to continue, or ' + exitLabel + ' to stop.', 'info');
     }
 
     function scheduleAutoNext() {
