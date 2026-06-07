@@ -1782,7 +1782,7 @@
 <body>
   <header>
     <h1>Puzzle Explorer</h1>
-    <span id="buildVersion">tablet-board-fit</span>
+    <span id="buildVersion">landscape-drill-scroll</span>
     <button id="soundToggle" class="sound-toggle" type="button" aria-label="Toggle sound" title="Toggle sound effects">🔊</button>
     <!-- Stats drawer toggle (issue #9). Same lightweight aesthetic as the
          sound toggle — header real estate is tight, so it's icon-only. The
@@ -4311,6 +4311,16 @@
     }
 
     function enterDrillMode(puzzle) {
+      // Landscape-tablet scroll preservation: when the board is taller than
+      // the viewport the user scrolls down to keep it fully visible. Advancing
+      // to the next puzzle (or Previous) rebuilds the board — destroyBoard()
+      // empties #board, collapsing page height, so the browser clamps scrollTop
+      // to 0; the rebuild restores the height but the user's offset is lost,
+      // forcing a re-scroll every puzzle. Capture it here and restore after the
+      // board is rebuilt + sized (below). Gated on already-drilling so a fresh
+      // search -> drill entry keeps its natural top position.
+      var preserveScroll = (mode === 'drill');
+      var prevScrollY = window.pageYOffset || document.documentElement.scrollTop || 0;
       mode = 'drill';
       drillPuzzle = puzzle;
       // Snapshot whether this puzzle was already known BEFORE any progress
@@ -4576,6 +4586,13 @@
         onSnapbackEnd: onSnapbackEnd
       });
       sizeBoard();   // fit the new board to the viewport
+      // Restore the pre-rebuild scroll offset (see top of enterDrillMode) so a
+      // height-bound board (landscape tablet) doesn't snap back to the top on
+      // every advance. The page height is final once sizeBoard() has run; an
+      // over-large offset just clamps harmlessly.
+      if (preserveScroll && prevScrollY > 0) {
+        try { window.scrollTo(0, prevScrollY); } catch (e) { /* non-fatal */ }
+      }
 
       if (hasIntro) {
         // The blunder-play closure is shared between the cinematic path
